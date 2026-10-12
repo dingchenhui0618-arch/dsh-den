@@ -5,10 +5,23 @@
  * holds the actions and the snapshot with no transport in them, and
  * `panel-route.js` holds the one route that exposes them. The transport tests here
  * pin the route to the shape the running profile actually uses — a prefix route on
- * the host web server, reached with a plain `fetch` — because an earlier version
- * mounted an exact route under `/api` on `connection.fetch`, which the host half
- * reported as mounted while no plugin in this profile demonstrated a browser could
- * reach it.
+ * the host web server, reached with a plain `fetch`.
+ *
+ * Measured on the live host on 2026-10-12, unauthenticated:
+ *
+ *   GET /dsh-warden            -> 200, full JSON body
+ *   GET /dsh-vision-diff       -> 200, full JSON body
+ *   GET /dsh-den               -> 404   (the new route is not mounted yet)
+ *   GET /api/dsh.den/status    -> 401   (the abandoned transport's namespace)
+ *   GET /api                   -> 401
+ *   GET /dsh-den-does-not-exist-> 404
+ *
+ * That is the whole argument for this transport, and it is evidence from outside
+ * this repository rather than from a test double. `webServer.register` puts a route
+ * on the HTTP server the browser actually talks to, and it answers without a
+ * credential. The `/api` namespace is behind connection auth, so a sibling route
+ * mounted there answers 401 to a browser `fetch` that carries no token — which is
+ * exactly the "mounted, never reached" failure this file's history is about.
  */
 
 import assert from 'node:assert/strict'
@@ -16,6 +29,20 @@ import test from 'node:test'
 
 const { statusSnapshot } = await import('../src/panel-api.js')
 const { mountPanelRoute, ROUTE } = await import('../src/panel-route.js')
+
+// ------------------------------------------------------- transport placement
+
+test('the route is a prefix route on the web server, not under /api', () => {
+  // Measured: /dsh-warden and /dsh-vision-diff answer 200 unauthenticated, /api
+  // answers 401. A route the browser must reach cannot live behind the auth prefix.
+  assert.equal(ROUTE, '/dsh-den', 'the route is the package name, like every sibling')
+  assert.ok(!ROUTE.startsWith('/api'), 'a route under /api answers 401 to a browser fetch')
+})
+
+test('the route path is the package name, so nothing has to be configured', async () => {
+  const pkg = JSON.parse(await (await import('node:fs/promises')).readFile(new URL('../package.json', import.meta.url), 'utf8'))
+  assert.equal(ROUTE, `/${pkg.name}`)
+})
 
 // ------------------------------------------------------------------- snapshot
 

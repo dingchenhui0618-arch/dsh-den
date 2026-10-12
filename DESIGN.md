@@ -187,7 +187,7 @@
 
 | 阶段 | 交付 | 验收标准 |
 |---|---|---|
-| **D1 骨架** | 插件能装、状态持久化、状态查询可用 | **达成**：bundle 在 profile 的 `dependencies` + `bundles` 中，`fiberPhase` 已为 `active`；11 个工具、1 个单调 guard、`tools/pre-execute` 监听均注册成功；卸载后 tools/guards/listeners/service 全部归零。177/177 单测通过 |
+| **D1 骨架** | 插件能装、状态持久化、状态查询可用 | **达成**：bundle 在 profile 的 `dependencies` + `bundles` 中，`fiberPhase` 已为 `active`；11 个工具、1 个单调 guard、`tools/pre-execute` 监听均注册成功；卸载后 tools/guards/listeners/service 全部归零。199/199 单测通过 |
 | **D2 授权 + 通知** | `grant.js` + `notices.js` | 伪造/过期授权被降级；12h 过期通知不投递；同内容去重 |
 | **D3 自治内核** | 心跳 + 四闸 + 冷唤醒 | **完全不跟它说话**，到点自己醒来产出结果；重启后仍有效；投递失败会重试而非丢失 |
 | **D4 审批闸门** | `gate.js` | 对外动作必然停下问；改人格提示词绕不过 |
@@ -239,6 +239,26 @@
 > - 文档明确 **`Duplicate (kind, path) throws`** —— 所以 mount 必须捕获注册异常（`fail('register-threw', …)`），这正是 mount 结果要带 `reason` 的原因。
 > - **`req` 的类型就是 Node `IncomingMessage`**。这直接证伪了我第一版实现里的 `await req.text()`：`IncomingMessage` 没有 `text()`，`dsh-vision-diff` 也是用 `req.on('data')` / `req.on('end')` 读 body 的。**面板的第一次 POST 会在宿主里当场抛错**，而两个离线替身都不会发现——因为替身的 `req` 是照代码的假设写的（只有一个 `text()`）。这是同一个错误的第三次现形：**替身与实现同形，就无法证伪实现。** 现在替身是真正会 emit `data`/`end` 的 Node 流形状，跑的读路径就是宿主里的读路径。
 > - 关于 `res`：检查器把 `WebRoute.handler` 的第二参写成 `ServerResponse`，但那是 `connection` 模块里同名 RPC 类型的引用（同一份输出里它被列在 `referencedTypes` 中），不是 HTTP 响应。实际在跑的三个插件一律按 Node `ServerResponse` 用：`res.statusCode = …`、`res.setHeader(…)`、`res.end(…)`。我的实现走这条，并同时接受 web `Response`，以便 handler 不启 HTTP 服务也能直接调用。
+>
+> **最有力的证据来自宿主本身（2026-10-12 实测，全部未认证）**：
+>
+> | 请求 | 结果 |
+> |---|---|
+> | `GET /dsh-warden` | **200**，返回完整 JSON（含审计日志路径、审查规则预览） |
+> | `GET /dsh-vision-diff` | **200**，返回完整 JSON |
+> | `GET /dsh-den` | **404** —— 新路由尚未挂载（宿主跑的是改前代码） |
+> | `GET /api/dsh.den/status` | **401** —— 被弃用传输的命名空间 |
+> | `GET /api` | **401** |
+> | `GET /dsh-den-does-not-exist` | **404** |
+>
+> 这张表就是整条结论，而且**证据来自本仓库之外**——不是替身，也不是我自己写的断言：
+>
+> 1. `webServer.register` 把路由放到**浏览器真正对话的那个 HTTP 服务**上，且**无需凭证**（兄弟路由 200 直接返回数据）。
+> 2. `/api` 命名空间在 connection 认证之后：浏览器 `fetch` 不带 token → **永远 401**。所以旧传输即使挂载成功，面板也**永远拿不到数据**。
+>
+> 第 2 点把「换个多数派写法」升级成了「**旧写法不可能工作**」。此前我只有宿主侧的自述（`statusRoute.mounted: true`）——那个自述是真的，但它只证明「路由注册进了 connection 的 fetch 表」，**不等于「浏览器能取到它」**。这两件事被我混为一谈整整两轮。
+>
+> 判别式已固化进 `test/panel-route.test.mjs`：`ROUTE` 必须等于 `/<包名>`，且**不得**以 `/api` 开头。
 
 ---
 
