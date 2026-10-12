@@ -683,6 +683,23 @@ window.__ModuleLoader__.load({
         return call(action, payload, sessionId)
       }
 
+      /**
+       * Publish the transport for a harness, and only for a harness.
+       *
+       * `call` is the entire client half of the transport and it lives inside
+       * `apply`, so every checker so far has had to reconstruct it from a fake —
+       * written from the same assumption as the code, which is how three different
+       * wrong shapes passed review in this plugin. A test that drives the real `call`
+       * against the real host route cannot agree by construction.
+       *
+       * Gated on a flag no shipped page sets, so `module.exports` is unchanged in
+       * production. Nothing is opened up here that a human could not already reach
+       * by clicking a button: `call` is what the buttons call.
+       */
+      if (typeof window !== 'undefined' && window.__dshDenExposeInternals) {
+        module.exports.__internals = { call: call, act: act, API: API }
+      }
+
       ctx.effect(function () {
         return function () {
           lifetime.abort()
@@ -754,6 +771,7 @@ window.__ModuleLoader__.load({
       inject: ['slots', 'locale', 'sessions'],
       apply: apply,
     }
+
     return module.exports
   },
 })
