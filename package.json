@@ -25,6 +25,8 @@
     "check:ui": "node tools/check-client-interaction.mjs",
     "check:acceptance": "node tools/check-acceptance.mjs",
     "check:deployment": "node tools/check-deployment.mjs",
+    "check:tools": "node tools/check-tools-live.mjs",
+    "diagnose:status": "node tools/diagnose-status-output.mjs",
     "check:package": "node tools/check-package-contents.mjs",
     "verify": "npm test && npm run check:bundle && npm run check:ui && npm run check:acceptance && npm run check:package"
   },
