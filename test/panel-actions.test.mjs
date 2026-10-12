@@ -80,26 +80,44 @@ async function live({ sessionId = 'session-1' } = {}) {
   return { home, state, service, route, modules: { ...index, ...routes } }
 }
 
-/** A request stand-in shaped like the one the host web server hands a route. */
+/**
+ * A request stand-in shaped like the one the host web server hands a route.
+ *
+ * A Node `IncomingMessage`, because that is what `dsh-vision-diff` and the other
+ * installed plugins read their bodies from (`req.on('data')` / `req.on('end')`).
+ * A fake offering only `.text()` would let a handler that cannot work in the real
+ * host pass every test.
+ */
 function makeReq({ method = 'POST', url = '/dsh-den', rawBody = '' } = {}) {
+  const handlers = new Map()
+  const chunks = rawBody === '' ? [] : [Buffer.from(rawBody, 'utf8')]
   return {
     method,
     url,
-    async text() {
-      return rawBody
+    on(event, handler) {
+      handlers.set(event, handler)
+      return this
+    },
+    destroy() {},
+    async deliver() {
+      for (const chunk of chunks) handlers.get('data')?.(chunk)
+      handlers.get('end')?.()
+      await new Promise((resolve) => setTimeout(resolve, 0))
     },
   }
 }
 
-/** A response stand-in: the route writes through writeHead/end. */
+/** A response stand-in: Node's `ServerResponse`. */
 function makeRes() {
-  const captured = { status: null, body: '' }
+  const captured = { status: null, headers: null, body: '' }
   return {
     captured,
-    writeHead(status) {
-      captured.status = status
+    statusCode: null,
+    setHeader(name, value) {
+      captured.headers = { ...(captured.headers || {}), [name]: value }
     },
     end(text) {
+      captured.status = this.statusCode
       captured.body = String(text)
     },
   }
@@ -107,8 +125,11 @@ function makeRes() {
 
 /** Drive the registered handler the way the host web server would. */
 async function request(route, { method = 'POST', url = '/dsh-den', body } = {}) {
+  const req = makeReq({ method, url, rawBody: body })
   const res = makeRes()
-  await route.handler(makeReq({ method, url, rawBody: body }), res)
+  const pending = route.handler(req, res)
+  await req.deliver()
+  await pending
   return { status: res.captured.status, body: JSON.parse(res.captured.body) }
 }
 

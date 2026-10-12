@@ -108,35 +108,64 @@ function mountRoute({ service = stubService(), ctxOverride } = {}) {
  * route reads the payload through `text()`, so a bare `body` property would make
  * every POST look like a malformed body.
  */
+/**
+ * A request stand-in shaped like the one the host web server hands a route.
+ *
+ * It is a Node `IncomingMessage`: the installed plugins read bodies with
+ * `req.on('data')` / `req.on('end')`, and `dsh-vision-diff` does exactly that. A
+ * fake offering only `.text()` would let a handler that cannot work in the real host
+ * pass every test — which is the failure mode this whole file exists to avoid.
+ */
 function makeReq({ method = 'POST', url = ROUTE, rawBody = '' } = {}) {
+  const handlers = new Map()
+  const chunks = rawBody === '' ? [] : [Buffer.from(rawBody, 'utf8')]
   return {
     method,
     url,
-    async text() {
-      return rawBody
+    on(event, handler) {
+      handlers.set(event, handler)
+      return this
+    },
+    destroy() {},
+    /** Deliver the body the way the HTTP layer would. */
+    async deliver() {
+      for (const chunk of chunks) handlers.get('data')?.(chunk)
+      handlers.get('end')?.()
+      // Let the promise chain inside readBody settle.
+      await new Promise((resolve) => setTimeout(resolve, 0))
     },
   }
 }
 
-/** A response stand-in: the handler writes through writeHead/end. */
+/** A response stand-in: Node's `ServerResponse`, not a web `Response`. */
 function makeRes() {
   const captured = { status: null, headers: null, body: '' }
   return {
     captured,
-    writeHead(status, headers) {
-      captured.status = status
-      captured.headers = headers
+    statusCode: null,
+    setHeader(name, value) {
+      captured.headers = { ...(captured.headers || {}), [name]: value }
     },
     end(text) {
+      captured.status = this.statusCode
       captured.body = String(text)
     },
   }
 }
 
+/** Drive the handler and deliver the body, so the Node read path actually runs. */
+async function callRoute(route, req, res) {
+  const pending = route.handler(req, res)
+  await req.deliver()
+  return pending
+}
 /** POST one action the way the browser panel does. */
 async function post(route, body) {
+  const req = makeReq({ rawBody: JSON.stringify(body) })
   const res = makeRes()
-  await route.handler(makeReq({ rawBody: JSON.stringify(body) }), res)
+  const pending = route.handler(req, res)
+  await req.deliver()
+  await pending
   return { status: res.captured.status, json: JSON.parse(res.captured.body) }
 }
 
@@ -186,7 +215,7 @@ test('the route is a prefix route at the package path, like every other client p
 test('a GET answers with the snapshot, so the route is inspectable in a browser', async () => {
   const { route } = mountRoute()
   const res = makeRes()
-  await route.handler(makeReq({ method: 'GET' }), res)
+  await callRoute(route, makeReq({ method: 'GET' }), res)
   assert.equal(res.captured.status, 200)
   const body = JSON.parse(res.captured.body)
   assert.equal(body.ok, true)
@@ -211,7 +240,7 @@ test('a payload session id is threaded through to the autonomy lookup', async ()
 test('a body that is not JSON is refused, and never reaches the service', async () => {
   const { route } = mountRoute()
   const res = makeRes()
-  await route.handler(makeReq({ rawBody: '{not json' }), res)
+  await callRoute(route, makeReq({ rawBody: '{not json' }), res)
   assert.equal(res.captured.status, 400)
   assert.equal(JSON.parse(res.captured.body).error.code, 'BAD_JSON')
 })
@@ -219,14 +248,14 @@ test('a body that is not JSON is refused, and never reaches the service', async 
 test('an empty body is treated as a plain status read', async () => {
   const { route } = mountRoute()
   const res = makeRes()
-  await route.handler(makeReq({ rawBody: '' }), res)
+  await callRoute(route, makeReq({ rawBody: '' }), res)
   assert.equal(JSON.parse(res.captured.body).value.name, 'dsh-den')
 })
 
 test('a method the route does not serve is refused rather than ignored', async () => {
   const { route } = mountRoute()
   const res = makeRes()
-  await route.handler(makeReq({ method: 'DELETE' }), res)
+  await callRoute(route, makeReq({ method: 'DELETE' }), res)
   assert.equal(res.captured.status, 405)
 })
 
@@ -237,14 +266,14 @@ test('the path suffix can name the action, and an unserved method is still refus
   // 404-ing on a path it does serve.
   const { route } = mountRoute()
   const res = makeRes()
-  await route.handler(makeReq({ url: `${ROUTE}/schedules/list`, rawBody: '{}' }), res)
+  await callRoute(route, makeReq({ url: `${ROUTE}/schedules/list`, rawBody: '{}' }), res)
   assert.equal(res.captured.status, 200, 'the path is served, whatever the action then decides')
   const body = JSON.parse(res.captured.body)
   assert.equal(typeof body.ok, 'boolean')
 
   // And a route the plugin does not own is a 405, not a silent success.
   const other = makeRes()
-  await route.handler(makeReq({ method: 'DELETE' }), other)
+  await callRoute(route, makeReq({ method: 'DELETE' }), other)
   assert.equal(other.captured.status, 405)
 })
 

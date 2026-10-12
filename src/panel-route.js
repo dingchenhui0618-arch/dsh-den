@@ -29,11 +29,50 @@ export const ROUTE = '/dsh-den'
 /** The single POST action name the panel uses for a status read. */
 const DEFAULT_ACTION = 'status'
 
-function json(body, status = 200) {
-  return new Response(`${JSON.stringify(body)}\n`, {
-    status,
-    headers: { 'content-type': 'application/json' },
-  })
+/** Refuse a body larger than this rather than buffering it: the panel sends a form. */
+const MAX_BODY_BYTES = 1024 * 1024
+
+/**
+ * Read a request body.
+ *
+ * `req` is a Node `IncomingMessage`, not a web `Request`: the handler signature is
+ * `(req, res)` and the installed plugins read the body with `req.on('data')` and
+ * `req.on('end')`. Only a web `Request` has `.text()`, so a handler written against
+ * `.text()` would throw on the first POST — and the two offline harnesses would not
+ * notice, because they supply whichever shape the code expects.
+ *
+ * Both shapes are accepted so the same handler is drivable from a test without
+ * standing up an HTTP server, but the Node path is the one that runs.
+ */
+function readBody(req) {
+  if (req && typeof req.on === 'function') {
+    return new Promise((resolve) => {
+      let raw = ''
+      req.on('data', (chunk) => {
+        raw += chunk
+        if (raw.length > MAX_BODY_BYTES && typeof req.destroy === 'function') req.destroy()
+      })
+      req.on('end', () => resolve(raw))
+      req.on('error', () => resolve(''))
+    })
+  }
+  if (req && typeof req.text === 'function') {
+    return Promise.resolve(req.text()).catch(() => '')
+  }
+  if (req && typeof req.body === 'string') return Promise.resolve(req.body)
+  return Promise.resolve('')
+}
+
+/** Parse a body, distinguishing "not JSON" from "empty". */
+async function readJsonBody(req) {
+  const raw = await readBody(req)
+  if (!raw || !raw.trim()) return {}
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return undefined
+  }
 }
 
 /** Split a request path into the segments after the route prefix. */
@@ -43,15 +82,31 @@ function segmentsOf(url, route) {
   return rest.split('/').filter(Boolean)
 }
 
-/** Read a JSON body, tolerating an empty one. */
-async function readJsonBody(request) {
-  try {
-    const text = await request.text()
-    if (!text.trim()) return {}
-    return JSON.parse(text)
-  } catch {
-    return undefined
+/**
+ * Write a JSON response.
+ *
+ * Node's `ServerResponse` is the real case: the installed plugins set
+ * `res.statusCode` and `res.setHeader(...)`, then `res.end(...)`. A web `Response`
+ * is accepted as well so the handler stays directly callable from a test; the two
+ * branches are the same three facts in different vocabularies.
+ */
+function writeJson(res, status, body) {
+  const text = `${JSON.stringify(toLosslessJson(body))}\n`
+  if (res && typeof res.writeHead === 'function') {
+    res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
+    if (typeof res.end === 'function') res.end(text)
+    return text
   }
+  if (res && typeof res.end === 'function') {
+    if ('statusCode' in res) res.statusCode = status
+    if (typeof res.setHeader === 'function') {
+      res.setHeader('content-type', 'application/json; charset=utf-8')
+      res.setHeader('cache-control', 'no-store')
+    }
+    res.end(text)
+    return text
+  }
+  return new Response(text, { status, headers: { 'content-type': 'application/json; charset=utf-8' } })
 }
 
 /** Run one action, turning a thrown error into an in-band refusal. */
@@ -111,12 +166,12 @@ export function mountPanelRoute(ctx, { service, nextTriggerAt, route = ROUTE } =
           }
 
           if (method !== 'POST') {
-            return sendJson(res, 405, { ok: false, error: { code: 'METHOD_NOT_ALLOWED', message: `use GET or POST, not ${method}` } })
+            return writeJson(res, 405, { ok: false, error: { code: 'METHOD_NOT_ALLOWED', message: `use GET or POST, not ${method}` } })
           }
 
           const body = await readJsonBody(req)
           if (body === undefined) {
-            return sendJson(res, 400, { ok: false, error: { code: 'BAD_JSON', message: 'the request body is not JSON' } })
+            return writeJson(res, 400, { ok: false, error: { code: 'BAD_JSON', message: 'the request body is not JSON' } })
           }
 
           const action = typeof body.action === 'string' && body.action ? body.action : segments[0] || DEFAULT_ACTION
@@ -125,7 +180,7 @@ export function mountPanelRoute(ctx, { service, nextTriggerAt, route = ROUTE } =
           return send(res, outcome)
         } catch (error) {
           // A failing panel must never take the host down; report it in-band.
-          return sendJson(res, 500, {
+          return writeJson(res, 500, {
             ok: false,
             error: { code: 'DEN_PANEL_FAILED', message: String(error?.message ?? error) },
           })
@@ -155,15 +210,6 @@ export function mountPanelRoute(ctx, { service, nextTriggerAt, route = ROUTE } =
   }
 }
 
-function sendJson(res, status, body) {
-  if (res && typeof res.writeHead === 'function') {
-    res.writeHead(status, { 'content-type': 'application/json' })
-  }
-  const text = `${JSON.stringify(toLosslessJson(body))}\n`
-  if (res && typeof res.end === 'function') res.end(text)
-  return text
-}
-
 /**
  * Report one action outcome in the panel's response shape.
  *
@@ -171,11 +217,15 @@ function sendJson(res, status, body) {
  * and the human read. The panel needs a code as well as the words, so it is
  * normalised here rather than in the action layer — one place to keep the two
  * shapes honest.
+ *
+ * Note the status: a refused action is a 200 with `ok: false`, not a 4xx. The panel
+ * has to render the reason, and a transport-level failure is indistinguishable from
+ * a dead route.
  */
 function send(res, outcome) {
-  if (outcome && outcome.ok) return sendJson(res, 200, { ok: true, value: outcome.value })
+  if (outcome && outcome.ok) return writeJson(res, 200, { ok: true, value: outcome.value })
   const raw = outcome?.error
   const message = typeof raw === 'string' ? raw : String(raw?.message ?? raw ?? 'the action failed')
   const code = typeof raw?.code === 'string' ? raw.code : 'DEN_ACTION_FAILED'
-  return sendJson(res, 200, { ok: false, error: { code, message } })
+  return writeJson(res, 200, { ok: false, error: { code, message } })
 }
