@@ -218,6 +218,29 @@ export class DenKernel {
     this.onEvent({ type: 'stopped' })
   }
 
+  /**
+   * Apply a new cadence to a running heartbeat, without waiting for a restart.
+   *
+   * `den_configure` writes `tickSeconds` to state, but the interval was armed once
+   * with the value it read at construction. Measured in the acceptance run: the
+   * stored cadence changed and the live timer kept firing on the old one, so the
+   * setting appeared to apply and did not. Re-arming is the whole fix, and it is
+   * also why the heartbeat reports the cadence it is *actually* using.
+   */
+  retime(tickSeconds) {
+    const next = Math.max(5, Math.floor(Number(tickSeconds) || this.tickSeconds))
+    if (next === this.tickSeconds) return this.tickSeconds
+    this.tickSeconds = next
+    if (this.timer) {
+      clearInterval(this.timer)
+      this.timer = null
+      this.stopped = false
+      this.start()
+      this.onEvent({ type: 'retimed', tickSeconds: next })
+    }
+    return next
+  }
+
   /** One heartbeat. Safe to call directly, which is what tests and tools do. */
   async tick({ agent, now = Date.now() } = {}) {
     if (this.running) return { skipped: 'reentrant' }

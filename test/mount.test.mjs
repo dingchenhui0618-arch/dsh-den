@@ -322,11 +322,27 @@ test('the status tool reports filesystem truth, not intentions', async () => {
   const status = await statusTool.execute({})
 
   assert.equal(status.name, 'Den')
-  assert.equal(status.stateSurvivesRestart, false, 'nothing has been persisted yet')
+  // Booting claims the tree on disk, so the configuration on show is stored state
+  // rather than a default that has never been written.
+  assert.equal(status.stateSurvivesRestart, true, 'boot must persist state, not leave the home empty')
   assert.equal(status.gate, 'mounted')
   assert.ok(status.kernel.running)
   assert.equal(status.triggers.total, 0)
   assert.equal(status.ledger.turns, 0)
+})
+
+test('booting persists state without clobbering an existing configuration', async () => {
+  const { ctx, state } = fakeHost()
+  apply(ctx)
+  const configure = state.tools.find((tool) => tool.name === 'den_configure')
+  await configure.execute({ dailyTurnBudget: 7, tickSeconds: 120 })
+
+  // A second activation over the same home, as a restart would do.
+  const second = fakeHost()
+  apply(second.ctx)
+  const status = await second.state.tools.find((tool) => tool.name === 'den_status').execute({})
+  assert.equal(status.dailyTurnBudget, 7, 'a restart must not reset the stored budget')
+  assert.equal(status.tickSeconds, 120, 'a restart must not reset the stored cadence')
 })
 
 test('the configure tool rejects out-of-range input instead of clamping silently', async () => {

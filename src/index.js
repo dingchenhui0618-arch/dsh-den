@@ -103,6 +103,28 @@ export class DenService {
     // accumulate, so sweep once at boot. Only the den's own tree is touched, and
     // the grace period keeps a concurrent writer's in-flight file safe.
     this.reapedTempFiles = reapStaleTempFiles(this.root) + reapStaleTempFiles(join(this.root, 'memory'))
+
+    /**
+     * Claim the tree on disk at boot, so the assistant's existence is durable from
+     * the first moment rather than from the first schedule.
+     *
+     * The earlier behaviour was to write nothing until something was configured, so
+     * a freshly started den left no `state.json` at all: `den_status` reported
+     * `stateSurvivesRestart: false`, `$DSH_HOME/den` did not exist, and the
+     * configuration the user sees in the panel was indistinguishable from a
+     * default that had never been stored. A resident assistant that cannot say
+     * whether it has ever run is not reporting its state honestly.
+     *
+     * Idempotent by construction: `saveState({})` merges over whatever is already
+     * there, so an existing configuration is preserved rather than reset. A failure
+     * is recorded, not thrown — a read-only home must not stop the assistant from
+     * loading, it must just be visible.
+     */
+    try {
+      this.saveState({})
+    } catch (error) {
+      this.noteEvent({ type: 'state-init-failed', message: String(error?.message ?? error) })
+    }
   }
 
   /** Read persisted state, falling back to defaults when absent or invalid. */
@@ -549,6 +571,9 @@ export function registerTools(tools, service) {
 
       if (Object.keys(patch).length === 0) return { ok: false, error: 'nothing to change' }
       const state = service.saveState(patch)
+      // A cadence the heartbeat is not actually using is a setting that lies, so a
+      // running kernel is re-armed here rather than at the next restart.
+      if (patch.tickSeconds !== undefined) service.kernel?.retime(state.tickSeconds)
       return { ok: true, applied: patch, effective: { quietHours: state.quietHours, dailyTurnBudget: state.dailyTurnBudget, cooldownSeconds: state.cooldownSeconds, tickSeconds: state.tickSeconds, displayName: state.displayName } }
     },
   })

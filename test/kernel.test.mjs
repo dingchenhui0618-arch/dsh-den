@@ -477,3 +477,45 @@ test('start and stop leave no timer behind', () => {
   assert.equal(kernel.timer, null)
   assert.ok(events.some((event) => event.type === 'stopped'))
 })
+
+/* ------------------------------------------------------- re-arming the cadence */
+
+test('retime re-arms a running heartbeat instead of waiting for a restart', () => {
+  // The stored cadence and the live timer are different things. Measured in the
+  // acceptance run: `den_configure` changed tickSeconds, the state file agreed, and
+  // the interval kept firing on the old value — a setting that looked applied and
+  // was not.
+  const kernel = new DenKernel({ service: { state: () => ({ dailyTurnBudget: 50, cooldownSeconds: 0, quietHours: null }) }, deliver: async () => 'SKIP', tickSeconds: 60 })
+  kernel.start()
+  const startedWith = kernel.timer
+  assert.ok(startedWith, 'the heartbeat arms a timer')
+
+  const applied = kernel.retime(5)
+  assert.equal(applied, 5)
+  assert.equal(kernel.tickSeconds, 5)
+  assert.notEqual(kernel.timer, startedWith, 'the timer must be replaced, not left on the old cadence')
+  kernel.stop()
+})
+
+test('retime clamps to the documented floor and ignores a no-op change', () => {
+  const kernel = new DenKernel({ service: { state: () => ({ dailyTurnBudget: 50, cooldownSeconds: 0, quietHours: null }) }, deliver: async () => 'SKIP', tickSeconds: 60 })
+  kernel.start()
+  const before = kernel.timer
+
+  assert.equal(kernel.retime(60), 60)
+  assert.equal(kernel.timer, before, 'an unchanged cadence must not churn the timer')
+
+  assert.equal(kernel.retime(1), 5, 'below the floor it clamps, rather than arming a 1-second heartbeat')
+  assert.equal(kernel.tickSeconds, 5)
+
+  assert.equal(kernel.retime(undefined), 5, 'a missing value leaves the cadence alone')
+  kernel.stop()
+})
+
+test('retime on a stopped heartbeat changes the next cadence without starting it', () => {
+  const kernel = new DenKernel({ service: { state: () => ({ dailyTurnBudget: 50, cooldownSeconds: 0, quietHours: null }) }, deliver: async () => 'SKIP', tickSeconds: 60 })
+  assert.equal(kernel.timer, null)
+  kernel.retime(15)
+  assert.equal(kernel.tickSeconds, 15)
+  assert.equal(kernel.timer, null, 'a stopped heartbeat must not be started as a side effect')
+})
