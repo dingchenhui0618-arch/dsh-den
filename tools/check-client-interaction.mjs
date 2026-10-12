@@ -381,8 +381,9 @@ const panel2 = mount(boot({ scripted: { status: healthyStatus(), 'schedules/list
 await panel2.settle()
 await panel2.click('授予')
 if (process.env.DEN_DEBUG) {
+  // The sink deliberately reports reply *shape*, not contents, so this shows which
+  // actions completed rather than what they returned.
   console.log('PANEL2 sink:', JSON.stringify(sinkLog))
-  console.log('PANEL2 action slot:', JSON.stringify(panel2.hooks.slots[3]))
 }
 check(panel2.text().includes('tok-abc123'), 'the minted token is displayed for the human to carry to the conversation')
 check(panel2.text().includes('一次性'), 'the panel explains the token is single-use')

@@ -304,7 +304,12 @@ window.__ModuleLoader__.load({
         setAction({ busy: kind, error: null, note: null, token: null })
         return promise
           .then(function (value) {
-            if (sink) sink({ phase: 'resolved', kind: kind, value: value })
+            // Report only the shape of the reply, never its contents. An earlier
+            // version handed the whole value to the sink, which meant the freshly
+            // minted autonomy token was written to a page-global hook for no reason:
+            // a script that could install the sink could already read the token off
+            // the screen, so there was nothing to gain and a secret to leak.
+            if (sink) sink({ phase: 'resolved', kind: kind, keys: value && typeof value === 'object' ? Object.keys(value) : null })
             setAction({ busy: null, error: null, note: null, token: null })
             return value
           })
