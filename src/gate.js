@@ -86,6 +86,25 @@ const TOOL_RISK = {
   bash: RISK.ask,
   pwsh: RISK.ask,
   shell: RISK.ask,
+
+  // The den's own read-only surface.
+  //
+  // These were previously falling through to `defaultRisk: ask`, which produced a
+  // real defect rather than a harmless extra prompt: an assistant whose *every*
+  // attempt to look at its own status raises an approval dialog trains the human
+  // to click approve without reading. Approval fatigue is a security failure, and
+  // it was self-inflicted — the gate was treating its own tools as unknown
+  // foreign capabilities.
+  //
+  // Only tools that cannot change anything outside the conversation belong here.
+  // Everything with a durable or outbound effect stays on the default `ask`:
+  // `den_remember`/`den_forget`/`den_schedule_check`/`den_schedule_delete`/
+  // `den_configure` write state, and `den_set_autonomy` is a privilege change.
+  den_status: RISK.allow,
+  den_explain_gate: RISK.allow,
+  den_scenarios: RISK.allow,
+  den_recall: RISK.allow,
+  den_schedule_list: RISK.allow,
 }
 
 /** The fallback for a tool this gate has never seen. */

@@ -36,8 +36,9 @@ import { currentGrant, recordGrant, sessionEvents } from './grant.js'
 import { allNotices, isExpired, pendingNotices, queueNotice } from './notices.js'
 import { installGate, RISK, classifyCall } from './gate.js'
 import { DenKernel, evaluateGates, readLedger, ledgerPath } from './kernel.js'
-import { deleteTrigger, dueTriggers, listTriggers, normalizeTrigger, saveTrigger } from './triggers.js'
+import { deleteTrigger, dueTriggers, listTriggers, nextTriggerAt, normalizeTrigger, saveTrigger } from './triggers.js'
 import { ENTRY_KINDS, forget, recall, remember, scenarios } from './memory.js'
+import { mountStatusRoute } from './status-route.js'
 
 export const name = 'dsh-den'
 export const inject = ['agents', 'tools']
@@ -177,6 +178,23 @@ export class DenService {
     const stored = readJson(`${this.root}/gate-audit.json`)
     const entries = Array.isArray(stored?.entries) ? stored.entries : []
     return entries.slice(-limit)
+  }
+
+  // ---------------------------------------------------------------- memory
+
+  /**
+   * Which memory scenarios exist, with entry counts.
+   *
+   * Read-only and surfaced through the status panel deliberately: the isolation
+   * domain is a promise made to the human, so they should be able to see which
+   * domains exist without asking the model to recall one.
+   */
+  listScenarios() {
+    try {
+      return scenarios()
+    } catch {
+      return []
+    }
   }
 
   // ---------------------------------------------------------------- status
@@ -660,6 +678,11 @@ export function apply(ctx) {
     } else {
       service.noteEvent({ type: 'kernel-deferred', reason: 'no delivery path available in this profile' })
     }
+
+    // The status panel's data route. Optional by design: a profile without a
+    // connection service still gets the whole assistant, it just has no GUI half.
+    // Read-only, so it can never become a way around the approval gate.
+    disposers.push(mountStatusRoute(ctx, { service, nextTriggerAt }))
 
     return () => {
       // Reverse order so the kernel stops before the gate it depends on is removed.

@@ -100,6 +100,28 @@ test('a declared read-only search passes without asking', () => {
   assert.equal(decide(result).kind, 'allow')
 })
 
+test("the den's own read-only tools do not raise an approval prompt", () => {
+  // Measured defect, not a hypothetical: `den_status` fell through to the unknown
+  // -tool default and produced `approval/asked: unrecognised tool den_status`,
+  // which the human then rejected. An assistant that raises a dialog every time it
+  // looks at itself trains the human to approve without reading.
+  for (const name of ['den_status', 'den_explain_gate', 'den_scenarios', 'den_recall', 'den_schedule_list']) {
+    const result = classifyCall(call(name, {}))
+    assert.equal(result.risk, RISK.allow, `${name} must pass without asking`)
+    assert.equal(decide(result).kind, 'allow', `${name} must not raise an approval prompt`)
+  }
+})
+
+test('state-changing and privilege-changing den tools still ask', () => {
+  // The safety half of the same rule: silent read-only tools must not become a
+  // blanket exemption for the ones that write durable state or change authority.
+  for (const name of ['den_remember', 'den_forget', 'den_schedule_check', 'den_schedule_delete', 'den_configure', 'den_set_autonomy']) {
+    const result = classifyCall(call(name, {}))
+    assert.equal(result.risk, RISK.ask, `${name} must still be reviewed`)
+    assert.equal(decide(result).kind, 'ask')
+  }
+})
+
 // ------------------------------------------------------- argument flattening
 
 test('arguments are searched wherever the calling convention put them', () => {
