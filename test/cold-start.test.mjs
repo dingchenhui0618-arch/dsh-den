@@ -553,36 +553,112 @@ test('a wake whose reply never lands is recorded, retried, and not charged', asy
   service.kernel.stop()
 })
 
-test('a refused wake is not charged, so the intent survives until it can run', async () => {
+test('a refusal distinguishes "no transcript" from "not authorized"', async () => {
   const first = coldHost()
   apply(first.ctx)
   await callTool(first.state, 'den_schedule_check', {
     kind: 'interval',
-    title: 'no delivery path',
+    title: 'readable transcript, unauthorized',
     prompt: 'x',
     sessionId: SESSION_ID,
     everySeconds: 300,
   })
   await grantAutonomy(first.state)
+  ageStoredTriggers(Date.now() - 60 * 60 * 1000)
   first.state.dispose?.()
 
-  const now = Date.now() + 60 * 60 * 1000
+  const now = Date.now()
   const second = coldHost()
   apply(second.ctx)
   const service = second.state.provided.get('den')
-  // Nothing live, no resume capability, no delivery path at all.
-  second.state.agentsApi.get = () => undefined
-  second.state.agentsApi.resume = undefined
+
+  // The transcript is readable and the grant is valid, so authority is genuine. There
+  // is no delivery path, so the wake is admitted and then fails to reach anyone — which
+  // is a *different* outcome from a gate refusal, and must be reported as a failure that
+  // will be retried rather than as a wake that chose to stay silent.
   second.state.subagents = null
+  const admitted = await service.kernel.tick({ agent: undefined, now })
+  assert.equal(admitted.results[0].outcome, 'failed')
+  assert.equal(admitted.results[0].willRetry, true)
+  assert.ok(
+    service.recentEvents.some((event) => event.type === 'wake-unavailable'),
+    'an admitted wake with nowhere to go must say so',
+  )
+  assert.equal(
+    service.listTriggers().valid[0].fireCount,
+    0,
+    'a check-in that never reached anyone must not be consumed',
+  )
+  service.kernel.stop()
+})
+
+test('a refusal is not charged, so the intent survives until it can run', async () => {
+  const first = coldHost()
+  apply(first.ctx)
+  await callTool(first.state, 'den_schedule_check', {
+    kind: 'interval',
+    title: 'never authorized',
+    prompt: 'x',
+    sessionId: SESSION_ID,
+    everySeconds: 300,
+  })
+  // Note the omission: no grant. A schedule is not a permission, so the authority gate
+  // refuses - and this is the case that must be told apart from "nothing to check
+  // against", because the transcript is perfectly readable here.
+  ageStoredTriggers(Date.now() - 60 * 60 * 1000)
+  first.state.dispose?.()
+
+  const now = Date.now()
+  const second = coldHost()
+  apply(second.ctx)
+  const service = second.state.provided.get('den')
 
   const outcome = await service.kernel.tick({ agent: undefined, now })
   assert.equal(outcome.due, 1)
   assert.equal(outcome.results[0].outcome, 'refused')
+  assert.equal(outcome.results[0].gate, 'authority')
   assert.equal(
-    outcome.results[0].hadDriver,
-    false,
-    'the refusal must distinguish "nobody to ask" from "not authorized"',
+    outcome.results[0].hadSession,
+    true,
+    'the refusal must say the transcript was readable, so this is a real denial',
   )
   assert.equal(service.listTriggers().valid[0].fireCount, 0, 'a refused check-in must not be charged')
+  assert.equal(second.state.sentMessages.length, 0, 'nothing may be delivered without authority')
+  service.kernel.stop()
+})
+
+test('an unreadable transcript refuses without cold-resuming the conversation', async () => {
+  const first = coldHost()
+  apply(first.ctx)
+  await callTool(first.state, 'den_schedule_check', {
+    kind: 'interval',
+    title: 'gone conversation',
+    prompt: 'x',
+    sessionId: SESSION_ID,
+    everySeconds: 300,
+  })
+  await grantAutonomy(first.state)
+  ageStoredTriggers(Date.now() - 60 * 60 * 1000)
+  first.state.dispose?.()
+
+  const now = Date.now()
+  const second = coldHost()
+  apply(second.ctx)
+  const service = second.state.provided.get('den')
+  // Nothing live, nothing readable: the session is simply gone.
+  second.state.sessions = { get: () => undefined }
+  second.state.liveAgent = undefined
+
+  const outcome = await service.kernel.tick({ agent: undefined, now })
+  assert.equal(outcome.results[0].outcome, 'refused')
+  assert.equal(outcome.results[0].gate, 'authority')
+  assert.equal(outcome.results[0].hadSession, false)
+  // The point of the split: authority needs a transcript, not a driver. Resuming here
+  // would spend a driver on every refusal, on a timer, forever.
+  assert.deepEqual(
+    second.state.resumeCalls,
+    [],
+    'an unauthorized wake must not cold-resume anything',
+  )
   service.kernel.stop()
 })

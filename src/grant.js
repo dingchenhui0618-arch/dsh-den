@@ -109,14 +109,19 @@ export function recordGrant(ctx, agent, autonomy, humanMessageId) {
 }
 
 /**
- * Resolve the current authority for an agent.
+ * Resolve the current authority for a session, given its log.
  *
- * @returns {boolean|undefined} `true`/`false` from a verified record, or
- * `undefined` when nothing trustworthy is on file. Callers must treat
- * `undefined` as "not authorized".
+ * Authority is a property of the *conversation*, not of the process that happens to be
+ * driving it: the grant names a session and a human message, and the transcript is the
+ * proof. So the gate can answer the question from a session alone, without a live driver
+ * — which matters, because the heartbeat has none, and cold-resuming a conversation
+ * merely to discover that it was never authorized would spend a driver on every refusal.
+ *
+ * @returns {boolean|undefined} `true`/`false` from a verified record, or `undefined`
+ * when nothing trustworthy is on file.
  */
-export function currentGrant(agent) {
-  const sessionId = agent?.session?.id
+export function currentGrantForSession(session) {
+  const sessionId = session?.id
   if (!sessionId) return undefined
 
   const result = readJsonChecked(grantPath(sessionId), isValidRecord)
@@ -127,7 +132,7 @@ export function currentGrant(agent) {
 
   // The bound human message must still exist in the immutable log with the same
   // sequence and a human source. A record whose proof is gone is not authority.
-  const events = sessionEvents(agent.session)
+  const events = sessionEvents(session)
   const attested = events.some(
     (event) =>
       event?.seq === record.humanSeq &&
@@ -138,6 +143,22 @@ export function currentGrant(agent) {
   if (!attested) return false
 
   return record.autonomy
+}
+
+/** Convenience predicate; anything other than a verified `true` is not autonomy. */
+export function hasAutonomyForSession(session) {
+  return currentGrantForSession(session) === true
+}
+
+/**
+ * Resolve the current authority for an agent.
+ *
+ * @returns {boolean|undefined} `true`/`false` from a verified record, or
+ * `undefined` when nothing trustworthy is on file. Callers must treat
+ * `undefined` as "not authorized".
+ */
+export function currentGrant(agent) {
+  return currentGrantForSession(agent?.session)
 }
 
 /** Convenience predicate; anything other than a verified `true` is not autonomy. */

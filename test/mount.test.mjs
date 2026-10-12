@@ -400,8 +400,16 @@ test('the deliver path refuses to fabricate a result when it cannot wake', async
   const service = new DenService(ctx)
   const deliver = createDeliver(ctx, service)
 
-  const text = await deliver({ trigger: { id: 't1', sessionId: 's1', title: 'x', prompt: 'y' }, instruction: 'go' })
-  assert.equal(text, '', 'a wake that could not run must report nothing, not invent output')
+  // Throwing, not returning an empty string. An empty reply is what the kernel reads as
+  // "the den woke, looked, and chose silence" — a successful wake. A wake that never
+  // reached anyone must not be reported as one: it would charge the turn, advance the
+  // cadence, and consume a check-in the human asked for. Throwing routes it to the
+  // retry path instead.
+  await assert.rejects(
+    deliver({ trigger: { id: 't1', sessionId: 's1', title: 'x', prompt: 'y' }, instruction: 'go' }),
+    /no delivery path/,
+    'a wake that could not run must report failure, not invent output',
+  )
   assert.ok(service.recentEvents.some((event) => event.type === 'wake-unavailable'))
 })
 

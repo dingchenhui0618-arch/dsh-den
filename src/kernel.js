@@ -24,7 +24,7 @@
  */
 
 import { denPath, digest, readJson, writeJsonAtomic } from './atom.js'
-import { hasAutonomy } from './grant.js'
+import { hasAutonomyForSession } from './grant.js'
 import { queueNotice } from './notices.js'
 import { dueTriggers, markAttemptFailed, markFired } from './triggers.js'
 
@@ -122,10 +122,21 @@ export function recordSpoke(at = Date.now()) {
 /**
  * Evaluate the mechanical gates for one candidate wake.
  *
+ * Authority is checked against `session`, not against a live driver, because it is a
+ * property of the conversation: the grant names a session and a human message, and the
+ * transcript is the proof. Accepting an agent as well keeps the direct-call path (and
+ * the tests that drive it) working, but the heartbeat — which has no agent to offer —
+ * is served by the session.
+ *
+ * @param {object} options
+ * @param {object} options.state the den's configured state
+ * @param {object} [options.session] the conversation's session log
+ * @param {object} [options.agent] a live driver, used for its session when given
  * @returns {{ allowed: true } | { allowed: false, gate: string, reason: string }}
  */
-export function evaluateGates({ state, agent, now = Date.now() }) {
-  if (!hasAutonomy(agent)) {
+export function evaluateGates({ state, session, agent, now = Date.now() }) {
+  const authoritySession = session ?? agent?.session
+  if (!hasAutonomyForSession(authoritySession)) {
     return {
       allowed: false,
       gate: 'authority',
@@ -191,12 +202,16 @@ export class DenKernel {
    *   authority gate is asked about `undefined` and refuses every wake — a resident
    *   assistant that can never once wake itself, while the mount, the tools, and the
    *   gates all report healthy.
+   * @param {(sessionId: string) => object|undefined} [options.resolveSession]
+   *   Reads a transcript *without* starting a driver. Used for the authority check, so
+   *   a refusal costs nothing; `resolveAgent` is only consulted once a wake is admitted.
    */
-  constructor({ service, deliver, onEvent, tickSeconds = 60, resolveAgent = null }) {
+  constructor({ service, deliver, onEvent, tickSeconds = 60, resolveAgent = null, resolveSession = null }) {
     this.service = service
     this.deliver = deliver
     this.onEvent = onEvent ?? (() => {})
     this.resolveAgent = resolveAgent
+    this.resolveSession = resolveSession
     this.tickSeconds = Math.max(5, tickSeconds)
     this.timer = null
     this.running = false
@@ -263,6 +278,24 @@ export class DenKernel {
     }
   }
 
+  /**
+   * Read a conversation's transcript without starting anything.
+   *
+   * Provided by the caller because the kernel must not reach into `ctx` — it takes the
+   * services it needs as explicit arguments so its behaviour is testable without a
+   * host. Returning `undefined` is normal: a session that is not live and cannot be
+   * read simply has no authority, which the gate then reports.
+   */
+  lookupSession(sessionId) {
+    if (typeof this.resolveSession !== 'function') return undefined
+    try {
+      return this.resolveSession(sessionId) ?? undefined
+    } catch (error) {
+      this.lastError = String(error?.message ?? error)
+      return undefined
+    }
+  }
+
   async #runDue({ agent, now }) {
     const due = dueTriggers(now)
     if (due.length === 0) return { due: 0, woke: 0, spoke: 0 }
@@ -274,42 +307,27 @@ export class DenKernel {
       if (this.stopped) break
 
       /**
-       * Resolve the driver for this conversation before asking about authority.
+       * Resolve the conversation before asking about authority, but resolve the
+       * *cheapest* thing that can answer the question.
        *
-       * Authority in this plugin is *attested*: `currentGrant` does not trust a stored
-       * boolean, it re-reads the immutable session log and requires the bound human
-       * message to still be there. That means it needs a session. The heartbeat calls
-       * `tick()` with no arguments — `start()` is `setInterval(() => this.tick())` — so
-       * for the one caller that matters there is no agent unless one is resolved here.
+       * Authority in this plugin is attested against the session log, so it needs a
+       * session. That is not the same as needing a live driver: `lookupSession` hands
+       * back the transcript without starting anything. Resolving a driver first would
+       * cold-resume a conversation on every refusal — spending a driver to learn that a
+       * conversation was never authorized, on a timer, forever.
        *
-       * Resolving after the gate is not a reordering of convenience, it is the whole
-       * bug: the gate was being asked "does this undefined agent have authority?", got
-       * `undefined`, and refused. Every autonomous wake in the field was refused at the
-       * authority gate, and nothing anywhere said so, because a refusal is the correct
-       * outcome for an unauthorized wake and reads as one.
+       * A driver is resolved once the gate has admitted the wake. Before this ordering
+       * existed the heartbeat called `tick()` with no arguments — `start()` is
+       * `setInterval(() => this.tick())` — and `#runDue` asked `undefined` for its
+       * authority, so **every autonomous wake in the field was refused**, while the
+       * mount, the tools, the ledger and the panel all reported healthy.
        */
+      const session = agent?.session ?? this.lookupSession(trigger.sessionId)
       let resolved = agent ?? null
       let release = null
-      if (!resolved && this.resolveAgent) {
-        try {
-          const found = await this.resolveAgent(trigger.sessionId)
-          if (found) {
-            resolved = found.agent ?? found
-            release = found.dispose ?? null
-          }
-        } catch (error) {
-          // A conversation that cannot be resumed is not authority. Record why and
-          // move on rather than throwing out of the heartbeat.
-          this.onEvent({
-            type: 'wake-unresolved',
-            triggerId: trigger.id,
-            message: String(error?.message ?? error),
-          })
-        }
-      }
 
       try {
-        const verdict = evaluateGates({ state, agent: resolved, now })
+        const verdict = evaluateGates({ state, session, agent: resolved, now })
         if (!verdict.allowed) {
           // A refused wake is recorded, not silently dropped. The budget gate in
           // particular must be auditable, otherwise "why did it stop working?"
@@ -320,18 +338,39 @@ export class DenKernel {
             triggerId: trigger.id,
             gate: verdict.gate,
             reason: verdict.reason,
-            // Whether a driver was found is the difference between "the human has not
-            // authorized this" and "there was nobody to ask".
-            hadDriver: resolved !== null,
+            // Whether a transcript was readable at all separates "the human has not
+            // authorized this" from "there was nothing to check against".
+            hadSession: session !== null && session !== undefined,
           })
           results.push({
             triggerId: trigger.id,
             outcome: 'refused',
             gate: verdict.gate,
             reason: verdict.reason,
-            hadDriver: resolved !== null,
+            hadSession: session !== null && session !== undefined,
           })
           continue
+        }
+
+        // Admitted. A driver is needed to actually deliver, and only now is it worth
+        // resuming a conversation that is not live.
+        if (!resolved && this.resolveAgent) {
+          try {
+            const found = await this.resolveAgent(trigger.sessionId)
+            if (found) {
+              resolved = found.agent ?? found
+              release = found.dispose ?? null
+            }
+          } catch (error) {
+            // The wake was authorized but no driver could be obtained. Record why; the
+            // delivery path reports the failure rather than throwing out of the
+            // heartbeat.
+            this.onEvent({
+              type: 'wake-unresolved',
+              triggerId: trigger.id,
+              message: String(error?.message ?? error),
+            })
+          }
         }
 
         let output

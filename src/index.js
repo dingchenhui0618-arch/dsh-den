@@ -423,9 +423,15 @@ export function createDeliver(ctx, service) {
     // resolution per wake instead of two that could disagree.
     if (!agent || !subagents?.sendMessage) {
       service.noteEvent({ type: 'wake-unavailable', triggerId: trigger.id })
-      // Empty is read by the kernel as "nothing to say", which is the correct outcome
-      // for a wake we could not perform: never claim work that did not happen.
-      return ''
+      // Throwing, not returning empty.
+      //
+      // The kernel reads an empty reply as "nothing worth saying" — a *successful* wake
+      // that chose silence. That is the wrong report for a wake that never reached
+      // anyone: it would charge the turn, advance the cadence, and quietly consume a
+      // check-in the human asked for. Throwing routes it to the kernel's failure path,
+      // which charges only the retry throttle and leaves the schedule due, so it runs
+      // when a delivery path exists again. Never claim work that did not happen.
+      throw new Error('dsh-den: no delivery path for this wake')
     }
 
     const text = `${instruction}\n\n## Scheduled check\n${trigger.title}\n${trigger.prompt}`
@@ -883,9 +889,16 @@ export function apply(ctx) {
       service.kernel = new DenKernel({
         service,
         deliver: createDeliver(ctx, service),
-        // Without this the heartbeat's own wakes are refused at the authority gate:
+        // Without these the heartbeat's own wakes are refused at the authority gate:
         // `start()` arms `setInterval(() => this.tick())`, so no agent is ever passed,
         // and authority is attested against a session rather than stored.
+        //
+        // The two are deliberately separate. `resolveSession` reads a transcript and
+        // starts nothing, which is all the authority check needs; `resolveAgent`
+        // cold-resumes a driver, which is expensive and only worth doing once a wake has
+        // been admitted. Collapsing them would resume every unauthorized conversation
+        // on every heartbeat, forever.
+        resolveSession: (sessionId) => ctx.get?.('sessions')?.get?.(sessionId),
         resolveAgent: createAgentResolver(ctx),
         tickSeconds: service.state().tickSeconds,
         onEvent: (event) => service.noteEvent(event),
