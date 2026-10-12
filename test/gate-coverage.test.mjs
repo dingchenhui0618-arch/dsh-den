@@ -21,18 +21,9 @@ import test from 'node:test'
 
 const root = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
 const { classifyCall, RISK } = await import('../src/gate.js')
-
-/**
- * Build a path that the gate's secret rule must refuse, without writing the
- * filename itself. The name is assembled from parts on purpose: a literal here
- * trips the same guard that protects the real file, and the test does not need to
- * spell it out to exercise the rule.
- */
-function secretShapedPath() {
-  const dir = ['.dsh'].join('')
-  const file = ['credential', 's.yaml'].join('')
-  return ['C:', 'Users', 'someone', dir, file].join('/')
-}
+// The credential-shaped path is shared with `gate-installed.test.mjs` so the name is
+// assembled from parts in exactly one place. See `support/fixtures.mjs`.
+const { secretShapedPath } = await import('./support/fixtures.mjs')
 
 /**
  * Every tool the Host reported as callable by this Agent. Kept verbatim so a new
