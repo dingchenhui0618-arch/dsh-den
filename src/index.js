@@ -16,11 +16,13 @@
  *   never declared, and `apply` does not run at all as a result. So `inject` lists
  *   what this plugin genuinely requires, and the code reads the injected
  *   properties instead of reaching for `ctx.get`.
- * - **`agents` and `tools` are hard dependencies; `subagents` is not.** Without
- *   the agent registry there is nothing to authorize; without the tool registry
- *   the approval gate cannot be installed, and an ungated resident assistant is
- *   an unsafe build rather than a degraded one — it must fail activation. The
- *   delivery path is genuinely optional, so the kernel defers when it is absent.
+ * - **`agents`, `tools`, and `connection` are hard dependencies; `subagents` is
+ *   not.** Without the agent registry there is nothing to authorize; without
+ *   the tool registry the approval gate cannot be installed, and without the
+ *   connection service the status panel has no transport route. The first two
+ *   are unsafe to omit; the connection service is required by this profile's
+ *   panel surface. The delivery path is genuinely optional, so the kernel
+ *   defers when it is absent.
  * - The approval gate is installed **before** anything the model controls, and it
  *   is installed through `ctx.tools.guard`, which the Host documents as
  *   monotonic: no later listener can turn its denial back into permission.
@@ -41,7 +43,7 @@ import { ENTRY_KINDS, forget, recall, remember, scenarios } from './memory.js'
 import { mountStatusRoute } from './status-route.js'
 
 export const name = 'dsh-den'
-export const inject = ['agents', 'tools']
+export const inject = ['agents', 'tools', 'connection']
 
 const STATE_VERSION = 1
 
@@ -712,9 +714,11 @@ export function apply(ctx) {
       service.noteEvent({ type: 'kernel-deferred', reason: 'no delivery path available in this profile' })
     }
 
-    // The status panel's data route. Optional by design: a profile without a
-    // connection service still gets the whole assistant, it just has no GUI half.
-    // Read-only, so it can never become a way around the approval gate.
+    // The status panel's data route. The desktop profile injects `connection`,
+    // which is why it is declared in this plugin's inject list. The mount helper
+    // still reports a structured failure for a test or host that supplies an
+    // incomplete connection object. Read-only, so it can never become a way
+    // around the approval gate.
     const route = mountStatusRoute(ctx, { service, nextTriggerAt })
     service.statusRoute = { mounted: route.mounted, reason: route.reason, message: route.message }
     disposers.push(route.dispose)

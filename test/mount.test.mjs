@@ -18,7 +18,11 @@ import test from 'node:test'
 const sandbox = mkdtempSync(join(tmpdir(), 'dsh-den-mount-'))
 process.env.DSH_HOME = sandbox
 
-const { apply, DenService, registerTools, createDeliver } = await import('../src/index.js')
+const { apply, inject, DenService, registerTools, createDeliver } = await import('../src/index.js')
+
+test('the plugin declares the connection service required by its status route', () => {
+  assert.deepEqual(inject, ['agents', 'tools', 'connection'])
+})
 
 test.after(() => rmSync(sandbox, { recursive: true, force: true }))
 
@@ -36,6 +40,7 @@ function fakeHost({ withSubagents = true } = {}) {
     tools: [],
     guards: [],
     effects: [],
+    routes: [],
   }
 
   state.toolsApi = {
@@ -66,12 +71,24 @@ function fakeHost({ withSubagents = true } = {}) {
     get: () => undefined,
     resume: async () => ({ agent: { id: 'resumed' }, dispose: async () => {} }),
   }
+  state.connection = {
+    fetch: {
+      register(route) {
+        state.routes.push(route)
+        return () => {
+          const at = state.routes.indexOf(route)
+          if (at >= 0) state.routes.splice(at, 1)
+        }
+      },
+    },
+  }
 
   const ctx = {
     // Injected properties, as the real Cordis context exposes services it has
     // declared via `inject`. The plugin reads these, not `ctx.get(...)`.
     tools: state.toolsApi,
     agents: state.agentsApi,
+    connection: state.connection,
     effect(fn) {
       const dispose = fn()
       state.effects.push(dispose)
@@ -85,6 +102,7 @@ function fakeHost({ withSubagents = true } = {}) {
       if (key === 'subagents') return withSubagents ? state.subagents : undefined
       if (key === 'tools') return state.toolsApi
       if (key === 'agents') return state.agentsApi
+      if (key === 'connection') return state.connection
       return undefined
     },
     on(event, handler) {
@@ -110,6 +128,17 @@ test('activation mounts the gate before anything else can run', () => {
   apply(ctx)
   assert.ok(state.listeners.has('tools/pre-execute'), 'the pre-execute listener must be mounted')
   assert.equal(state.guards.length, 1, 'exactly one monotonic guard must be mounted')
+})
+
+test('activation mounts the status route when the desktop connection is present', () => {
+  const { ctx, state } = fakeHost()
+  const dispose = apply(ctx)
+  const service = state.provided.get('den')
+  assert.equal(state.routes.length, 1)
+  assert.equal(state.routes[0].path, '/api/dsh.den/status')
+  assert.deepEqual(service.status().statusRoute, { mounted: true, reason: null, message: null })
+  dispose()
+  assert.equal(state.routes.length, 0)
 })
 
 test('activation registers every model-facing tool with an explicit schema', () => {
