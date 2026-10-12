@@ -93,7 +93,8 @@ const TOOL_RISK = {
 
   // DSH's built-in inspection, coordination, and question surfaces. These
   // operate on local session/UI state and do not create durable or outbound
-  // effects. Write/edit/job-control tools remain on the fail-closed default.
+  // effects. State-changing den tools and unrecognised capabilities remain on
+  // the fail-closed default.
   cordis_inspect_list: RISK.allow,
   cordis_inspect_query: RISK.allow,
   list_agents: RISK.allow,
@@ -102,6 +103,31 @@ const TOOL_RISK = {
   grep: RISK.allow,
   glob: RISK.allow,
   ask_user_question: RISK.allow,
+
+  // The three tools every agent turn is actually built out of. They were absent,
+  // so a plain `read` fell through to `defaultRisk: ask` and, in a session with
+  // approval prompts disabled, became an automatic `user rejected`. Measured in
+  // this profile's gate audit, in a single session:
+  //
+  //   { tool: 'read',  rule: 'unknown-tool', risk: 1, decision: 'ask' }
+  //   { tool: 'edit',  rule: 'unknown-tool', risk: 1, decision: 'ask' }
+  //   { tool: 'write', rule: 'unknown-tool', risk: 1, decision: 'ask' }
+  //
+  // while `grep`, `glob`, `pwsh` and `den_status` passed, because they were
+  // listed. A gate that blocks the file tools cannot be worked with at all, and
+  // being unusable is its own security failure: it is exactly the pressure that
+  // makes a human switch the gate off wholesale instead of reviewing it.
+  //
+  // The secrets rule above still runs FIRST and is path-based rather than
+  // tool-based, so `read`/`write`/`edit` touching a credential path is denied
+  // before this table is consulted. That is what makes allowing them safe: the
+  // deny does not depend on the tool name.
+  //
+  // Deliberately still absent, so they keep the fail-closed default: the
+  // state-changing den tools, and every capability this profile has never seen.
+  read: RISK.allow,
+  write: RISK.allow,
+  edit: RISK.allow,
 
   // The den's own read-only surface.
   //

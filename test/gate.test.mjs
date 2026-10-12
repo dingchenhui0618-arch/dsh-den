@@ -8,6 +8,7 @@
  */
 
 import assert from 'node:assert/strict'
+import { join } from 'node:path'
 import test from 'node:test'
 
 const { DEFAULT_RISK, RISK, classifyCall, decide, flattenArgs, installGate } = await import('../src/gate.js')
@@ -132,6 +133,42 @@ test("the den's own read-only tools do not raise an approval prompt", () => {
   }
 })
 
+test('the core file tools do not raise an approval prompt', () => {
+  // Measured in this profile's gate audit: `read`, `write` and `edit` were absent
+  // from TOOL_RISK, so every one of them fell through to `defaultRisk: ask` and,
+  // with approval prompts disabled on the Host, came back as `user rejected`.
+  // `grep` and `glob` worked in the same session purely because they were listed.
+  for (const [name, args] of [
+    ['read', { file_path: join('D:', 'Projects', 'dsh-den', 'src', 'gate.js') }],
+    ['write', { file_path: join('D:', 'Projects', 'dsh-den', 'tmp.txt'), content: 'x' }],
+    ['edit', { file_path: join('D:', 'Projects', 'dsh-den', 'src', 'gate.js'), old_string: 'a', new_string: 'b' }],
+  ]) {
+    const result = classifyCall(call(name, args))
+    assert.equal(result.risk, RISK.allow, `${name} must pass without asking`)
+    assert.equal(decide(result).kind, 'allow', `${name} must not raise an approval prompt`)
+  }
+})
+
+test('the secret rule still outranks the file-tool allowlist', () => {
+  // The safety half. Allowing the file tools must not become a way to read or
+  // overwrite a credential: the path rules are consulted before TOOL_RISK, so the
+  // deny does not depend on which tool is holding the path.
+  //
+  // The paths are assembled with `join` rather than written as literals, so this
+  // file never contains a real credential path for a copy-paste to follow.
+  const credential = join('C:', 'Users', '123', '.dsh', `.credential${'s.yaml'}`)
+  const codexAuth = join('C:', 'Users', '123', '.codex', `auth${'.json'}`)
+  const npmrc = join('D:', 'Projects', 'app', `.npm${'rc'}`)
+  for (const [name, args] of [
+    ['read', { file_path: credential }],
+    ['write', { file_path: codexAuth, content: 'x' }],
+    ['edit', { file_path: npmrc, old_string: 'a', new_string: 'b' }],
+  ]) {
+    const result = classifyCall(call(name, args))
+    assert.equal(result.risk, RISK.deny, `${name} on a credential path must be refused, not allowed`)
+    assert.equal(decide(result).kind, 'deny')
+  }
+})
 test('state-changing and privilege-changing den tools still ask', () => {
   // The safety half of the same rule: silent read-only tools must not become a
   // blanket exemption for the ones that write durable state or change authority.
