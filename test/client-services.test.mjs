@@ -1,0 +1,185 @@
+/**
+ * The client half's service contract, checked against the live catalogs.
+ *
+ * Why this file exists: `tools/check-client-bundle.mjs` and
+ * `tools/check-client-interaction.mjs` both supply a fake `ctx`, and I wrote those
+ * fakes from the same assumption as the code. A fake shaped like the code cannot
+ * falsify the code — it agrees with it by construction. So a wrong service name or
+ * a missing `inject` entry passes both harnesses and fails only in the browser,
+ * where the failure is a panel that renders and then never loads its data.
+ *
+ * Everything asserted here is read out of the running client or the host's own
+ * contract, or derived from the bundle's own declarations:
+ *
+ *   - the client Service catalog lists layout, locale, sessions, slots, theme,
+ *     timer, uiWorkspace, workspaces
+ *   - the Client Builtin list (symbols available to a dynamic Client half) is
+ *     ctx, React, host, styles, console
+ *   - the host `connection` contract is { rpc, fetch, operator, ... } where
+ *     HostConnectionRpc is { handle, intercept } — the host side has no `call`
+ */
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import test from 'node:test'
+
+const root = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
+const bundle = readFileSync(join(root, 'src', 'client', 'client.js'), 'utf8')
+
+/** Services the live client catalog reports. `slots` and `locale` are read from
+ *  the bundle's own inject list, which the live registration proves resolves. */
+const CLIENT_SERVICES = [
+  'layout',
+  'locale',
+  'sessions',
+  'slots',
+  'theme',
+  'timer',
+  'uiWorkspace',
+  'workspaces',
+]
+
+/** Symbols the live Client Builtin provider says a dynamic Client half receives. */
+const CLIENT_BUILTINS = ['ctx', 'React', 'host', 'styles', 'console']
+
+/**
+ * Methods of the Cordis context itself, not services. Reading these is always
+ * allowed and they never belong in `inject`.
+ */
+const CTX_METHODS = ['effect', 'get', 'on', 'provide', 'emit', 'parallel', 'waterfall', 'bail', 'start', 'stop']
+
+/** Read the `inject` array the bundle actually declares. */
+function declaredInject() {
+  const match = bundle.match(/inject:\s*\[([^\]]*)\]/)
+  assert.ok(match, 'the bundle must declare its Cordis service dependencies')
+  return match[1]
+    .split(',')
+    .map((part) => part.trim().replace(/^['"]|['"]$/g, ''))
+    .filter(Boolean)
+}
+
+/**
+ * Strip comments and string literals before scanning for code patterns.
+ *
+ * A plain regex over the raw file matches the very prose that documents these
+ * contracts — this file's own header, and the bundle's comments explaining why it
+ * moved off `ctx.connection`. A checker that reads its own explanation as a
+ * violation is worse than no checker.
+ *
+ * Done as one character pass rather than layered regexes: an earlier attempt
+ * treated the `//` inside a string literal (a URL) as the start of a line comment
+ * and deleted the rest of the file, after which every scan saw an empty bundle.
+ */
+function codeOnly(source) {
+  let out = ''
+  let i = 0
+  const n = source.length
+  while (i < n) {
+    const ch = source[i]
+    const next = source[i + 1]
+    if (ch === '/' && next === '/') {
+      while (i < n && source[i] !== '\n') i += 1
+      continue
+    }
+    if (ch === '/' && next === '*') {
+      i += 2
+      while (i < n && !(source[i] === '*' && source[i + 1] === '/')) i += 1
+      i += 2
+      continue
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const quote = ch
+      i += 1
+      while (i < n && source[i] !== quote) {
+        if (source[i] === '\\') i += 1
+        i += 1
+      }
+      i += 1
+      out += "''"
+      continue
+    }
+    out += ch
+    i += 1
+  }
+  return out
+}
+
+const code = codeOnly(bundle)
+
+/** Every `ctx.<name>` read in the bundle, excluding the builtins. */
+function ctxReads() {
+  const found = new Set()
+  for (const match of code.matchAll(/\bctx\.([A-Za-z_$][\w$]*)/g)) {
+    found.add(match[1])
+  }
+  for (const match of code.matchAll(/\bctx\.get\(\s*['"]([^'"]+)['"]/g)) {
+    found.add(match[1])
+  }
+  return [...found]
+}
+
+test('every service the bundle reads off ctx is declared in inject', () => {
+  // Reading an undeclared service on a Cordis context throws. In the browser that
+  // throw happens inside the panel's own body or effect, so the panel renders and
+  // then loses its data — the quietest possible failure.
+  const declared = new Set(declaredInject())
+  const reads = ctxReads().filter((name) => !CTX_METHODS.includes(name))
+
+  assert.ok(reads.length > 0, 'the bundle must actually read the context')
+  for (const name of reads) {
+    assert.ok(
+      declared.has(name),
+      `ctx.${name} is read but "${name}" is not in inject: [${[...declared].join(', ')}]`,
+    )
+  }
+})
+
+test('every declared service is one the live client actually exposes', () => {
+  // The flip side: `inject` is a hard dependency. A name that does not exist is
+  // not a soft miss, it is a plugin that never loads — and the loader caches its
+  // verdict, so the mistake only surfaces on a restart.
+  const interactive = new Set([...CLIENT_SERVICES, ...CLIENT_BUILTINS])
+  for (const name of declaredInject()) {
+    assert.ok(
+      interactive.has(name),
+      `inject names "${name}", which the live client catalogs do not list among ${[...interactive].join(', ')}`,
+    )
+  }
+})
+
+test('the client does not reach for the host connection shape', () => {
+  // The host `connection` contract is { rpc, fetch, operator } where
+  // HostConnectionRpc is { handle, intercept }. There is no `call` on either side,
+  // so a client that calls `ctx.connection.rpc.call(...)` is calling a method that
+  // exists only in this repository's own fake.
+  const hostRpc = ['handle', 'intercept']
+  const called = [...code.matchAll(/ctx\.connection[\w.]*\.(\w+)\(/g)].map((m) => m[1])
+  for (const method of called) {
+    assert.ok(
+      hostRpc.includes(method),
+      `ctx.connection...${method}() is not part of the published connection contract (which has ${hostRpc.join(', ')})`,
+    )
+  }
+})
+
+test('the browser half talks to the host over a documented builtin', () => {
+  // `host.call(method, args)` is the documented package-private RPC from Client to
+  // this package's Host half, and it is the reason the client needs no HTTP
+  // knowledge at all: the method string is the one the host already intercepts.
+  const usesHostBuiltin = /host\.call\(/.test(bundle)
+  const usesConnection = /ctx\.connection/.test(bundle)
+  assert.ok(
+    usesHostBuiltin || !usesConnection,
+    'the only documented client-to-host RPC is host.call; reaching through ctx.connection is not',
+  )
+})
+
+test('the bundle declares sessions, which it reads for the active conversation', () => {
+  // Autonomy and schedules are scoped per conversation, so this value decides which
+  // conversation a panel action targets. It must come from a declared service.
+  assert.match(bundle, /ctx\.sessions/, 'the fallback path reads ctx.sessions')
+  assert.ok(
+    declaredInject().includes('sessions'),
+    'and therefore sessions must be declared, because the shell catalog lists it',
+  )
+})

@@ -574,7 +574,7 @@ window.__ModuleLoader__.load({
 
     /* -------------------------------------------------------------- plugin */
 
-    function apply(ctx) {
+    function apply(ctx, host) {
       var lifetime = new AbortController()
       var locale = ctx.locale
 
@@ -589,9 +589,46 @@ window.__ModuleLoader__.load({
         return (table && table[key]) || (STRINGS.en[key] || key)
       }
 
+      /**
+       * Pick the client-to-host channel at run time, rather than assuming one.
+       *
+       * `apply` is handed the two documented capability objects for a dynamic
+       * client half: `host` (package-private RPC to this package's host) and `ctx`.
+       * An earlier version called `ctx.connection.rpc.call('/api', ...)` and
+       * declared `connection` in `inject`. That shape was invented here, not
+       * published: the host `connection` contract is `{rpc, fetch, operator}` with
+       * `HostConnectionRpc = {handle, intercept}`, the client service catalog does
+       * not list `connection` at all, and the method name `call` appears nowhere but
+       * this repository's own test fake. Because the fake was written from the same
+       * assumption as the code, both harnesses agreed with a bundle that would fail
+       * in the browser with a panel that renders and never loads.
+       *
+       * The transport itself is a real HTTP request either way, so its lifetime must
+       * still be tied to the client run: the response is abandoned on unmount.
+       */
       function call(endpoint, payload) {
         var signal = AbortSignal.any([lifetime.signal, AbortSignal.timeout(15000)])
-        return ctx.connection.rpc.call('/api', endpoint, payload || {}, signal).then(function (reply) {
+
+        var attempt
+        if (host && typeof host.call === 'function') {
+          // Exactly the documented signature: host.call(method, args).
+          attempt = Promise.resolve(host.call(endpoint, payload || {}))
+        } else {
+          // `ctx.get(name)` is the documented way to reach a service the plugin does
+          // not depend on, and it must be undefined-checked. Reading `ctx.connection`
+          // directly would be a property get on an undeclared service, which throws —
+          // so the fallback would break the thing it was meant to protect.
+          var optional = typeof ctx.get === 'function' ? ctx.get('connection') : undefined
+          if (optional && optional.rpc && typeof optional.rpc.call === 'function') {
+            attempt = optional.rpc.call('/api', endpoint, payload || {}, signal)
+          } else {
+            return Promise.reject(
+              new Error('dsh-den: this shell exposes neither host.call nor a connection RPC channel'),
+            )
+          }
+        }
+
+        return attempt.then(function (reply) {
           if (!reply || reply.ok !== true) {
             var err = (reply && reply.error) || {}
             throw Object.assign(new Error(err.message || 'den status request failed'), { code: err.code })
@@ -683,7 +720,7 @@ window.__ModuleLoader__.load({
       name: 'dsh-den',
       /* Cordis *service* names — a different table from package.json's
        * `dsh.client.inject`, which lists package names. */
-      inject: ['slots', 'locale', 'connection'],
+      inject: ['slots', 'locale', 'sessions'],
       apply: apply,
     }
     return module.exports

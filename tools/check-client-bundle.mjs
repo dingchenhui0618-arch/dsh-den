@@ -139,6 +139,22 @@ const injections = []
 const effects = []
 const disposers = []
 
+/**
+ * The two capability objects a dynamic client half is handed: `ctx` for services
+ * and `host` for package-private RPC.
+ *
+ * `host.call` is the documented client-to-host channel and is supplied here as the
+ * real second argument, because an earlier harness only offered a `ctx.connection`
+ * shape invented in this repository — so both the harness and the bundle agreed on
+ * a contract the shell does not have.
+ */
+const calls = []
+const host = {
+  call: (method, args) => {
+    calls.push({ method, args })
+    return Promise.resolve({ ok: true, value: {} })
+  },
+}
 const ctx = {
   effect(fn) {
     const dispose = fn()
@@ -146,12 +162,11 @@ const ctx = {
     if (typeof dispose === 'function') disposers.push(dispose)
     return () => {}
   },
-  locale: { register: () => () => {}, locale: () => 'zh-CN' },
-  connection: {
-    rpc: {
-      call: () => Promise.resolve({ ok: true, value: {} }),
-    },
+  get(name) {
+    return name === 'connection' ? undefined : undefined
   },
+  locale: { register: () => () => {}, locale: () => 'zh-CN' },
+  sessions: { current: () => null },
   slots: {
     inject(key, callback) {
       injections.push(key)
@@ -168,7 +183,7 @@ const ctx = {
 
 let applyError = null
 try {
-  exportsValue.apply(ctx)
+  exportsValue.apply(ctx, host)
 } catch (error) {
   applyError = error
 }

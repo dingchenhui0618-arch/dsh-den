@@ -197,6 +197,8 @@
 > 这比离线测试强得多，因为它顺带证明了整条加载链在真浏览器里跑通：bundle id 与包名一致、`require('react')` **确实解析成功**（否则 factory 会在注册前抛错）、`id` 与 `key` 一致。契约定型为 `test/client-contract.test.mjs`（7 项）。
 > **仍未验证的是这条链上剩下的一段**：面板按钮发出 HTTP 调用、经 `connection.fetch` 路由回到宿主。宿主侧已由 `test/panel-actions.test.mjs` 走真实路由验证；浏览器侧尚未观测到一次真实点击。
 
+> **客户端→宿主通道已改为已发布的 builtin（2026-10-12）**：原实现调用 `ctx.connection.rpc.call('/api', …)` 并把 `connection` 写进 `inject`。**这个形状是本仓库自己编的**：宿主 `connection` 契约是 `{rpc, fetch, operator}`，其中 `HostConnectionRpc = {handle, intercept}` **没有 `call`**；客户端服务目录里**根本没有 `connection`**；`call` 这个方法名只出现在本仓库自己的测试替身里。因为替身是照着同一套假设写的，两个离线校验器都会**同意**一个在浏览器里必然失败的 bundle——渲染正常、数据永不加载。现在主通道是 builtin 清单里明确发布的 `host.call(method, args)`；兜底走文档化的 `ctx.get('connection')` + 未定义检查（直接读 `ctx.connection` 会对未声明服务做属性取用而抛错，反而破坏它想保护的东西）。`inject` 相应改为 `['slots','locale','sessions']`——`sessions` 此前被读却未声明。`test/client-services.test.mjs` 会扫描 bundle 里每个 `ctx.*` 取用并要求已声明，同时拒绝任何不在已发布契约里的 `ctx.connection` 方法。
+
 ---
 
 ## 5. 与参考实现的边界

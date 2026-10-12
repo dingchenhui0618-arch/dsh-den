@@ -98,28 +98,21 @@ test('the panel reads the active conversation from a prop the live slot supplies
   assert.match(bundle, /props\.useSessions/, 'the panel depends on useSessions, which the live catalog supplies')
 })
 
-test('the client endpoint resolves to the path the host actually registers', () => {
-  // The one seam where a mismatch fails silently: the panel asks the shell's RPC
-  // for `endpoint` under the `/api` base, and the host registers a route at
-  // `/api/${METHOD}`. These are written in two different files, so they are checked
-  // against each other rather than restated.
+test('the client endpoint matches the path the host registers', () => {
+  // The one seam where a mismatch fails silently: the panel asks the shell for
+  // `endpoint`, which the host intercepts as a route at `/api/${METHOD}`. The two
+  // strings are written in different files, so they are derived and compared rather
+  // than restated — a mismatch is a panel that renders and 404s on every refresh.
   const endpoint = bundle.match(/var RPC_ENDPOINT = '([^']+)'/)
   assert.ok(endpoint, 'the bundle must name its endpoint once')
-  const base = bundle.match(/ctx\.connection\.rpc\.call\('([^']+)'/)
-  assert.ok(base, 'the RPC base path must be explicit')
-  const clientPath = `${base[1]}/${endpoint[1]}`
 
   const host = readFileSync(join(root, 'src', 'status-route.js'), 'utf8')
   const method = host.match(/const METHOD = '([^']+)'/)
   assert.ok(method, 'the host must declare its method once')
-  const registered = host.match(/path: `\/api\/\$\{METHOD\}`/)
-  assert.ok(registered, 'the host must derive its path from that method')
+  assert.ok(host.includes('path: `/api/${METHOD}`'), 'the host must derive its route path from that method')
 
-  assert.equal(
-    clientPath,
-    `/api/${method[1]}`,
-    'the panel would 404 on every request if these disagreed',
-  )
+  assert.equal(endpoint[1], method[1], 'the endpoint the panel calls must be the method the host intercepts')
+
   // The namespace convention observed in the live shell: the package name with
   // dashes turned into dots, before the action segment.
   const namespace = endpoint[1].split('/')[0]

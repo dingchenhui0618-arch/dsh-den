@@ -133,25 +133,36 @@ let replies = {}
 let activeSession = 'session-active'
 let renderedSession = null
 
+/**
+ * The two capability objects a dynamic client half is handed: `ctx` for services
+ * and `host` for package-private RPC.
+ *
+ * The transport is `host.call(method, args)` — the documented client-to-host
+ * channel. An earlier version of this harness supplied a `ctx.connection.rpc.call`
+ * shape invented in this repository, which meant the harness could not tell a
+ * working transport from a fictional one.
+ */
+const host = {
+  call: (method, payload) => {
+    calls.push({ endpoint: method, payload })
+    const action = payload?.action ?? 'status'
+    const reply = replies[action]
+    if (typeof reply === 'function') return Promise.resolve(reply(payload))
+    if (reply === undefined) return Promise.resolve({ ok: true, value: {} })
+    return Promise.resolve(reply)
+  },
+}
+
 function makeCtx() {
   return {
     effect: (fn) => {
       const dispose = fn()
       return typeof dispose === 'function' ? dispose : () => {}
     },
+    // The fallback path asks for an optional service this way; the shells under
+    // test here do not provide one, which is the realistic case.
+    get: () => undefined,
     locale: { register: () => () => {}, locale: () => 'zh-CN' },
-    connection: {
-      rpc: {
-        call: (_channel, endpoint, payload) => {
-          calls.push({ endpoint, payload })
-          const action = payload?.action ?? 'status'
-          const reply = replies[action]
-          if (typeof reply === 'function') return reply(payload)
-          if (reply === undefined) return Promise.resolve({ ok: true, value: {} })
-          return Promise.resolve(reply)
-        },
-      },
-    },
     sessions: { current: () => activeSession },
     slots: {
       entries: [],
@@ -283,7 +294,7 @@ function boot({ sessionId = 'session-active', scripted = {} } = {}) {
   replies = { ...replies, ...scripted }
   activeSession = sessionId
   const ctx = makeCtx()
-  exportsValue.apply(ctx)
+  exportsValue.apply(ctx, host)
   const main = ctx.slots.entries.find((entry) => entry.options?.name === 'main')
   if (!main) throw new Error('the bundle did not register a main panel')
   return main.component

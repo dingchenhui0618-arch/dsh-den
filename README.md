@@ -3,7 +3,7 @@
 > A **7×24 resident personal assistant** for [DeepSeek Harness](https://github.com/deepseek-ai/dsh).
 > Not another chat window — an assistant that stays on, keeps its own memory, works while you are away, and stops to ask before it acts outside your trust boundary.
 
-Status: **the core is implemented, tested (185/185), and live.** The plugin is activated inside a real DSH 0.2.0-rc.2 desktop profile — `fiberPhase: active` — and registers 11 model-facing tools, the approval guard, the heartbeat, and an interactive status panel. Verified against the *running* system rather than only in tests: the heartbeat ticks on its 60-second cadence to the millisecond, its data route answers, and the panel is an **active occupant** of both `sidebar.panellist` (`id: dsh-den.status`, order 245) and the `main` panel (`key: dsh-den.status`). See [DESIGN.md](DESIGN.md) for the architecture and acceptance criteria.
+Status: **the core is implemented, tested (190/190), and live.** The plugin is activated inside a real DSH 0.2.0-rc.2 desktop profile — `fiberPhase: active` — and registers 11 model-facing tools, the approval guard, the heartbeat, and an interactive status panel. Verified against the *running* system rather than only in tests: the heartbeat ticks on its 60-second cadence to the millisecond, its data route answers, and the panel is an **active occupant** of both `sidebar.panellist` (`id: dsh-den.status`, order 245) and the `main` panel (`key: dsh-den.status`). See [DESIGN.md](DESIGN.md) for the architecture and acceptance criteria.
 
 ---
 
@@ -43,13 +43,13 @@ These are hard constraints, not aspirations. The reference implementations below
 | `src/memory.js` | Scenario-isolated long-term memory: one file per scenario, so personal context is structurally unable to surface while working in another domain. Deterministic keyword-plus-recency recall, no embeddings, corruption degrades to an empty store. |
 | `src/gate.js` | The outbound approval gate: credentials refused, outbound actions questioned, unknown tools fail closed. Installed as *both* a pre-execute listener and a monotonic guard. |
 | `src/status-route.js` | The host end of the status panel: one exact Fetch route on the shared RPC channel, dispatching six named actions. Read-only actions and authority-changing ones are deliberately separated — see below. |
-| `src/client/client.js` | The browser half: a hand-written lazy-CJS bundle with no build step, registering the sidebar entry and the panel. Grants nothing on its own. |
+| `src/client/client.js` | The browser half: a hand-written lazy-CJS bundle with no build step, registering the sidebar entry and the panel, and reaching the host over the documented `host.call` builtin. Grants nothing on its own. |
 | `src/index.js` | Plugin entry point, eleven model-facing tools, and the wiring. Zero external imports. |
 
 All state lives in a **self-contained** `$DSH_HOME/den/` tree, so it can be packed and moved to another machine or a server without hunting through unrelated DSH storage.
 
 ```bash
-npm test          # 185 unit + integration tests
+npm test          # 190 unit + integration tests
 npm run check:bundle   # 31 offline bundle-contract checks
 npm run check:ui       # 39 panel interaction checks
 npm run check:acceptance   # the two reliability goals, as one observable lifecycle
