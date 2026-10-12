@@ -98,7 +98,7 @@ const sinkLog = []
  * whatever the current test scripted, which is how the panel's behaviour is driven
  * without a host process or an HTTP server.
  */
-const transport = { calls: [], replies: {} }
+const transport = { calls: [], replies: {}, raw: null }
 
 function fakeFetch(url, init) {
   let body = {}
@@ -108,6 +108,25 @@ function fakeFetch(url, init) {
     body = {}
   }
   transport.calls.push({ url, method: init?.method, body })
+
+  // A raw reply models the failures that are not refusals: a 404 for an unmounted
+  // route, or an HTML error page from something in front of the host. Every other
+  // reply here is a 200 with a JSON envelope, so without this the panel's handling
+  // of a non-JSON body would never run.
+  if (transport.raw) {
+    const { status = 404, text = '' } = transport.raw
+    return Promise.resolve({
+      ok: status >= 200 && status < 300,
+      status,
+      async json() {
+        return JSON.parse(text)
+      },
+      async text() {
+        return text
+      },
+    })
+  }
+
   const reply = transport.replies[body.action]
   const value = typeof reply === 'function' ? reply(body) : reply
   const payload = value === undefined ? { ok: true, value: {} } : value
@@ -541,6 +560,28 @@ const panel9 = mount(
 )
 await panel9.settle()
 check(panel9.text().includes('disk on fire'), 'a host error is shown to the human')
+
+/* --- a non-JSON reply is reported as a transport failure, not a parse error -- */
+
+// The realistic case: the host half has not been restarted, so the route is not
+// mounted and something answers 404 with HTML. `res.json()` on that produces
+// "Unexpected token '<'", which says nothing about the host. The panel has to name
+// the status instead, because this is the exact state a user meets first.
+transport.raw = { status: 404, text: '<!doctype html><html>Not Found</html>' }
+const panel10 = mount(
+  boot({
+    scripted: { 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } },
+  }),
+  { useSessions: () => ({ activeId: 'session-active' }) },
+)
+await panel10.settle()
+const transportError = panel10.text()
+check(transportError.includes('404'), 'a non-JSON reply surfaces the HTTP status')
+check(
+  !transportError.includes('Unexpected token'),
+  'and does not surface a JSON parse error in its place',
+)
+transport.raw = null
 
 /* ----------------------------------------------------------------- report */
 

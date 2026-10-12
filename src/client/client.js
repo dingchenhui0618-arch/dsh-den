@@ -636,13 +636,39 @@ window.__ModuleLoader__.load({
           body: JSON.stringify(body),
           signal: signal,
         }).then(function (res) {
-          return res.json()
-        }).then(function (reply) {
-          if (!reply || reply.ok !== true) {
-            var err = (reply && reply.error) || {}
-            throw Object.assign(new Error(err.message || 'den status request failed'), { code: err.code })
-          }
-          return reply.value
+          /**
+           * Read the status before the body, and keep the status in the message.
+           *
+           * A refused action is a 200 with `ok: false` - the panel renders the
+           * reason. A transport-level failure is a different kind of thing and must
+           * not arrive looking like one: a bare `res.json()` on a 404 (the route is
+           * not mounted) or on an HTML error page rejects with a JSON syntax error,
+           * which tells the human nothing about the host. That is precisely the
+           * state the panel is in before its host half has been restarted, so this
+           * message is the one that has to be readable.
+           */
+          return res.text().then(function (raw) {
+            var reply
+            try {
+              reply = JSON.parse(raw)
+            } catch (parseError) {
+              var httpError = new Error(
+                'the host answered HTTP ' + res.status + ' but not with JSON' +
+                  (res.ok ? '' : ' - the route ' + API + ' may not be mounted yet'),
+              )
+              httpError.code = 'DEN_BAD_RESPONSE'
+              httpError.status = res.status
+              throw httpError
+            }
+            if (!reply || reply.ok !== true) {
+              var err = (reply && reply.error) || {}
+              var refusal = new Error(err.message || 'den status request failed')
+              refusal.code = err.code
+              refusal.status = res.status
+              throw refusal
+            }
+            return reply.value
+          })
         })
       }
 
