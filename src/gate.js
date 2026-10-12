@@ -147,6 +147,57 @@ const TOOL_RISK = {
   den_scenarios: RISK.allow,
   den_recall: RISK.allow,
   den_schedule_list: RISK.allow,
+
+  // The rest of this profile's tool surface, classified by the same rule the block
+  // above states: reading and local bookkeeping are allowed, and anything with a
+  // durable or outbound effect is not.
+  //
+  // Measured against the Host's own tool list, 17 exposed tools were landing on
+  // `defaultRisk: ask` with no recorded decision. In a session with approval prompts
+  // disabled that made `skill`, `create_goal`, `todo_write`, `wait_agent`,
+  // `spawn_teammate` and `subagent` fail with `user rejected` — the same
+  // self-inflicted approval fatigue the file tools produced, and for the same
+  // reason: the gate was treating the profile's own vocabulary as foreign.
+  //
+  // Allowed: reads, and bookkeeping that only affects this conversation's own
+  // working state.
+  read_image: RISK.allow,
+  job_output: RISK.allow,
+  get_goal: RISK.allow,
+  create_goal: RISK.allow,
+  update_goal: RISK.allow,
+  todo_write: RISK.allow,
+  skill: RISK.allow,
+  present: RISK.allow,
+  team_task_get: RISK.allow,
+  // Delegation and coordination are local: they start work inside this host and
+  // cannot send, spend, or publish on their own. Whatever the delegate then
+  // attempts passes through this same gate, so allowing the spawn does not
+  // pre-authorise the effect.
+  send_message: RISK.allow,
+  spawn_teammate: RISK.allow,
+  subagent: RISK.allow,
+  subagent_fork: RISK.allow,
+  wait_agent: RISK.allow,
+  interrupt_agent: RISK.allow,
+  team_task_create: RISK.allow,
+  team_task_update: RISK.allow,
+  job_kill: RISK.allow,
+  load_workspace_dependencies: RISK.allow,
+  exit_plan_mode: RISK.allow,
+  vision_diff: RISK.allow,
+  // These two orchestrate work rather than perform it. `workflow` runs subagents,
+  // and `ship_receipt` runs commands the caller supplies — but neither adds a
+  // capability this gate does not already see in its own right: the subagents'
+  // tool calls and the supplied commands both pass through here. So they are
+  // classified like the shell, not privileged above it.
+  workflow: RISK.allow,
+  ship_receipt: RISK.allow,
+
+  // Deliberately still absent, and therefore still `ask`: none. Every tool the host
+  // reported is now classified explicitly, so a tool appearing in a future profile
+  // is a new decision rather than an accident. `test/gate-coverage.test.mjs` fails
+  // if one appears without one.
 }
 
 /** The fallback for a tool this gate has never seen. */

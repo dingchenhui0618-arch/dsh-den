@@ -124,6 +124,17 @@
 
 关键点：这一层**不在 assistant 的人格提示词里**，所以**它改不了自己的闸门**。这是「独立审批」的全部意义。
 
+**覆盖审计（2026-10-12）**：拿宿主自己报告的工具清单（`cordis_inspect_query` 的 host `Tool` provider）逐个对照门控表，发现 **17 个已暴露的工具落到 `defaultRisk: ask` 而没有记录决定**。在有审批提示的会话里这只是多问一次；在**审批被禁用**的会话里，`ask` 就是自动 `user rejected`——于是 `skill`、`create_goal`、`todo_write`、`wait_agent`、`spawn_teammate`、`subagent` 全部变成「用户拒绝」，**与文件工具当初的故障同源同因**：门控把本 profile 自己的词汇当成了外来能力。全部显式分类后，**没有任何工具靠省略来定级**，`test/gate-coverage.test.mjs` 会在将来出现新工具时报错。
+
+分类规则始终是同一条，写在这里以免再次漂移：
+
+- **读**（`read_image`、`job_output`、`get_goal`、`load_workspace_dependencies`、`vision_diff`）→ 放行
+- **本地簿记**（`todo_write`、`create_goal`、`update_goal`、`skill`、`present`、`team_task_*`）→ 放行
+- **委派与协作**（`send_message`、`spawn_teammate`、`subagent*`、`wait_agent`、`interrupt_agent`、`job_kill`、`workflow`）→ 放行。它们只在本机内启动工作，**委派者随后尝试的动作仍要各自过这道闸门**，所以放行「生成」不等于预授权「后果」。
+- **改自己的权限或持久状态**（`den_set_autonomy`、`den_configure`、`den_schedule_*`、`den_remember`、`den_forget`）→ 保持 `ask`
+- **出网拉取**（`web_fetch`）→ 保持 `ask`
+- **凭据** → 一律 `deny`，且**与工具名无关**：规则按路径/文本匹配，所以 `pwsh`、`workflow`、`ship_receipt` 这些能跑命令的工具不需要被禁——禁工具只会把同一件事挤到另一个工具里，同时让闸门不可用。这与「放行 `read`/`write`/`edit` 是安全的」是同一个理由。
+
 ### 2.4 状态面板 = 控制面，不是一个只读挂件
 
 面板走**一条精确的 Fetch 路由**（`HostConnectionFetch.register`），按 `payload.action` 派发 6 个具名动作。分派点的选择是有意的：**能改权限的那个动作，绕开了面板自己。**
