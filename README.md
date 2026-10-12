@@ -3,7 +3,7 @@
 > A **7×24 resident personal assistant** for [DeepSeek Harness](https://github.com/deepseek-ai/dsh).
 > Not another chat window — an assistant that stays on, keeps its own memory, works while you are away, and stops to ask before it acts outside your trust boundary.
 
-Status: **the core is implemented, tested (184/184), and live.** The plugin is activated inside a real DSH 0.2.0-rc.2 desktop profile — `fiberPhase: active` — and registers 11 model-facing tools, the approval guard, the heartbeat, and an interactive status panel. Verified against the *running* system rather than only in tests: the heartbeat ticks on its 60-second cadence to the millisecond, its data route answers, and the panel is an **active occupant** of both `sidebar.panellist` (`id: dsh-den.status`, order 245) and the `main` panel (`key: dsh-den.status`). See [DESIGN.md](DESIGN.md) for the architecture and acceptance criteria.
+Status: **the core is implemented, tested (185/185), and live.** The plugin is activated inside a real DSH 0.2.0-rc.2 desktop profile — `fiberPhase: active` — and registers 11 model-facing tools, the approval guard, the heartbeat, and an interactive status panel. Verified against the *running* system rather than only in tests: the heartbeat ticks on its 60-second cadence to the millisecond, its data route answers, and the panel is an **active occupant** of both `sidebar.panellist` (`id: dsh-den.status`, order 245) and the `main` panel (`key: dsh-den.status`). See [DESIGN.md](DESIGN.md) for the architecture and acceptance criteria.
 
 ---
 
@@ -49,7 +49,7 @@ These are hard constraints, not aspirations. The reference implementations below
 All state lives in a **self-contained** `$DSH_HOME/den/` tree, so it can be packed and moved to another machine or a server without hunting through unrelated DSH storage.
 
 ```bash
-npm test          # 184 unit + integration tests
+npm test          # 185 unit + integration tests
 npm run check:bundle   # 31 offline bundle-contract checks
 npm run check:ui       # 39 panel interaction checks
 npm run check:acceptance   # the two reliability goals, as one observable lifecycle
