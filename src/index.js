@@ -95,6 +95,8 @@ export class DenService {
     this.gateDisposer = null
     /** Set by apply() to the panel route's mount result, so a failure is reportable. */
     this.statusRoute = null
+    /** Non-null while the heartbeat could not start; cleared once it does. */
+    this.kernelDeferred = null
     this.recentEvents = []
     // A hard kill between open and rename leaves temp litter behind — measured at
     // 39 of 40 kills. A resident assistant restarts often enough that this would
@@ -252,6 +254,14 @@ export class DenService {
        * may degrade; its failure must not be invisible.
        */
       statusRoute: this.statusRoute ?? null,
+      /**
+       * Why the heartbeat has not started, and whether it is still trying.
+       *
+       * A deferred heartbeat used to leave one event and nothing else, so the
+       * resident half of a resident assistant could be absent while the status
+       * looked healthy. This field makes the waiting state itself observable.
+       */
+      kernelDeferred: this.kernelDeferred ?? null,
       recentEvents: this.recentEvents.slice(-10),
     }
   }
@@ -699,19 +709,68 @@ export function apply(ctx) {
     // The heartbeat only starts when there is something it could actually do.
     // A kernel with no way to deliver a wake would count turns against the
     // budget and produce nothing, which is worse than not running.
-    const subagents = ctx.get?.('subagents')
-    if (subagents?.sendMessage) {
-      const deliver = createDeliver(ctx, service)
+    //
+    // But "not yet" is not "never": `subagents` presence at activation time
+    // depends on profile load order, and an earlier version treated an absent
+    // service as a permanent verdict. Measured live, that produced exactly the
+    // wrong outcome for a 7x24 assistant — `kernel: null` forever, with one
+    // `kernel-deferred` event as the only trace, so the thing that makes it
+    // resident was silently absent while everything else looked healthy. A
+    // deferred heartbeat must now keep trying, and must say what it is waiting
+    // for while it does.
+    const KERNEL_RETRY_MS = 5000
+    const KERNEL_RETRY_LIMIT = 24
+    let kernelRetry = null
+    let kernelRetryCount = 0
+
+    const kernelCanDeliver = () => Boolean(ctx.get?.('subagents')?.sendMessage)
+
+    const startKernel = () => {
+      if (service.kernel) return true
+      const subagents = ctx.get?.('subagents')
+      if (!subagents?.sendMessage) return false
+      if (kernelRetry) {
+        clearInterval(kernelRetry)
+        kernelRetry = null
+      }
+      service.kernelDeferred = null
       service.kernel = new DenKernel({
         service,
-        deliver,
+        deliver: createDeliver(ctx, service),
         tickSeconds: service.state().tickSeconds,
         onEvent: (event) => service.noteEvent(event),
       })
       service.kernel.start()
+      if (kernelRetryCount > 0) {
+        service.noteEvent({ type: 'kernel-recovered', afterAttempts: kernelRetryCount })
+      }
       disposers.push(() => service.kernel?.stop())
-    } else {
-      service.noteEvent({ type: 'kernel-deferred', reason: 'no delivery path available in this profile' })
+      return true
+    }
+
+    if (!startKernel() && !kernelCanDeliver()) {
+      const reason = 'no delivery path available in this profile'
+      service.kernelDeferred = { reason, attempts: 0, retrying: true }
+      service.noteEvent({ type: 'kernel-deferred', reason, retryInMs: KERNEL_RETRY_MS })
+      kernelRetry = setInterval(() => {
+        // Count the attempt *before* making it. Incrementing after a successful
+        // start would leave the counter at zero, and the recovery event — the only
+        // record that the heartbeat was ever missing — would be skipped.
+        kernelRetryCount += 1
+        if (service.kernelDeferred) service.kernelDeferred.attempts = kernelRetryCount
+        if (startKernel()) return
+        if (kernelRetryCount >= KERNEL_RETRY_LIMIT) {
+          clearInterval(kernelRetry)
+          kernelRetry = null
+          if (service.kernelDeferred) service.kernelDeferred.retrying = false
+          service.noteEvent({ type: 'kernel-unavailable', reason, attempts: kernelRetryCount })
+        }
+      }, KERNEL_RETRY_MS)
+      kernelRetry.unref?.()
+      disposers.push(() => {
+        if (kernelRetry) clearInterval(kernelRetry)
+        kernelRetry = null
+      })
     }
 
     // The status panel's data route. The desktop profile injects `connection`,

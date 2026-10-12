@@ -19,7 +19,9 @@
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "check:bundle": "node tools/check-client-bundle.mjs"
+    "check:bundle": "node tools/check-client-bundle.mjs",
+    "check:ui": "node tools/check-client-interaction.mjs",
+    "verify": "npm test && npm run check:bundle && npm run check:ui"
   },
   "engines": {
     "node": "^22.19.0 || >=24"

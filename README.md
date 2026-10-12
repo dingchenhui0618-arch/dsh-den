@@ -3,7 +3,7 @@
 > A **7×24 resident personal assistant** for [DeepSeek Harness](https://github.com/deepseek-ai/dsh).
 > Not another chat window — an assistant that stays on, keeps its own memory, works while you are away, and stops to ask before it acts outside your trust boundary.
 
-Status: **the core is implemented, tested (103/103), and live.** The plugin is activated inside a real DSH 0.2.0-rc.2 desktop profile — `fiberPhase: active` — and registers 11 model-facing tools, the approval guard, and the heartbeat. Remaining work is D6 (supervised 7×24 survival) and the status widget. See [DESIGN.md](DESIGN.md) for the architecture and acceptance criteria.
+Status: **the core is implemented, tested (173/173), and live.** The plugin is activated inside a real DSH 0.2.0-rc.2 desktop profile — `fiberPhase: active` — and registers 11 model-facing tools, the approval guard, the heartbeat, and an interactive status panel. Verified live: the heartbeat ticks on its 60-second cadence to the millisecond, its data route answers, and the panel registers in `sidebar.panellist` at order 245. See [DESIGN.md](DESIGN.md) for the architecture and acceptance criteria.
 
 ---
 
@@ -42,13 +42,43 @@ These are hard constraints, not aspirations. The reference implementations below
 | `src/kernel.js` | The heartbeat and the four gates: **authority → budget → quiet → pacing**. Re-entrancy guarded, every refusal recorded in a durable daily ledger, and the cadence advance committed only *after* a wake is delivered. |
 | `src/memory.js` | Scenario-isolated long-term memory: one file per scenario, so personal context is structurally unable to surface while working in another domain. Deterministic keyword-plus-recency recall, no embeddings, corruption degrades to an empty store. |
 | `src/gate.js` | The outbound approval gate: credentials refused, outbound actions questioned, unknown tools fail closed. Installed as *both* a pre-execute listener and a monotonic guard. |
+| `src/status-route.js` | The host end of the status panel: one exact Fetch route on the shared RPC channel, dispatching six named actions. Read-only actions and authority-changing ones are deliberately separated — see below. |
+| `src/client/client.js` | The browser half: a hand-written lazy-CJS bundle with no build step, registering the sidebar entry and the panel. Grants nothing on its own. |
 | `src/index.js` | Plugin entry point, eleven model-facing tools, and the wiring. Zero external imports. |
 
 All state lives in a **self-contained** `$DSH_HOME/den/` tree, so it can be packed and moved to another machine or a server without hunting through unrelated DSH storage.
 
 ```bash
-node --test test/primitives.test.mjs test/kernel.test.mjs test/gate.test.mjs test/mount.test.mjs test/memory.test.mjs
+npm test          # 173 unit + integration tests
+npm run check:bundle   # 31 offline bundle-contract checks
+npm run check:ui       # 39 panel interaction checks
+npm run verify         # all three
 ```
+
+### The panel is a control surface, not a read-only view
+
+A view you cannot act from is a diagnostic. So the panel carries verbs — but the
+authority-changing one is deliberately routed around itself, for a correctness
+reason rather than caution:
+
+> Standing autonomy is only honoured when the four gates run, and the authority
+> gate reads a grant **bound to a human message id**. A grant written without one
+> makes `den_status` report "granted" while every self-initiated run is still
+> refused. The panel would show a green light over a dead circuit.
+
+So `autonomy/request` mints a **single-use, 10-minute token** and reports it. The
+human carries that token to the assistant in the conversation, and the normal
+`den_set_autonomy` path performs the write with real human-message evidence behind
+it. Schedules are a different risk class and are written directly, because a
+schedule is explicitly *not* a permission grant: every run still re-checks
+authority, budget, quiet hours and pacing.
+
+The panel also reports a **deferred heartbeat** as a problem rather than as
+silence. That matters more than it sounds: an earlier version treated a missing
+delivery path as a permanent verdict, so the heartbeat never started and the only
+trace was one event — the assistant was not resident while its status looked
+healthy. It now retries, reports its progress, and records when it recovers or
+gives up.
 
 ### Verified Host contracts
 
@@ -68,8 +98,9 @@ These were read out of the running Host rather than assumed, and two of them cha
 - **D2 authority + notices** — grant binding, expiry, dedup *(done, tested)*
 - **D3 autonomy kernel** — heartbeat, the four-gate decision, cold wake *(done, tested; delivery path is wired, failed wakes retry rather than being consumed)*
 - **D4 outbound approval gate** — pre-execute listener plus a monotonic guard, outside the assistant's own prompt *(done, tested)*
-- **D5 memory + status UI** — scenario-isolated memory domains *(done, tested)*; resident status widget *(next)*
+- **D5 memory + status UI** — scenario-isolated memory domains *(done, tested)*; interactive resident panel *(done: registers in the live sidebar, verified through 39 interaction checks and 19 route tests)*
 - **D6 7×24** — supervised survival: killed process recovers with no human intervention, verified over a long run
+  - *Progress:* the watchdog distinguishes a wedged Host from a healthy one (`StrictHttp`; a TCP-listening-but-HTTP-dead Host was previously logged as healthy), and the plugin's own heartbeat now self-heals instead of deferring permanently. What is still open is a **long unattended run** — the acceptance criterion is a kill-and-recover observed without a human, not a configuration.
 
 ## 7×24 in two stages
 

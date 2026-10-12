@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import test from 'node:test'
+import test, { mock } from 'node:test'
 
 const sandbox = mkdtempSync(join(tmpdir(), 'dsh-den-mount-'))
 process.env.DSH_HOME = sandbox
@@ -61,12 +61,18 @@ function fakeHost({ withSubagents = true } = {}) {
   }
 
   const sent = []
-  state.subagents = {
+  const liveSubagents = {
     async sendMessage(sender, targetId, content, options) {
       sent.push({ sender, targetId, content, options })
       return 'msg-1'
     },
   }
+  /**
+   * Whether a delivery path exists. The option only sets the *initial* value;
+   * tests move it in both directions afterwards, which is the only honest way to
+   * exercise a dependency that arrives late.
+   */
+  state.subagents = withSubagents ? liveSubagents : null
   state.agentsApi = {
     get: () => undefined,
     resume: async () => ({ agent: { id: 'resumed' }, dispose: async () => {} }),
@@ -99,7 +105,11 @@ function fakeHost({ withSubagents = true } = {}) {
       return () => state.provided.delete(key)
     },
     get(key) {
-      if (key === 'subagents') return withSubagents ? state.subagents : undefined
+      // Dispatches through `state` only, never through the captured option. Closing
+      // over the option is silently wrong: the fixture then reports the service as
+      // absent forever, and a late arrival cannot be simulated at all — which made
+      // a harness bug look like a product bug.
+      if (key === 'subagents') return state.subagents
       if (key === 'tools') return state.toolsApi
       if (key === 'agents') return state.agentsApi
       if (key === 'connection') return state.connection
@@ -113,6 +123,11 @@ function fakeHost({ withSubagents = true } = {}) {
 
   state.sentMessages = sent
   state.ctx = ctx
+  /** Make the delivery path arrive late, as it does when load order differs. */
+  state.arriveSubagents = () => {
+    state.subagents = liveSubagents
+    return liveSubagents
+  }
   return { ctx, state }
 }
 
@@ -198,6 +213,77 @@ test('the kernel defers instead of running blind when no delivery path exists', 
     service.recentEvents.some((event) => event.type === 'kernel-deferred'),
     'the deferral must be recorded, not silent',
   )
+  // The deferral must also be *visible* in a status query, not only in the event
+  // log: a resident assistant whose heartbeat is absent has to say so.
+  assert.ok(service.status().kernelDeferred, 'a deferred heartbeat must be reported by status()')
+  assert.equal(service.status().kernelDeferred.retrying, true)
+})
+
+test('a deferred heartbeat starts by itself once a delivery path appears', () => {
+  // The whole point of "7x24 resident". Measured live, the first version treated
+  // an absent `subagents` as a permanent verdict, so the heartbeat never started
+  // and the only trace was one event. "Not yet" must not be read as "never".
+  mock.timers.enable({ apis: ['setInterval'] })
+  try {
+    const { ctx, state } = fakeHost({ withSubagents: false })
+    apply(ctx)
+    const service = state.provided.get('den')
+    assert.equal(service.kernel, null, 'nothing to deliver to yet')
+
+    // The service arrives late, as it does when profile load order differs.
+    state.arriveSubagents()
+    mock.timers.tick(5000)
+
+    assert.ok(service.kernel, 'the kernel must start on its own once delivery is possible')
+    assert.ok(service.kernel.timer, 'the heartbeat timer must be running')
+    assert.equal(service.kernelDeferred, null, 'the deferred marker must be cleared')
+    assert.ok(
+      service.recentEvents.some((event) => event.type === 'kernel-recovered'),
+      'recovery must be recorded so the gap is visible after the fact',
+    )
+    assert.equal(service.status().kernel.running, true)
+  } finally {
+    mock.timers.reset()
+  }
+})
+
+test('a heartbeat that never finds a delivery path gives up loudly, not silently', () => {
+  mock.timers.enable({ apis: ['setInterval'] })
+  try {
+    const { ctx, state } = fakeHost({ withSubagents: false })
+    apply(ctx)
+    const service = state.provided.get('den')
+
+    // Past the retry cap: the kernel must stop retrying and leave a record.
+    mock.timers.tick(5000 * 30)
+
+    assert.equal(service.kernel, null)
+    assert.equal(service.kernelDeferred.retrying, false, 'it must stop claiming to retry')
+    assert.ok(
+      service.recentEvents.some((event) => event.type === 'kernel-unavailable'),
+      'giving up must be an event, not an absence',
+    )
+  } finally {
+    mock.timers.reset()
+  }
+})
+
+test('disposal cancels a pending heartbeat retry', () => {
+  mock.timers.enable({ apis: ['setInterval'] })
+  try {
+    const { ctx, state } = fakeHost({ withSubagents: false })
+    const dispose = apply(ctx)
+    const service = state.provided.get('den')
+    dispose()
+
+    // If the retry timer survived disposal it would start a kernel on a disposed
+    // fiber, which is exactly the kind of leak a resident plugin cannot afford.
+    state.arriveSubagents()
+    mock.timers.tick(5000 * 30)
+    assert.equal(service.kernel, null, 'a disposed plugin must not start a heartbeat later')
+  } finally {
+    mock.timers.reset()
+  }
 })
 
 test('the mounted gate refuses a credential read through the real waterfall signature', async () => {
