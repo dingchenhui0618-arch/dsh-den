@@ -38,7 +38,7 @@ async function live({ sessionId = 'session-1' } = {}) {
   moduleSerial += 1
   const suffix = `?sandbox=${moduleSerial}`
   const index = await import(`../src/index.js${suffix}`)
-  const routes = await import(`../src/status-route.js${suffix}`)
+  const routes = await import(`../src/panel-api.js${suffix}`)
 
   const state = { provided: new Map(), routes: [], tools: [], guards: [], listeners: new Map() }
   const toolsApi = {
@@ -55,12 +55,10 @@ async function live({ sessionId = 'session-1' } = {}) {
       roots: () => [agent],
       resume: async () => ({ agent, dispose: async () => {} }),
     },
-    connection: {
-      fetch: {
-        register(route) {
-          state.routes.push(route)
-          return () => {}
-        },
+    webServer: {
+      register(route) {
+        state.routes.push(route)
+        return () => {}
       },
     },
     effect: (fn) => fn(),
@@ -69,11 +67,7 @@ async function live({ sessionId = 'session-1' } = {}) {
       if (key === 'subagents') return { async sendMessage(...args) { sent.push(args); return 'msg-1' } }
       if (key === 'tools') return toolsApi
       if (key === 'agents') return ctx.agents
-      // The plugin declares `connection` as a hard dependency and reads it as
-      // `ctx.connection`, while its route helper resolves it through
-      // `ctx.get('connection')`. Omitting it here silently unmounts the route, and
-      // every route assertion then fails for the wrong reason.
-      if (key === 'connection') return ctx.connection
+      if (key === 'webServer') return ctx.webServer
       return undefined
     },
     on: (event, handler) => (state.listeners.set(event, handler), () => state.listeners.delete(event)),
@@ -86,60 +80,75 @@ async function live({ sessionId = 'session-1' } = {}) {
   return { home, state, service, route, modules: { ...index, ...routes } }
 }
 
+/** A request stand-in shaped like the one the host web server hands a route. */
+function makeReq({ method = 'POST', url = '/dsh-den', rawBody = '' } = {}) {
+  return {
+    method,
+    url,
+    async text() {
+      return rawBody
+    },
+  }
+}
+
+/** A response stand-in: the route writes through writeHead/end. */
+function makeRes() {
+  const captured = { status: null, body: '' }
+  return {
+    captured,
+    writeHead(status) {
+      captured.status = status
+    },
+    end(text) {
+      captured.body = String(text)
+    },
+  }
+}
+
+/** Drive the registered handler the way the host web server would. */
+async function request(route, { method = 'POST', url = '/dsh-den', body } = {}) {
+  const res = makeRes()
+  await route.handler(makeReq({ method, url, rawBody: body }), res)
+  return { status: res.captured.status, body: JSON.parse(res.captured.body) }
+}
+
 /**
- * Call one action through the mounted route, exactly as the shell's fetch would.
+ * Call one action through the mounted route, exactly as the panel's fetch would.
  *
  * A `sessionId` is included by default because the route deliberately does not know
  * the active conversation — that is the panel's job, and a host that guessed would
  * be the bug. The browser half is verified to send it by
  * `tools/check-client-interaction.mjs`.
+ *
+ * The returned `result` mirrors the old envelope's field name so the assertions
+ * below read as they did before the transport moved; `body` is the real shape.
  */
 async function viaRoute(route, action, payload = {}) {
-  const response = await route.fetch(
-    new Request('http://localhost/api/dsh.den/status', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        type: 'client-request',
-        rpcId: 'r1',
-        method: 'dsh.den/status',
-        payload: { sessionId: 'session-1', action, ...payload },
-      }),
-    }),
-  )
-  const body = await response.json()
-  return { status: response.status, body, result: body.result, value: body.result?.value }
+  const response = await request(route, {
+    body: JSON.stringify({ sessionId: 'session-1', action, ...payload }),
+  })
+  return {
+    status: response.status,
+    body: response.body,
+    result: response.body,
+    value: response.body?.ok ? response.body.value : undefined,
+  }
 }
 
 /* ------------------------------------------------------------ transport shape */
 
-test('the route rejects a request whose method is not this plugin\'s', async () => {
+test('the route refuses a method it does not serve', async () => {
   const { route } = await live()
-  const response = await route.fetch(
-    new Request('http://localhost/api/dsh.den/status', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ type: 'client-request', rpcId: 'r1', method: 'dsh.den/other', payload: {} }),
-    }),
-  )
-  assert.equal(response.status, 404)
+  const response = await request(route, { method: 'DELETE' })
+  assert.equal(response.status, 405)
+  assert.equal(response.body.error.code, 'METHOD_NOT_ALLOWED')
 })
 
-test('the route rejects a non-JSON body and a malformed envelope', async () => {
+test('the route rejects a body that is not JSON', async () => {
   const { route } = await live()
-  const wrongType = await route.fetch(
-    new Request('http://localhost/api/dsh.den/status', { method: 'POST', headers: { 'content-type': 'text/plain' }, body: 'hi' }),
-  )
-  assert.equal(wrongType.status, 415)
-
-  const badEnvelope = await route.fetch(
-    new Request('http://localhost/api/dsh.den/status', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ nope: true }),
-    }),
-  )
-  assert.equal(badEnvelope.status, 400)
+  const response = await request(route, { body: 'not json at all' })
+  assert.equal(response.status, 400)
+  assert.equal(response.body.error.code, 'BAD_JSON')
 })
 
 test('an unknown action is refused by name, not silently ignored', async () => {
@@ -375,5 +384,5 @@ test('every advertised action is dispatchable, and the advertised list is comple
 
 test('the plugin still declares every service it reads', async () => {
   const { modules } = await live()
-  assert.deepEqual(modules.inject, ['agents', 'tools', 'connection'])
+  assert.deepEqual(modules.inject, ['agents', 'tools', 'webServer'])
 })

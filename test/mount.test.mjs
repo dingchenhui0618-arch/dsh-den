@@ -20,8 +20,8 @@ process.env.DSH_HOME = sandbox
 
 const { apply, inject, DenService, registerTools, createDeliver } = await import('../src/index.js')
 
-test('the plugin declares the connection service required by its status route', () => {
-  assert.deepEqual(inject, ['agents', 'tools', 'connection'])
+test('the plugin declares the web server its status route is mounted on', () => {
+  assert.deepEqual(inject, ['agents', 'tools', 'webServer'])
 })
 
 test.after(() => rmSync(sandbox, { recursive: true, force: true }))
@@ -77,15 +77,16 @@ function fakeHost({ withSubagents = true } = {}) {
     get: () => undefined,
     resume: async () => ({ agent: { id: 'resumed' }, dispose: async () => {} }),
   }
-  state.connection = {
-    fetch: {
-      register(route) {
-        state.routes.push(route)
-        return () => {
-          const at = state.routes.indexOf(route)
-          if (at >= 0) state.routes.splice(at, 1)
-        }
-      },
+  // `webServer.register(route)` is the interface — the same one dsh-vision-diff,
+  // dsh-warden and dsh-daily declare `inject = [..., 'webServer']` for. There is no
+  // `fetch` wrapper on this service.
+  state.webServer = {
+    register(route) {
+      state.routes.push(route)
+      return () => {
+        const at = state.routes.indexOf(route)
+        if (at >= 0) state.routes.splice(at, 1)
+      }
     },
   }
 
@@ -94,7 +95,7 @@ function fakeHost({ withSubagents = true } = {}) {
     // declared via `inject`. The plugin reads these, not `ctx.get(...)`.
     tools: state.toolsApi,
     agents: state.agentsApi,
-    connection: state.connection,
+    webServer: state.webServer,
     effect(fn) {
       const dispose = fn()
       state.effects.push(dispose)
@@ -112,7 +113,7 @@ function fakeHost({ withSubagents = true } = {}) {
       if (key === 'subagents') return state.subagents
       if (key === 'tools') return state.toolsApi
       if (key === 'agents') return state.agentsApi
-      if (key === 'connection') return state.connection
+      if (key === 'webServer') return state.webServer
       return undefined
     },
     on(event, handler) {
@@ -145,13 +146,14 @@ test('activation mounts the gate before anything else can run', () => {
   assert.equal(state.guards.length, 1, 'exactly one monotonic guard must be mounted')
 })
 
-test('activation mounts the status route when the desktop connection is present', () => {
+test('activation mounts the status route when the desktop web server is present', () => {
   const { ctx, state } = fakeHost()
   const dispose = apply(ctx)
   const service = state.provided.get('den')
   assert.equal(state.routes.length, 1)
-  assert.equal(state.routes[0].path, '/api/dsh.den/status')
-  assert.deepEqual(service.status().statusRoute, { mounted: true, reason: null, message: null })
+  assert.equal(state.routes[0].path, '/dsh-den')
+  assert.equal(state.routes[0].kind, 'prefix')
+  assert.deepEqual(service.status().statusRoute, { mounted: true, reason: null, message: null, path: '/dsh-den' })
   dispose()
   assert.equal(state.routes.length, 0)
 })

@@ -42,8 +42,9 @@ These are hard constraints, not aspirations. The reference implementations below
 | `src/kernel.js` | The heartbeat and the four gates: **authority → budget → quiet → pacing**. Re-entrancy guarded, every refusal recorded in a durable daily ledger, and the cadence advance committed only *after* a wake is delivered. |
 | `src/memory.js` | Scenario-isolated long-term memory: one file per scenario, so personal context is structurally unable to surface while working in another domain. Deterministic keyword-plus-recency recall, no embeddings, corruption degrades to an empty store. |
 | `src/gate.js` | The outbound approval gate: credentials refused, outbound actions questioned, unknown tools fail closed. Installed as *both* a pre-execute listener and a monotonic guard, and every tool this profile exposes is classified explicitly — an unlisted tool that falls to the fail-closed default becomes an automatic rejection wherever prompts are disabled. |
-| `src/status-route.js` | The host end of the status panel: one exact Fetch route on the shared RPC channel, dispatching six named actions. Read-only actions and authority-changing ones are deliberately separated — see below. |
-| `src/client/client.js` | The browser half: a hand-written lazy-CJS bundle with no build step, registering the sidebar entry and the panel, and reaching the host over the documented `host.call` builtin. Grants nothing on its own. |
+| `src/panel-api.js` | The panel's action surface: the status snapshot and the six named actions, with no transport in them. Read-only actions and authority-changing ones are deliberately separated — see below. |
+| `src/panel-route.js` | One prefix route on the host web server at `/dsh-den`, exposing that surface as JSON. The same shape every other client plugin in this profile uses. |
+| `src/client/client.js` | The browser half: a hand-written lazy-CJS bundle with no build step, registering the sidebar entry and the panel, and reaching the host with the browser's own `fetch('/dsh-den')`. Grants nothing on its own. |
 | `src/index.js` | Plugin entry point, eleven model-facing tools, and the wiring. Zero external imports. |
 
 All state lives in a **self-contained** `$DSH_HOME/den/` tree, so it can be packed and moved to another machine or a server without hunting through unrelated DSH storage.

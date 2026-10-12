@@ -74,6 +74,16 @@ try {
         },
       },
     },
+    // A browser global, not a `window` property. The bundle reaches the host with
+    // it, like every other client plugin in this profile.
+    fetch: () =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        async json() {
+          return { ok: true, value: {} }
+        },
+      }),
     console,
     setTimeout,
     clearTimeout,
@@ -140,21 +150,14 @@ const effects = []
 const disposers = []
 
 /**
- * The two capability objects a dynamic client half is handed: `ctx` for services
- * and `host` for package-private RPC.
+ * The plugin context a dynamic client half is handed.
  *
- * `host.call` is the documented client-to-host channel and is supplied here as the
- * real second argument, because an earlier harness only offered a `ctx.connection`
- * shape invented in this repository — so both the harness and the bundle agreed on
- * a contract the shell does not have.
+ * The client reaches the host with the browser's own `fetch` — the stub for which
+ * lives on the sandbox above — so there is no transport object here. That is the
+ * point: an earlier version of this harness supplied a `ctx.connection` shape
+ * invented in this repository, and the bundle agreed with it, because the fake was
+ * written from the same assumption as the code.
  */
-const calls = []
-const host = {
-  call: (method, args) => {
-    calls.push({ method, args })
-    return Promise.resolve({ ok: true, value: {} })
-  },
-}
 const ctx = {
   effect(fn) {
     const dispose = fn()
@@ -162,8 +165,8 @@ const ctx = {
     if (typeof dispose === 'function') disposers.push(dispose)
     return () => {}
   },
-  get(name) {
-    return name === 'connection' ? undefined : undefined
+  get() {
+    return undefined
   },
   locale: { register: () => () => {}, locale: () => 'zh-CN' },
   sessions: { current: () => null },
@@ -183,7 +186,7 @@ const ctx = {
 
 let applyError = null
 try {
-  exportsValue.apply(ctx, host)
+  exportsValue.apply(ctx)
 } catch (error) {
   applyError = error
 }

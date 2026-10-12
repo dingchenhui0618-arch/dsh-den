@@ -90,6 +90,39 @@ function sameDeps(a, b) {
 let loaded = null
 /** What the panel reports about its own actions, via the debug sink. */
 const sinkLog = []
+
+/**
+ * The host's answer for one request.
+ *
+ * The bundle posts `{ action, ...payload }` to the route. This resolves it against
+ * whatever the current test scripted, which is how the panel's behaviour is driven
+ * without a host process or an HTTP server.
+ */
+const transport = { calls: [], replies: {} }
+
+function fakeFetch(url, init) {
+  let body = {}
+  try {
+    body = JSON.parse(init?.body ?? '{}')
+  } catch {
+    body = {}
+  }
+  transport.calls.push({ url, method: init?.method, body })
+  const reply = transport.replies[body.action]
+  const value = typeof reply === 'function' ? reply(body) : reply
+  const payload = value === undefined ? { ok: true, value: {} } : value
+  return Promise.resolve({
+    ok: true,
+    status: 200,
+    async json() {
+      return payload
+    },
+    async text() {
+      return JSON.stringify(payload)
+    },
+  })
+}
+
 {
   const sandbox = {
     window: {
@@ -98,6 +131,12 @@ const sinkLog = []
       // action state that no DOM would otherwise expose.
       __dshDenDebug: (event) => sinkLog.push(event),
     },
+    // The bundle reaches the host with the browser's own `fetch`, exactly like the
+    // other client plugins. It is a global, not a `window` property, so it belongs
+    // on the sandbox itself. Supplied here rather than having the bundle carry a
+    // transport shim: a bundle that avoided `fetch` to be testable would not be
+    // testing the thing that runs.
+    fetch: fakeFetch,
     console,
     setTimeout,
     clearTimeout,
@@ -128,29 +167,16 @@ const exportsValue = loaded.factory((name) => {
 
 /* ------------------------------------------------------------ fake context */
 
-const calls = []
-let replies = {}
 let activeSession = 'session-active'
 let renderedSession = null
 
-/**
- * The two capability objects a dynamic client half is handed: `ctx` for services
- * and `host` for package-private RPC.
- *
- * The transport is `host.call(method, args)` — the documented client-to-host
- * channel. An earlier version of this harness supplied a `ctx.connection.rpc.call`
- * shape invented in this repository, which meant the harness could not tell a
- * working transport from a fictional one.
- */
-const host = {
-  call: (method, payload) => {
-    calls.push({ endpoint: method, payload })
-    const action = payload?.action ?? 'status'
-    const reply = replies[action]
-    if (typeof reply === 'function') return Promise.resolve(reply(payload))
-    if (reply === undefined) return Promise.resolve({ ok: true, value: {} })
-    return Promise.resolve(reply)
-  },
+/** Every request the bundle made, and the answers it was given. */
+const calls = transport.calls
+function scriptReplies(next) {
+  Object.assign(transport.replies, next)
+}
+function clearReplies() {
+  for (const key of Object.keys(transport.replies)) delete transport.replies[key]
 }
 
 function makeCtx() {
@@ -159,8 +185,9 @@ function makeCtx() {
       const dispose = fn()
       return typeof dispose === 'function' ? dispose : () => {}
     },
-    // The fallback path asks for an optional service this way; the shells under
-    // test here do not provide one, which is the realistic case.
+    // The bundle reaches the host with `fetch` now, so there is no optional service
+    // to probe; the stub stays here so a reintroduced probe is caught rather than
+    // silently working.
     get: () => undefined,
     locale: { register: () => () => {}, locale: () => 'zh-CN' },
     sessions: { current: () => activeSession },
@@ -291,10 +318,10 @@ function boot({ sessionId = 'session-active', scripted = {} } = {}) {
   // Merge rather than replace: a test that scripts one action and then boots would
   // otherwise silently lose the reply it just installed, which reads as the panel
   // ignoring the response.
-  replies = { ...replies, ...scripted }
+  scriptReplies(scripted)
   activeSession = sessionId
   const ctx = makeCtx()
-  exportsValue.apply(ctx, host)
+  exportsValue.apply(ctx)
   const main = ctx.slots.entries.find((entry) => entry.options?.name === 'main')
   if (!main) throw new Error('the bundle did not register a main panel')
   return main.component
@@ -354,38 +381,37 @@ check(text.includes('今天') === false, 'no stray copy is invented')
 
 /* --- the snapshot request carries the session ------------------------------ */
 
-const statusCall = calls.find((entry) => (entry.payload?.action ?? 'status') === 'status')
+const statusCall = calls.find((entry) => (entry.body?.action ?? 'status') === 'status')
 check(Boolean(statusCall), 'the panel requests a status snapshot')
-check(statusCall?.payload?.action === 'status', 'the snapshot request names the status action explicitly')
-check(statusCall?.payload?.sessionId === 'session-active', 'the snapshot request carries the active conversation id')
+check(statusCall?.body?.action === 'status', 'the snapshot request names the status action explicitly')
+check(statusCall?.body?.sessionId === 'session-active', 'the snapshot request carries the active conversation id')
 
-const listCall = calls.find((entry) => entry.payload?.action === 'schedules/list')
+const listCall = calls.find((entry) => entry.body?.action === 'schedules/list')
 check(Boolean(listCall), 'the panel asks for the schedule list')
-check(listCall?.payload?.sessionId === 'session-active', 'the schedule list is scoped to the active conversation')
+check(listCall?.body?.sessionId === 'session-active', 'the schedule list is scoped to the active conversation')
 check(text.includes('助理不会自己醒来'), 'an empty schedule list is called out, not left blank')
 
 /* --- clicking Grant mints a token and does NOT claim authority ------------- */
 
-const revokeCalls = () => calls.filter((entry) => entry.payload?.action === 'autonomy/request')
+const revokeCalls = () => calls.filter((entry) => entry.body?.action === 'autonomy/request')
 check(revokeCalls().length === 0, 'no autonomy action is sent before a click')
 
 await panel.click('授予')
 
-const grantCall = calls.find((entry) => entry.payload?.action === 'autonomy/request')
+const grantCall = calls.find((entry) => entry.body?.action === 'autonomy/request')
 check(Boolean(grantCall), 'clicking Grant sends an autonomy/request')
-check(grantCall?.payload?.autonomy === true, 'the grant request asks for autonomy: true')
-check(grantCall?.payload?.sessionId === 'session-active', 'the grant request is scoped to the active conversation')
+check(grantCall?.body?.autonomy === true, 'the grant request asks for autonomy: true')
+check(grantCall?.body?.sessionId === 'session-active', 'the grant request is scoped to the active conversation')
 check(
-  calls.every((entry) => entry.payload?.action !== 'autonomy/confirm'),
+  calls.every((entry) => entry.body?.action !== 'autonomy/confirm'),
   'clicking Grant never confirms authority on its own — a token must come back first',
 )
 
 /* --- the token is shown to the human -------------------------------------- */
 
-replies = {
-  ...replies,
+scriptReplies({
   'autonomy/request': { ok: true, value: { token: 'tok-abc123', autonomy: true, expiresAt: Date.now() + 600000, ttlMs: 600000 } },
-}
+})
 const panel2 = mount(boot({ scripted: { status: healthyStatus(), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } } }), {
   useSessions: () => ({ activeId: 'session-active' }),
 })
@@ -413,13 +439,13 @@ await panel3.type(1, 'Report only failures.')
 await panel3.type(2, '45')
 await panel3.click('新建自检')
 
-const createCall = calls.find((entry) => entry.payload?.action === 'schedules/create')
+const createCall = calls.find((entry) => entry.body?.action === 'schedules/create')
 check(Boolean(createCall), 'submitting the form sends schedules/create')
-check(createCall?.payload?.title === 'CI watch', 'the title is carried through')
-check(createCall?.payload?.prompt === 'Report only failures.', 'the prompt is carried through')
-check(createCall?.payload?.everySeconds === 2700, `45 minutes becomes 2700 seconds (saw ${createCall?.payload?.everySeconds})`)
-check(createCall?.payload?.kind === 'interval', 'the created schedule is an interval')
-check(createCall?.payload?.sessionId === 'session-active', 'the new schedule is scoped to the active conversation')
+check(createCall?.body?.title === 'CI watch', 'the title is carried through')
+check(createCall?.body?.prompt === 'Report only failures.', 'the prompt is carried through')
+check(createCall?.body?.everySeconds === 2700, `45 minutes becomes 2700 seconds (saw ${createCall?.body?.everySeconds})`)
+check(createCall?.body?.kind === 'interval', 'the created schedule is an interval')
+check(createCall?.body?.sessionId === 'session-active', 'the new schedule is scoped to the active conversation')
 check(panel3.text().includes('不是权限授予'), 'the panel states that a schedule is not a permission grant')
 
 /* --- invalid input is refused locally, without a wasted round trip --------- */
@@ -433,7 +459,7 @@ await panel4.type(1, 'x')
 await panel4.type(2, '1')
 await panel4.click('新建自检')
 check(
-  !calls.some((entry) => entry.payload?.action === 'schedules/create'),
+  !calls.some((entry) => entry.body?.action === 'schedules/create'),
   'a sub-5-minute interval is refused in the panel rather than sent to the host',
 )
 check(panel4.text().includes('at least 5 minutes'), 'the refusal says why')
@@ -456,8 +482,8 @@ await panel5.settle()
 check(panel5.text().includes('CI watch'), 'an existing schedule is listed by title')
 check(panel5.text().includes('待触发'), 'a due schedule is marked as due')
 await panel5.click('删除')
-const deleteCall = calls.find((entry) => entry.payload?.action === 'schedules/delete')
-check(deleteCall?.payload?.id === 'sch-1', 'removing a schedule sends its id')
+const deleteCall = calls.find((entry) => entry.body?.action === 'schedules/delete')
+check(deleteCall?.body?.id === 'sch-1', 'removing a schedule sends its id')
 
 /* --- a deferred heartbeat is reported as a problem, not as silence --------- */
 

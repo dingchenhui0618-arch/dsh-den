@@ -16,12 +16,15 @@
  *   never declared, and `apply` does not run at all as a result. So `inject` lists
  *   what this plugin genuinely requires, and the code reads the injected
  *   properties instead of reaching for `ctx.get`.
- * - **`agents`, `tools`, and `connection` are hard dependencies; `subagents` is
+ * - **`agents`, `tools`, and `webServer` are hard dependencies; `subagents` is
  *   not.** Without the agent registry there is nothing to authorize; without
- *   the tool registry the approval gate cannot be installed, and without the
- *   connection service the status panel has no transport route. The first two
- *   are unsafe to omit; the connection service is required by this profile's
- *   panel surface. The delivery path is genuinely optional, so the kernel
+ *   the tool registry the approval gate cannot be installed; without a web server
+ *   the status panel has no data route. `webServer` is what the other client
+ *   plugins in this profile declare for exactly this purpose — dsh-vision-diff as
+ *   `['webServer', 'tools']`, dsh-warden as `['webServer']`, dsh-daily as
+ *   `['timer', 'webServer']` — and the panel is mounted on a route there rather
+ *   than on an exact path under `/api`, which no plugin here demonstrates a
+ *   browser can reach. The delivery path is genuinely optional, so the kernel
  *   defers when it is absent.
  * - The approval gate is installed **before** anything the model controls, and it
  *   is installed through `ctx.tools.guard`, which the Host documents as
@@ -40,10 +43,10 @@ import { installGate, RISK, classifyCall } from './gate.js'
 import { DenKernel, evaluateGates, readLedger, ledgerPath } from './kernel.js'
 import { deleteTrigger, dueTriggers, listTriggers, nextTriggerAt, normalizeTrigger, saveTrigger } from './triggers.js'
 import { ENTRY_KINDS, forget, recall, remember, scenarios } from './memory.js'
-import { mountStatusRoute } from './status-route.js'
+import { mountPanelRoute } from './panel-route.js'
 
 export const name = 'dsh-den'
-export const inject = ['agents', 'tools', 'connection']
+export const inject = ['agents', 'tools', 'webServer']
 
 const STATE_VERSION = 1
 
@@ -798,13 +801,13 @@ export function apply(ctx) {
       })
     }
 
-    // The status panel's data route. The desktop profile injects `connection`,
-    // which is why it is declared in this plugin's inject list. The mount helper
-    // still reports a structured failure for a test or host that supplies an
-    // incomplete connection object. Read-only, so it can never become a way
-    // around the approval gate.
-    const route = mountStatusRoute(ctx, { service, nextTriggerAt })
-    service.statusRoute = { mounted: route.mounted, reason: route.reason, message: route.message }
+    // The status panel's data route, mounted on the host web server because that is
+    // what every other client plugin in this profile does. `webServer` is declared
+    // in this plugin's inject list; the mount helper still reports a structured
+    // failure for a test or host that supplies an incomplete web server object, so
+    // a profile without one costs the user the panel and not the assistant.
+    const route = mountPanelRoute(ctx, { service, nextTriggerAt })
+    service.statusRoute = { mounted: route.mounted, reason: route.reason, message: route.message, path: route.path }
     disposers.push(route.dispose)
     if (!route.mounted) {
       service.noteEvent({ type: 'status-route-unmounted', reason: route.reason, message: route.message })

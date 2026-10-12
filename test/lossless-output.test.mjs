@@ -27,7 +27,7 @@ const sandbox = mkdtempSync(join(tmpdir(), 'dsh-den-lossless-'))
 process.env.DSH_HOME = sandbox
 
 const { DenService } = await import('../src/index.js')
-const { statusSnapshot } = await import('../src/status-route.js')
+const { statusSnapshot } = await import('../src/panel-api.js')
 const { toLosslessJson } = await import('../src/atom.js')
 
 test.after(() => rmSync(sandbox, { recursive: true, force: true }))

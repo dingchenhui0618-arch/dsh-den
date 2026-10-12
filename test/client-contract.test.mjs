@@ -98,28 +98,40 @@ test('the panel reads the active conversation from a prop the live slot supplies
   assert.match(bundle, /props\.useSessions/, 'the panel depends on useSessions, which the live catalog supplies')
 })
 
-test('the client endpoint matches the path the host registers', () => {
-  // The one seam where a mismatch fails silently: the panel asks the shell for
-  // `endpoint`, which the host intercepts as a route at `/api/${METHOD}`. The two
-  // strings are written in different files, so they are derived and compared rather
-  // than restated — a mismatch is a panel that renders and 404s on every refresh.
-  const endpoint = bundle.match(/var RPC_ENDPOINT = '([^']+)'/)
-  assert.ok(endpoint, 'the bundle must name its endpoint once')
+test('the client route matches the path the host registers', () => {
+  // The one seam where a mismatch fails silently: the panel fetches `API`, and the
+  // host registers a web-server route at `ROUTE`. The two strings are written in
+  // different files, so they are derived and compared rather than restated — a
+  // mismatch is a panel that renders and 404s on every refresh.
+  const client = bundle.match(/var API = '([^']+)'/)
+  assert.ok(client, 'the bundle must name its route once')
 
-  const host = readFileSync(join(root, 'src', 'status-route.js'), 'utf8')
-  const method = host.match(/const METHOD = '([^']+)'/)
-  assert.ok(method, 'the host must declare its method once')
-  assert.ok(host.includes('path: `/api/${METHOD}`'), 'the host must derive its route path from that method')
+  const host = readFileSync(join(root, 'src', 'panel-route.js'), 'utf8')
+  const registered = host.match(/export const ROUTE = '([^']+)'/)
+  assert.ok(registered, 'the host must declare its route once')
+  assert.equal(client[1], registered[1], 'the path the panel fetches must be the path the host registers')
 
-  assert.equal(endpoint[1], method[1], 'the endpoint the panel calls must be the method the host intercepts')
-
-  // The namespace convention observed in the live shell: the package name with
-  // dashes turned into dots, before the action segment.
-  const namespace = endpoint[1].split('/')[0]
-  assert.equal(namespace, pkg.name.replace(/-/g, '.'), 'the RPC namespace follows the package name')
+  // The path convention every client plugin in this profile follows.
+  assert.equal(registered[1], `/${pkg.name}`, 'the route is the package name with a leading slash')
 })
 
-test('the panel cannot change authority through the RPC surface it uses', () => {
+test('the client half carries no framework RPC dependency of its own invention', () => {
+  // Both prior versions of this transport were invented here, and both passed the
+  // harnesses because the harnesses were written from the same assumption. Pin the
+  // absence so a future edit cannot quietly reintroduce one.
+  //
+  // Checked against the code with comments and strings stripped: this bundle's own
+  // comment retracts `connection.rpc` by name, and a check that reads the retraction
+  // as the offence reports the opposite of the truth.
+  const code = bundle
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/^\s*\/\/[^\n]*$/gm, ' ')
+  assert.doesNotMatch(code, /connection\s*\.\s*rpc/, 'the client must not reach for a connection RPC')
+  assert.doesNotMatch(code, /host\s*\.\s*call/, 'the client must not assume a package-private host RPC')
+  assert.match(code, /fetch\(API/, 'the client reaches the host with a plain fetch, like every other plugin here')
+})
+
+test('the panel cannot change authority through the route it uses', () => {
   // The transport is a route the host half owns, so the panel's reach is exactly
   // the set of actions the route accepts. Anything that grants authority must not
   // be in the client's vocabulary.

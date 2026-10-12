@@ -206,9 +206,31 @@
 > **浏览器半边已实测存活（2026-10-12，读自运行中的客户端）**：通过 Client `Slots` provider 查 `sidebar.panellist` 与 `main` 两个精确 root，占用者里都有 `dsh-den` 且 `active: true`——
 > `{registrant:"dsh-den", id:"dsh-den.status", order:245}` 与 `{registrant:"dsh-den", key:"dsh-den.status"}`。
 > 这比离线测试强得多，因为它顺带证明了整条加载链在真浏览器里跑通：bundle id 与包名一致、`require('react')` **确实解析成功**（否则 factory 会在注册前抛错）、`id` 与 `key` 一致。契约定型为 `test/client-contract.test.mjs`（7 项）。
-> **仍未验证的是这条链上剩下的一段**：面板按钮发出 HTTP 调用、经 `connection.fetch` 路由回到宿主。宿主侧已由 `test/panel-actions.test.mjs` 走真实路由验证；浏览器侧尚未观测到一次真实点击。
+> **仍未验证的是这条链上剩下的一段**：面板按钮发出 HTTP 调用、经真实浏览器回到宿主。宿主侧已由 `test/panel-actions.test.mjs` 与 `test/panel-route.test.mjs` 走真实 handler 验证；浏览器侧尚未观测到一次真实点击。
 
-> **客户端→宿主通道已改为已发布的 builtin（2026-10-12）**：原实现调用 `ctx.connection.rpc.call('/api', …)` 并把 `connection` 写进 `inject`。**这个形状是本仓库自己编的**：宿主 `connection` 契约是 `{rpc, fetch, operator}`，其中 `HostConnectionRpc = {handle, intercept}` **没有 `call`**；客户端服务目录里**根本没有 `connection`**；`call` 这个方法名只出现在本仓库自己的测试替身里。因为替身是照着同一套假设写的，两个离线校验器都会**同意**一个在浏览器里必然失败的 bundle——渲染正常、数据永不加载。现在主通道是 builtin 清单里明确发布的 `host.call(method, args)`；兜底走文档化的 `ctx.get('connection')` + 未定义检查（直接读 `ctx.connection` 会对未声明服务做属性取用而抛错，反而破坏它想保护的东西）。`inject` 相应改为 `['slots','locale','sessions']`——`sessions` 此前被读却未声明。`test/client-services.test.mjs` 会扫描 bundle 里每个 `ctx.*` 取用并要求已声明，同时拒绝任何不在已发布契约里的 `ctx.connection` 方法。
+> **客户端→宿主通道两次都编错了，第三次改为照抄在跑的实现（2026-10-12）**
+>
+> 这处踩了两次，值得完整记下来，因为**两次的失败方式完全相同、且两次都被测试放行**。
+>
+> 第一版：客户端调用 `ctx.connection.rpc.call('/api', …)`，并把 `connection` 写进 `inject`。这个形状是本仓库自己编的——宿主 `connection` 契约是 `{rpc, fetch, operator}`，其中 `HostConnectionRpc = {handle, intercept}` **没有 `call`**；客户端服务目录里根本没有 `connection`；`call` 这个名字只出现在本仓库自己的测试替身里。
+>
+> 第二版：改用 builtin 清单里确实发布的 `host.call(method, args)`，宿主侧相应把路由挂在 `connection.fetch.register` 的 `/api/dsh.den/status` 精确路径上。这一版**每一部分都能在文档里找到出处**，所以看起来已经修好了。但盘点本机**9 个装了客户端半边的插件**后发现：
+>
+> | | 宿主注册方式 | 客户端调用方式 |
+> |---|---|---|
+> | dsh-warden | `webServer.register` | `fetch('/dsh-warden')` |
+> | dsh-daily | `webServer.register` | `fetch('/dsh-daily')` |
+> | dsh-vision-diff | `webServer.register` | `fetch('/dsh-vision-diff')` |
+> | dsh-in-hand / dsh-ship-receipt / dsh-signal-pet / dsh-taskwatch / dsh-holdem | `webServer.register` | `fetch(...)` |
+> | **dsh-den（第二版）** | `connection.fetch.register` | `host.call` |
+>
+> **9 个里 8 个走同一条路，没有任何一个用框架 RPC。** 宿主侧我一直有证据（`den_status` 报 `statusRoute.mounted: true`），但**没有任何证据表明浏览器插件页能到达 `/api` 下的精确路由**——而这正是第二版唯一的未知量。
+>
+> 于是第三版照抄多数派：宿主 `inject = ['agents','tools','webServer']`，用 `ctx.webServer.register({kind:'prefix', path:'/dsh-den', handler})`；客户端用浏览器原生 `fetch('/dsh-den')`。`inject` 的三项都有真实插件背书（`dsh-vision-diff` 是 `['webServer','tools']`，`dsh-warden` 是 `['webServer']`，`dsh-daily` 是 `['timer','webServer']`）。旧的 `connection.fetch` 传输层整体删除，因为它描述的正是被弃用的那套。
+>
+> **两次都被测试放行的原因值得单独记住**：两个离线校验器都提供一个假 `ctx`/`host`，而假对象是**照着代码的假设写的**。与实现同形的替身无法证伪实现——它会和错代码一致地通过。所以第三次的判据换成了**外部事实**：本机在跑的其他插件怎么写。`test/client-services.test.mjs` 现在断言 bundle 里不出现 `connection.rpc` 或 `host.call`，`test/client-contract.test.mjs` 断言客户端路径与宿主 `ROUTE` 相等且等于 `/<包名>`。
+>
+> 另外，离线替身现在必须自备 `fetch`——这本身就是个信号：bundle 真的在走浏览器 API 了。
 
 ---
 

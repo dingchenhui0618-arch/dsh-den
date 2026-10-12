@@ -7,9 +7,11 @@
  * (including style injection) happens inside the factory so nothing runs before
  * the module is materialised.
  *
- * The host half is `src/index.js`. The two communicate over one read-only RPC
- * route declared in `src/status-route.js`. Nothing here can change the den's
- * authority, schedules, or memory — the panel is a window, not a control surface.
+ * The host half is `src/index.js`. The two communicate over one JSON route,
+ * `POST /dsh-den`, mounted in `src/panel-route.js` on the host's web server — the
+ * same `/<package name>` convention the other client plugins in this profile use.
+ * Nothing here can change the den's authority on its own; the few verbs the panel
+ * does carry are dispatched and validated on the host side.
  *
  * Loading contract, verified against the shipped client-module system:
  *   package.json needs `exports["./client"]` and `dsh.client = {platform: 'web'}`.
@@ -27,7 +29,13 @@ window.__ModuleLoader__.load({
     var NS = 'dsh.den'
     /* Sidebar entry id and main-panel key. These MUST be the same value. */
     var PANEL_KEY = 'dsh-den.status'
-    var RPC_ENDPOINT = 'dsh.den/status'
+    /**
+     * The host route. Must equal the `path` the host hands to `webServer.register`,
+     * which is `/<package name>` by the convention every client plugin here follows
+     * (dsh-warden -> '/dsh-warden', dsh-daily -> '/dsh-daily', dsh-vision-diff ->
+     * '/dsh-vision-diff'). `test/client-contract.test.mjs` compares the two files.
+     */
+    var API = '/dsh-den'
     /* The shipped Plugins panel sits at order 0; dsh-bot uses 250. */
     var ORDER = 245
 
@@ -261,7 +269,7 @@ window.__ModuleLoader__.load({
           return { phase: prev.data ? 'refreshing' : 'loading', data: prev.data, error: null }
         })
         props
-          .call(RPC_ENDPOINT, { action: 'status', sessionId: sessionId })
+          .act('status', {}, sessionId)
           .then(function (value) {
             setView({ phase: 'ready', data: value, error: null })
           })
@@ -270,7 +278,7 @@ window.__ModuleLoader__.load({
               return { phase: 'error', data: prev.data, error: String((error && error.message) || error) }
             })
           })
-      }, [props.call, sessionId])
+      }, [sessionId])
 
       React.useEffect(function () {
         load()
@@ -574,7 +582,7 @@ window.__ModuleLoader__.load({
 
     /* -------------------------------------------------------------- plugin */
 
-    function apply(ctx, host) {
+    function apply(ctx) {
       var lifetime = new AbortController()
       var locale = ctx.locale
 
@@ -590,45 +598,46 @@ window.__ModuleLoader__.load({
       }
 
       /**
-       * Pick the client-to-host channel at run time, rather than assuming one.
+       * Reach the host half over the one channel this profile's plugins actually use.
        *
-       * `apply` is handed the two documented capability objects for a dynamic
-       * client half: `host` (package-private RPC to this package's host) and `ctx`.
-       * An earlier version called `ctx.connection.rpc.call('/api', ...)` and
-       * declared `connection` in `inject`. That shape was invented here, not
-       * published: the host `connection` contract is `{rpc, fetch, operator}` with
-       * `HostConnectionRpc = {handle, intercept}`, the client service catalog does
-       * not list `connection` at all, and the method name `call` appears nowhere but
-       * this repository's own test fake. Because the fake was written from the same
-       * assumption as the code, both harnesses agreed with a bundle that would fail
-       * in the browser with a panel that renders and never loads.
+       * Every client half installed here — dsh-warden, dsh-daily, dsh-vision-diff,
+       * dsh-in-hand, dsh-ship-receipt, dsh-signal-pet, dsh-taskwatch, dsh-holdem —
+       * talks to its host with a plain browser `fetch()` against a `/<package name>`
+       * route the host registered on the web server. Not one of them uses a
+       * framework RPC shim.
        *
-       * The transport itself is a real HTTP request either way, so its lifetime must
-       * still be tied to the client run: the response is abandoned on unmount.
+       * This bundle previously did, twice. First `ctx.connection.rpc.call('/api', …)`
+       * and `inject: ['connection']`: that shape was invented here — the host
+       * `connection` contract is `{rpc, fetch, operator}` where `HostConnectionRpc`
+       * is `{handle, intercept}`, the client service catalog does not list
+       * `connection` at all, and the method name `call` appears nowhere but this
+       * repository's own test fake. Then `host.call`, which is at least published but
+       * likewise unused by any plugin here, paired with a route on
+       * `connection.fetch.register` under `/api` — where the host half was
+       * observable but nothing demonstrated a browser could reach it.
+       *
+       * The lesson worth keeping: being the only one of nine plugins to do something
+       * a different way is not a neutral choice. Both harnesses passed throughout,
+       * because they were written from the same assumption as the code.
        */
-      function call(endpoint, payload) {
-        var signal = AbortSignal.any([lifetime.signal, AbortSignal.timeout(15000)])
+      function call(action, payload, sessionId) {
+        var body = { action: action }
+        for (var key in payload || {}) body[key] = payload[key]
+        if (sessionId) body.sessionId = sessionId
 
-        var attempt
-        if (host && typeof host.call === 'function') {
-          // Exactly the documented signature: host.call(method, args).
-          attempt = Promise.resolve(host.call(endpoint, payload || {}))
-        } else {
-          // `ctx.get(name)` is the documented way to reach a service the plugin does
-          // not depend on, and it must be undefined-checked. Reading `ctx.connection`
-          // directly would be a property get on an undeclared service, which throws —
-          // so the fallback would break the thing it was meant to protect.
-          var optional = typeof ctx.get === 'function' ? ctx.get('connection') : undefined
-          if (optional && optional.rpc && typeof optional.rpc.call === 'function') {
-            attempt = optional.rpc.call('/api', endpoint, payload || {}, signal)
-          } else {
-            return Promise.reject(
-              new Error('dsh-den: this shell exposes neither host.call nor a connection RPC channel'),
-            )
-          }
-        }
+        var signal =
+          typeof AbortSignal !== 'undefined' && AbortSignal.timeout
+            ? AbortSignal.any([lifetime.signal, AbortSignal.timeout(15000)])
+            : undefined
 
-        return attempt.then(function (reply) {
+        return fetch(API, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: signal,
+        }).then(function (res) {
+          return res.json()
+        }).then(function (reply) {
           if (!reply || reply.ok !== true) {
             var err = (reply && reply.error) || {}
             throw Object.assign(new Error(err.message || 'den status request failed'), { code: err.code })
@@ -645,10 +654,7 @@ window.__ModuleLoader__.load({
        * and a guessed id would silently target the wrong one.
        */
       function act(action, payload, sessionId) {
-        var body = { action: action }
-        for (var key in payload || {}) body[key] = payload[key]
-        if (sessionId) body.sessionId = sessionId
-        return call(RPC_ENDPOINT, body)
+        return call(action, payload, sessionId)
       }
 
       ctx.effect(function () {
@@ -708,7 +714,6 @@ window.__ModuleLoader__.load({
           var sessionId = useActiveSession(props || {})
           return React.createElement(DenPanel, {
             t: t,
-            call: call,
             act: act,
             sessionId: sessionId,
           })

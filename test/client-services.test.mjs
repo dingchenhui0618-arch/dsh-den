@@ -48,10 +48,21 @@ const CLIENT_BUILTINS = ['ctx', 'React', 'host', 'styles', 'console']
  */
 const CTX_METHODS = ['effect', 'get', 'on', 'provide', 'emit', 'parallel', 'waterfall', 'bail', 'start', 'stop']
 
-/** Read the `inject` array the bundle actually declares. */
+/**
+ * Read the `inject` array the bundle actually declares.
+ *
+ * Anchored to `module.exports`, not searched for anywhere in the file: the first
+ * `inject:` in this bundle used to be the retraction of an older one inside a
+ * comment, and a checker that reads the correction as the declaration reports the
+ * exact opposite of the truth.
+ */
 function declaredInject() {
-  const match = bundle.match(/inject:\s*\[([^\]]*)\]/)
-  assert.ok(match, 'the bundle must declare its Cordis service dependencies')
+  // `module.exports =` with the sign: `return module.exports` follows the assignment
+  // and would otherwise be selected as the last occurrence, cutting the declaration
+  // out of the slice.
+  const exportsBlock = bundle.slice(bundle.lastIndexOf('module.exports ='))
+  const match = exportsBlock.match(/inject:\s*\[([^\]]*)\]/)
+  assert.ok(match, 'the bundle must declare its Cordis service dependencies on module.exports')
   return match[1]
     .split(',')
     .map((part) => part.trim().replace(/^['"]|['"]$/g, ''))
@@ -125,6 +136,7 @@ test('every service the bundle reads off ctx is declared in inject', () => {
   const declared = new Set(declaredInject())
   const reads = ctxReads().filter((name) => !CTX_METHODS.includes(name))
 
+  // The bundle must read its own services, or this whole file proves nothing.
   assert.ok(reads.length > 0, 'the bundle must actually read the context')
   for (const name of reads) {
     assert.ok(
@@ -132,6 +144,12 @@ test('every service the bundle reads off ctx is declared in inject', () => {
       `ctx.${name} is read but "${name}" is not in inject: [${[...declared].join(', ')}]`,
     )
   }
+  // Spelled out, so a rename in the bundle cannot silently empty the check above.
+  assert.deepEqual(
+    [...reads].sort(),
+    ['locale', 'sessions', 'slots'],
+    'the bundle reads exactly these services; update this list deliberately, not incidentally',
+  )
 })
 
 test('every declared service is one the live client actually exposes', () => {
@@ -162,16 +180,19 @@ test('the client does not reach for the host connection shape', () => {
   }
 })
 
-test('the browser half talks to the host over a documented builtin', () => {
-  // `host.call(method, args)` is the documented package-private RPC from Client to
-  // this package's Host half, and it is the reason the client needs no HTTP
-  // knowledge at all: the method string is the one the host already intercepts.
-  const usesHostBuiltin = /host\.call\(/.test(bundle)
-  const usesConnection = /ctx\.connection/.test(bundle)
-  assert.ok(
-    usesHostBuiltin || !usesConnection,
-    'the only documented client-to-host RPC is host.call; reaching through ctx.connection is not',
-  )
+test('the client reaches the host the way every other plugin here does', () => {
+  // Two prior transports were invented in this repository and both passed the two
+  // offline harnesses, because those harnesses supply a fake `ctx`/`host` written
+  // from the same assumption as the code. A fake shaped like the code cannot
+  // falsify it. So the check is against the installed plugins instead: every client
+  // half in this profile — dsh-warden, dsh-daily, dsh-vision-diff, dsh-in-hand,
+  // dsh-ship-receipt, dsh-signal-pet, dsh-taskwatch, dsh-holdem — declares
+  // `inject = [..., 'webServer']` on the host side and calls a plain
+  // `fetch('/<package name>')` from the browser side. None of them uses a framework
+  // RPC shim.
+  assert.doesNotMatch(code, /connection\s*\.\s*rpc/, 'no connection RPC shim')
+  assert.doesNotMatch(code, /host\s*\.\s*call/, 'no package-private host RPC shim')
+  assert.match(code, /fetch\(API/, 'the host is reached with a plain fetch')
 })
 
 test('the bundle declares sessions, which it reads for the active conversation', () => {
