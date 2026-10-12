@@ -35,6 +35,61 @@ export function denHome() {
   return join(base, 'den')
 }
 
+/**
+ * Normalise a value so it survives a lossless JSON round trip.
+ *
+ * The Host validates a tool's return value and rejects anything it cannot
+ * round-trip, and `undefined` is the trap: `JSON.stringify` DROPS a key whose value
+ * is undefined, so the object's shape changes and the call fails with
+ * "value is not lossless JSON". That shipped, and it took down `den_status`
+ * entirely while every other tool kept working.
+ *
+ * The underlying values are fixed at their source — this is the boundary guard so
+ * that one forgotten field can never again make a whole tool unreachable. Rules:
+ *   undefined -> null, functions and symbols -> dropped, bigint -> string,
+ *   non-finite numbers -> null, and anything non-plain is copied by own enumerable
+ *   values rather than passed through with its prototype.
+ *
+ * Cycles are handled by tracking the **current path** rather than a visited set: an
+ * object is removed from `seen` once its own subtree is finished, so a value
+ * referenced twice as siblings is copied twice instead of being mislabelled as
+ * circular. (Tracking "seen ever" instead would corrupt exactly that shape — the
+ * `{from, to}` patch object in `den_configure` was the first real casualty.)
+ */
+export function toLosslessJson(value, seen = new WeakSet()) {
+  if (value === undefined || value === null) return null
+
+  const type = typeof value
+  if (type === 'string' || type === 'boolean') return value
+  if (type === 'number') return Number.isFinite(value) ? value : null
+  if (type === 'bigint') return value.toString()
+  if (type === 'function' || type === 'symbol') return undefined
+
+  if (seen.has(value)) return '[circular]'
+  seen.add(value)
+
+  try {
+    if (Array.isArray(value)) {
+      return value.map((item) => {
+        const normalised = toLosslessJson(item, seen)
+        return normalised === undefined ? null : normalised
+      })
+    }
+
+    const out = {}
+    for (const key of Object.keys(value)) {
+      const normalised = toLosslessJson(value[key], seen)
+      // A dropped key would change the shape, which is the failure being prevented,
+      // so an unserialisable value becomes null while keeping its key.
+      out[key] = normalised === undefined ? null : normalised
+    }
+    return out
+  } finally {
+    // Leave the path: siblings may legitimately share this same object.
+    seen.delete(value)
+  }
+}
+
 export function denPath(...segments) {
   return join(denHome(), ...segments)
 }

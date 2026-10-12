@@ -130,8 +130,8 @@ function mountRoute({ service = stubService(), ctxOverride } = {}) {
   const ctx = ctxOverride ?? {
     get: (name) => (name === 'connection' ? { fetch: { register: (route) => (registered.push(route), () => {}) } } : undefined),
   }
-  const dispose = mountStatusRoute(ctx, { service, nextTriggerAt: (trigger) => trigger.lastFiredAt + 1000 })
-  return { route: registered[0], dispose, registered }
+  const route = mountStatusRoute(ctx, { service, nextTriggerAt: (trigger) => trigger.lastFiredAt + 1000 })
+  return { route: registered[0], result: route, dispose: route.dispose, registered }
 }
 
 function post(route, body) {
@@ -144,10 +144,38 @@ function post(route, body) {
   )
 }
 
-test('a profile with no connection service still loads, it just has no panel data', () => {
-  const dispose = mountStatusRoute({ get: () => undefined }, { service: stubService() })
-  assert.equal(typeof dispose, 'function')
-  assert.doesNotThrow(() => dispose())
+test('a profile with no connection service reports why, instead of failing silently', () => {
+  // The first version returned a bare no-op here. The panel then rendered, polled
+  // forever, and showed an opaque HTTP 404, with nothing anywhere recording that
+  // the route had never been registered. The reason must be readable.
+  const result = mountStatusRoute({ get: () => undefined }, { service: stubService() })
+  assert.equal(result.mounted, false)
+  assert.equal(result.reason, 'no-connection-service')
+  assert.equal(typeof result.dispose, 'function')
+  assert.doesNotThrow(() => result.dispose())
+})
+
+test('every way the mount can fail names the failure', () => {
+  const cases = [
+    ['no-connection-service', { get: () => undefined }],
+    ['no-connection-fetch', { get: () => ({}) }],
+    ['no-connection-register', { get: () => ({ fetch: {} }) }],
+    ['register-threw', { get: () => ({ fetch: { register: () => { throw new Error('route already registered') } } }) }],
+    ['register-returned-no-disposer', { get: () => ({ fetch: { register: () => undefined } }) }],
+    ['connection-lookup-threw', { get: () => { throw new Error('cannot get property "connection" without inject') } }],
+  ]
+  for (const [expected, ctx] of cases) {
+    const result = mountStatusRoute(ctx, { service: stubService() })
+    assert.equal(result.mounted, false, `${expected} should not mount`)
+    assert.equal(result.reason, expected)
+  }
+})
+
+test('a successful mount says so and hands back a working disposer', () => {
+  const { result } = mountRoute()
+  assert.equal(result.mounted, true)
+  assert.equal(result.reason, null)
+  assert.equal(typeof result.dispose, 'function')
 })
 
 test('the route registers one exact POST path on the shared channel', () => {
@@ -222,13 +250,14 @@ test('the mount hands back a disposer that unhooks the route', () => {
   const ctx = {
     get: () => ({ fetch: { register: () => () => disposed.push('route') } }),
   }
-  const dispose = mountStatusRoute(ctx, { service: stubService() })
-  dispose()
+  const result = mountStatusRoute(ctx, { service: stubService() })
+  assert.equal(disposed.length, 0, 'nothing disposed before the disposer runs')
+  result.dispose()
   assert.deepEqual(disposed, ['route'])
 })
 
 test('disposal does not throw when the shell already dropped the route', () => {
   const ctx = { get: () => ({ fetch: { register: () => () => { throw new Error('already gone') } } }) }
-  const dispose = mountStatusRoute(ctx, { service: stubService() })
-  assert.doesNotThrow(() => dispose())
+  const result = mountStatusRoute(ctx, { service: stubService() })
+  assert.doesNotThrow(() => result.dispose())
 })

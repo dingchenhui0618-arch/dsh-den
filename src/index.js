@@ -31,7 +31,7 @@
 
 import { join } from 'node:path'
 
-import { denHome, listJsonFiles, reapStaleTempFiles, readJson, writeJsonAtomic } from './atom.js'
+import { denHome, listJsonFiles, reapStaleTempFiles, readJson, toLosslessJson, writeJsonAtomic } from './atom.js'
 import { currentGrant, recordGrant, sessionEvents } from './grant.js'
 import { allNotices, isExpired, pendingNotices, queueNotice } from './notices.js'
 import { installGate, RISK, classifyCall } from './gate.js'
@@ -91,6 +91,8 @@ export class DenService {
     this.statePath = `${this.root}/state.json`
     this.kernel = null
     this.gateDisposer = null
+    /** Set by apply() to the panel route's mount result, so a failure is reportable. */
+    this.statusRoute = null
     this.recentEvents = []
     // A hard kill between open and rename leaves temp litter behind — measured at
     // 39 of 40 kills. A resident assistant restarts often enough that this would
@@ -219,7 +221,13 @@ export class DenService {
       cooldownSeconds: state.cooldownSeconds,
       tickSeconds: state.tickSeconds,
       grants: listJsonFiles(`${this.root}/grants`).length,
-      autonomy: agent ? this.grantFor(agent) : undefined,
+      // `null`, never `undefined`: a tool's return value has to survive a lossless
+      // JSON round trip, and JSON.stringify DROPS a key whose value is undefined.
+      // That silently changes the object's shape, which the Host rejects outright —
+      // measured, `den_status` failed with "value is not lossless JSON" and the key
+      // count went 18 -> 17. A key that is present-and-null is honest; a key that
+      // vanishes is a shape change.
+      autonomy: agent ? (this.grantFor(agent) ?? null) : null,
       sessionEvents: agent ? sessionEvents(agent.session).length : 0,
       triggers: { total: triggers.valid.length, invalid: triggers.invalid.length, due: dueTriggers(now).length },
       ledger: { path: ledgerPath(), ...ledger },
@@ -232,6 +240,16 @@ export class DenService {
       gate: this.gateDisposer ? 'mounted' : 'not-mounted',
       /** Temp litter reclaimed at boot; non-zero means the process was hard-killed. */
       reapedTempFiles: this.reapedTempFiles,
+      /**
+       * Whether the browser panel's data route actually mounted.
+       *
+       * This exists because the first version of that mount failed *silently*: it
+       * returned a no-op when the connection service was unavailable, so the panel
+       * kept rendering and polling and reported only an opaque "HTTP 404", while
+       * nothing anywhere recorded that the route was never registered. A capability
+       * may degrade; its failure must not be invisible.
+       */
+      statusRoute: this.statusRoute ?? null,
       recentEvents: this.recentEvents.slice(-10),
     }
   }
@@ -317,7 +335,22 @@ export function createDeliver(ctx, service) {
 export function registerTools(tools, service) {
   const disposers = []
   const register = (definition) => {
-    disposers.push(tools.register(definition))
+    // Every tool's return value crosses this boundary normalised to lossless JSON.
+    //
+    // One forgotten `undefined` field made an entire tool unreachable:
+    // `den_status` failed with "value is not lossless JSON" on every call because
+    // JSON.stringify silently drops keys whose value is undefined. This is the
+    // boundary that guarantees a return value cannot be rejected for its shape,
+    // whatever any individual handler does.
+    const execute = definition.execute
+    disposers.push(
+      tools.register({
+        ...definition,
+        async execute(...callArgs) {
+          return toLosslessJson(await execute.apply(definition, callArgs))
+        },
+      }),
+    )
   }
 
   const text = (value) => [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }]
@@ -682,7 +715,12 @@ export function apply(ctx) {
     // The status panel's data route. Optional by design: a profile without a
     // connection service still gets the whole assistant, it just has no GUI half.
     // Read-only, so it can never become a way around the approval gate.
-    disposers.push(mountStatusRoute(ctx, { service, nextTriggerAt }))
+    const route = mountStatusRoute(ctx, { service, nextTriggerAt })
+    service.statusRoute = { mounted: route.mounted, reason: route.reason, message: route.message }
+    disposers.push(route.dispose)
+    if (!route.mounted) {
+      service.noteEvent({ type: 'status-route-unmounted', reason: route.reason, message: route.message })
+    }
 
     return () => {
       // Reverse order so the kernel stops before the gate it depends on is removed.
