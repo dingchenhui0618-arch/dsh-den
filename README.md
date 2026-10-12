@@ -3,7 +3,7 @@
 > A **7×24 resident personal assistant** for [DeepSeek Harness](https://github.com/deepseek-ai/dsh).
 > Not another chat window — an assistant that stays on, keeps its own memory, works while you are away, and stops to ask before it acts outside your trust boundary.
 
-Status: **the core is implemented, tested (200/200), and active in a real profile.** The plugin is loaded inside a real DSH 0.2.0-rc.2 desktop profile — it is in that profile's `dsh.profile.bundles`, and the running host reports it as `fiberPhase: active` — registering 11 model-facing tools, the approval guard, the heartbeat, and an interactive status panel. Verified against the *running* system rather than only in tests: the heartbeat ticks on its 60-second cadence, and the panel is an **active occupant** of both `sidebar.panellist` (`id: dsh-den.status`, order 245) and the `main` panel (`key: dsh-den.status`).
+Status: **the core is implemented, tested (207/207), and active in a real profile.** The plugin is loaded inside a real DSH 0.2.0-rc.2 desktop profile — it is in that profile's `dsh.profile.bundles`, and the running host reports it as `fiberPhase: active` — registering 11 model-facing tools, the approval guard, the heartbeat, and an interactive status panel. Verified against the *running* system rather than only in tests: the heartbeat ticks on its 60-second cadence, and the panel is an **active occupant** of both `sidebar.panellist` (`id: dsh-den.status`, order 245) and the `main` panel (`key: dsh-den.status`).
 
 One seam is **not** yet observed end-to-end, and this README does not claim it: a click in the panel reaching the host. The host process currently running still executes the pre-fix code — the panel's new route is absent from it (`GET /dsh-den` answers 404 while its siblings answer 200), and plugin changes are not hot-reloaded into a running host. Everything on that path is verified in isolation; see [DESIGN.md](DESIGN.md) for exactly what is and is not observed.
 
@@ -52,13 +52,21 @@ These are hard constraints, not aspirations. The reference implementations below
 All state lives in a **self-contained** `$DSH_HOME/den/` tree, so it can be packed and moved to another machine or a server without hunting through unrelated DSH storage.
 
 ```bash
-npm test          # 200 unit + integration tests
+npm test          # 207 unit + integration tests
 npm run check:bundle   # 31 offline bundle-contract checks
 npm run check:ui       # 41 panel interaction checks
 npm run check:acceptance   # the two reliability goals, as one observable lifecycle
 npm run check:package      # what a tarball install actually ships
 npm run verify         # all five
 ```
+
+`npm test` includes one test that is unlike the rest: `test/roundtrip.test.mjs`
+drives the **real** browser bundle's `call()` against the **real** route handler the
+plugin registered, in a single process. It exists because a test double is written
+from the same assumption as the code it stands in for, so it cannot falsify it — the
+way this plugin shipped three different wrong transports while every checker passed.
+The only pieces not running in that test are the socket and the browser, and the file
+says so.
 
 ### The panel is a control surface, not a read-only view
 
