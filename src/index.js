@@ -307,51 +307,169 @@ export class DenService {
  *
  * @returns {Promise<string>} the assistant's text for this wake
  */
-export function createDeliver(ctx, service) {
-  return async ({ trigger, instruction }) => {
-    const subagents = ctx.get?.('subagents')
+/**
+ * Find or cold-resume the driver for a conversation.
+ *
+ * The heartbeat runs on a timer with no caller, so it has no agent to hand the gates.
+ * Authority in this plugin is attested against the immutable session log rather than
+ * stored as a flag, so "no agent" does not mean "no authority" — it means the question
+ * could not be asked. This resolver answers it, and returns the disposer alongside the
+ * agent so the caller can release a resumed driver when the wake is over.
+ *
+ * Returning `null` is a normal outcome, not an error: a conversation whose session file
+ * is gone has nothing left to attest the grant, and the authority gate will then refuse
+ * for the right reason.
+ */
+export function createAgentResolver(ctx) {
+  return async (sessionId) => {
+    if (!sessionId) return null
     const agents = ctx.get?.('agents')
+    const subagents = ctx.get?.('subagents')
+    if (!subagents?.sendMessage) return null
 
-    // The wake needs a live driver. Prefer an already-live agent for this session
-    // so a conversation the human is watching receives the follow-up in place.
-    const live = agents?.get?.(trigger.sessionId)
-    if (live && subagents?.sendMessage) {
-      const text = `${instruction}\n\n## Scheduled check\n${trigger.title}\n${trigger.prompt}`
-      await subagents.sendMessage(
-        live,
-        trigger.sessionId,
-        [{ type: 'text', text }],
-        { signal: AbortSignal.timeout(120_000) },
-      )
+    // Prefer the driver that is already live for this conversation, so a wake lands in
+    // the session the human is watching rather than a second copy of it.
+    const live = agents?.get?.(sessionId)
+    if (live) return { agent: live, dispose: null }
+
+    if (!agents?.resume) return null
+    const handle = await agents.resume({ resumeSessionId: sessionId })
+    return { agent: handle.agent, dispose: handle.dispose ? () => handle.dispose() : null }
+  }
+}
+
+/**
+ * How long a wake's reply is waited for before giving up on reading it.
+ *
+ * The default matches the delivery timeout, so a wake that never answers is reported as
+ * unreadable rather than mistaken for a deliberate silence. A test may shorten it via
+ * `DSH_DEN_WAKE_REPLY_TIMEOUT_MS` so the unreadable path is exercised in seconds rather
+ * than minutes — the behaviour under test is what happens on timeout, and waiting the
+ * real two minutes to observe it proves nothing extra.
+ */
+function wakeReplyTimeoutMs() {
+  const override = Number(process.env.DSH_DEN_WAKE_REPLY_TIMEOUT_MS)
+  return Number.isFinite(override) && override > 0 ? override : 120_000
+}
+
+/** Gap between polls for the wake's reply. */
+const WAKE_REPLY_POLL_MS = 250
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    timer.unref?.()
+  })
+}
+
+/**
+ * Extract the visible text of an `assistant/message` event.
+ *
+ * The message body is a content-block array, most of which is not speech: reasoning
+ * and tool calls must not be delivered to a human as if the den had said them out
+ * loud. Only `text` blocks are joined, and the shape is checked field by field because
+ * this reads a structure the plugin does not own.
+ */
+function textOfAssistantEvent(event) {
+  const content = event?.data?.message?.content
+  if (!Array.isArray(content)) return null
+  const parts = content
+    .filter((block) => block && block.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text)
+  if (parts.length === 0) return null
+  return parts.join('\n').trim()
+}
+
+/**
+ * Wait for the reply the wake turn produces, and return it.
+ *
+ * Polling is not the shape anyone wants here. It is used because the honest
+ * alternative does not exist in this devkit: `subagents.sendMessage` resolves at inbox
+ * acceptance, before the turn runs, and there is no completion handle for a message
+ * sent to an *existing* session — `startContinuable` returns a result promise, but
+ * that establishes a new child, not a wake of the human's own conversation.
+ *
+ * The read is cheap and safe: `snapshotEvents()` on a live session, filtered to events
+ * after `baselineSeq`. The timeout is the turn timeout, so a wake that never answers
+ * is reported as unreadable rather than mistaken for a deliberate silence.
+ *
+ * @returns the reply text, or `null` when none could be read in time.
+ */
+async function awaitWakeReply(sessions, sessionId, baselineSeq, timeoutMs = wakeReplyTimeoutMs()) {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    // Prefer the live session; fall back to the agent's own transcript when the store
+    // has already released it.
+    const session = sessions?.get?.(sessionId)
+    const events = session ? sessionEvents(session) : []
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index]
+      if (Number(event?.seq) <= baselineSeq) break
+      if (event?.type !== 'assistant/message') continue
+      const text = textOfAssistantEvent(event)
+      if (text) return text
+    }
+    if (Date.now() >= deadline) return null
+    await delay(WAKE_REPLY_POLL_MS)
+  }
+}
+
+export function createDeliver(ctx, service) {
+  return async ({ trigger, instruction, agent }) => {
+    const subagents = ctx.get?.('subagents')
+
+    // The kernel resolves (and releases) the driver, because it needs one *before* the
+    // authority gate can be evaluated. Delivering to that same driver keeps one
+    // resolution per wake instead of two that could disagree.
+    if (!agent || !subagents?.sendMessage) {
+      service.noteEvent({ type: 'wake-unavailable', triggerId: trigger.id })
+      // Empty is read by the kernel as "nothing to say", which is the correct outcome
+      // for a wake we could not perform: never claim work that did not happen.
       return ''
     }
 
-    // No live driver yet. Cold-resume the persisted session so history is intact,
-    // then hand the wake to it.
-    if (agents?.resume && subagents?.sendMessage) {
-      const handle = await agents.resume({ resumeSessionId: trigger.sessionId })
-      try {
-        const text = `${instruction}\n\n## Scheduled check\n${trigger.title}\n${trigger.prompt}`
-        await subagents.sendMessage(
-          handle.agent,
-          trigger.sessionId,
-          [{ type: 'text', text }],
-          { signal: AbortSignal.timeout(120_000) },
-        )
-        return ''
-      } finally {
-        // Release the resumed driver; the session stays durable on disk and the
-        // next wake resumes it again. Holding it alive would defeat the point of
-        // waking on demand.
-        await handle.dispose?.()
-      }
-    }
+    const text = `${instruction}\n\n## Scheduled check\n${trigger.title}\n${trigger.prompt}`
 
-    service.noteEvent({ type: 'wake-unavailable', triggerId: trigger.id })
-    // Returning empty text is interpreted by the kernel as "nothing to say",
-    // which is the correct outcome for a wake we could not perform: never claim
-    // work that did not happen.
-    return ''
+    /**
+     * Read the wake turn's own reply, which is what the "is this worth saying?"
+     * decision is made on.
+     *
+     * `subagents.sendMessage` returns the accepted message's **inbox id**, never the
+     * assistant's reply — its signature is `Promise<MessageId>`. So a delivery path
+     * that only sends can never answer the kernel's question, and this one did not:
+     * it returned a constant empty string, every wake was classified
+     * `{speak:false, reason:'empty'}`, and **no notice was ever queued**. The gates,
+     * the ledger, the triggers and the panel all looked healthy throughout, because
+     * "nothing worth saying" is a normal, expected verdict.
+     *
+     * The reply is therefore read back from the session log, where it durably lands as
+     * an `assistant/message` event. The sequence is captured first so the wake's own
+     * reply is distinguishable from everything the human said earlier.
+     */
+    const sessions = ctx.get?.('sessions')
+    const before = sessionEvents(agent.session)
+    const baselineSeq = before.length ? Number(before[before.length - 1].seq) || 0 : 0
+
+    await subagents.sendMessage(
+      agent,
+      trigger.sessionId,
+      [{ type: 'text', text }],
+      { signal: AbortSignal.timeout(120_000) },
+    )
+
+    const reply = await awaitWakeReply(sessions, trigger.sessionId, baselineSeq)
+    if (reply === null) {
+      // The wake ran but its reply could not be read. Recording it as "nothing to
+      // say" would be a lie in the direction that hides breakage, so say what
+      // happened: the check-in is spent, and the reason is visible in the events.
+      service.noteEvent({
+        type: 'wake-reply-unreadable',
+        triggerId: trigger.id,
+        sessionId: trigger.sessionId,
+      })
+      return ''
+    }
+    return reply
   }
 }
 
@@ -765,6 +883,10 @@ export function apply(ctx) {
       service.kernel = new DenKernel({
         service,
         deliver: createDeliver(ctx, service),
+        // Without this the heartbeat's own wakes are refused at the authority gate:
+        // `start()` arms `setInterval(() => this.tick())`, so no agent is ever passed,
+        // and authority is attested against a session rather than stored.
+        resolveAgent: createAgentResolver(ctx),
         tickSeconds: service.state().tickSeconds,
         onEvent: (event) => service.noteEvent(event),
       })

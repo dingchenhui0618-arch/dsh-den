@@ -182,11 +182,21 @@ export class DenKernel {
    * @param {number} [options.tickSeconds] heartbeat cadence
    * @param {(wake: object) => Promise<string>} options.deliver performs the wake
    * @param {(event: object) => void} [options.onEvent] observability sink
+   * @param {(sessionId: string) => Promise<object|null>} [options.resolveAgent]
+   *   Finds or cold-resumes the driver for a conversation.
+   *
+   *   This exists because authority is *attested*, not asserted: `currentGrant`
+   *   verifies the grant against the immutable session log, so it needs a session to
+   *   read. The heartbeat calls `tick()` with no arguments, so without a resolver the
+   *   authority gate is asked about `undefined` and refuses every wake — a resident
+   *   assistant that can never once wake itself, while the mount, the tools, and the
+   *   gates all report healthy.
    */
-  constructor({ service, deliver, onEvent, tickSeconds = 60 }) {
+  constructor({ service, deliver, onEvent, tickSeconds = 60, resolveAgent = null }) {
     this.service = service
     this.deliver = deliver
     this.onEvent = onEvent ?? (() => {})
+    this.resolveAgent = resolveAgent
     this.tickSeconds = Math.max(5, tickSeconds)
     this.timer = null
     this.running = false
@@ -263,58 +273,120 @@ export class DenKernel {
     for (const { trigger } of due) {
       if (this.stopped) break
 
-      const verdict = evaluateGates({ state, agent, now })
-      if (!verdict.allowed) {
-        // A refused wake is recorded, not silently dropped. The budget gate in
-        // particular must be auditable, otherwise "why did it stop working?"
-        // is unanswerable.
-        bumpLedger('refused', new Date(now))
-        this.onEvent({ type: 'wake-refused', triggerId: trigger.id, gate: verdict.gate, reason: verdict.reason })
-        results.push({ triggerId: trigger.id, outcome: 'refused', gate: verdict.gate, reason: verdict.reason })
-        continue
+      /**
+       * Resolve the driver for this conversation before asking about authority.
+       *
+       * Authority in this plugin is *attested*: `currentGrant` does not trust a stored
+       * boolean, it re-reads the immutable session log and requires the bound human
+       * message to still be there. That means it needs a session. The heartbeat calls
+       * `tick()` with no arguments — `start()` is `setInterval(() => this.tick())` — so
+       * for the one caller that matters there is no agent unless one is resolved here.
+       *
+       * Resolving after the gate is not a reordering of convenience, it is the whole
+       * bug: the gate was being asked "does this undefined agent have authority?", got
+       * `undefined`, and refused. Every autonomous wake in the field was refused at the
+       * authority gate, and nothing anywhere said so, because a refusal is the correct
+       * outcome for an unauthorized wake and reads as one.
+       */
+      let resolved = agent ?? null
+      let release = null
+      if (!resolved && this.resolveAgent) {
+        try {
+          const found = await this.resolveAgent(trigger.sessionId)
+          if (found) {
+            resolved = found.agent ?? found
+            release = found.dispose ?? null
+          }
+        } catch (error) {
+          // A conversation that cannot be resumed is not authority. Record why and
+          // move on rather than throwing out of the heartbeat.
+          this.onEvent({
+            type: 'wake-unresolved',
+            triggerId: trigger.id,
+            message: String(error?.message ?? error),
+          })
+        }
       }
 
-      let output
       try {
-        output = await this.deliver({ trigger, instruction: WAKE_INSTRUCTION })
-      } catch (error) {
-        // The wake was admitted but never reached the conversation. Charge only
-        // the retry throttle — NOT `lastFiredAt`/`fireCount` — so this check-in
-        // is retried instead of being eaten until the next full interval. The
-        // trigger keeps its original cadence anchor either way.
-        this.lastError = String(error?.message ?? error)
-        markAttemptFailed(trigger, now)
-        this.onEvent({ type: 'wake-failed', triggerId: trigger.id, message: this.lastError, willRetry: true })
-        results.push({ triggerId: trigger.id, outcome: 'failed', reason: this.lastError, willRetry: true })
-        continue
+        const verdict = evaluateGates({ state, agent: resolved, now })
+        if (!verdict.allowed) {
+          // A refused wake is recorded, not silently dropped. The budget gate in
+          // particular must be auditable, otherwise "why did it stop working?"
+          // is unanswerable.
+          bumpLedger('refused', new Date(now))
+          this.onEvent({
+            type: 'wake-refused',
+            triggerId: trigger.id,
+            gate: verdict.gate,
+            reason: verdict.reason,
+            // Whether a driver was found is the difference between "the human has not
+            // authorized this" and "there was nobody to ask".
+            hadDriver: resolved !== null,
+          })
+          results.push({
+            triggerId: trigger.id,
+            outcome: 'refused',
+            gate: verdict.gate,
+            reason: verdict.reason,
+            hadDriver: resolved !== null,
+          })
+          continue
+        }
+
+        let output
+        try {
+          output = await this.deliver({ trigger, instruction: WAKE_INSTRUCTION, agent: resolved })
+        } catch (error) {
+          // The wake was admitted but never reached the conversation. Charge only
+          // the retry throttle — NOT `lastFiredAt`/`fireCount` — so this check-in
+          // is retried instead of being eaten until the next full interval. The
+          // trigger keeps its original cadence anchor either way.
+          this.lastError = String(error?.message ?? error)
+          markAttemptFailed(trigger, now)
+          this.onEvent({ type: 'wake-failed', triggerId: trigger.id, message: this.lastError, willRetry: true })
+          results.push({ triggerId: trigger.id, outcome: 'failed', reason: this.lastError, willRetry: true })
+          continue
+        }
+
+        // Only now is the run real: a turn was actually spent. Refusals and
+        // failures never reach this line, so the ledger answers "how many turns did
+        // the den actually take today?" rather than "how many times did it try?".
+        bumpLedger('turns', new Date(now))
+
+        // Committing the cadence after delivery is the ordering that matters: if
+        // the process dies mid-delivery the trigger is still due on the next boot,
+        // and the wake instruction is idempotent, so a duplicate costs one cheap
+        // turn rather than losing the check-in outright.
+        markFired(trigger, now)
+
+        const verdictOnOutput = interpretWakeResult(output)
+        if (!verdictOnOutput.speak) {
+          bumpLedger('skipped', new Date(now))
+          this.onEvent({ type: 'wake-silent', triggerId: trigger.id, reason: verdictOnOutput.reason })
+          results.push({ triggerId: trigger.id, outcome: 'silent', reason: verdictOnOutput.reason })
+          continue
+        }
+
+        // Queue first, then speak. If the process dies between the two, the notice
+        // is still durable and will be delivered on the next boot.
+        queueNotice(trigger.sessionId, verdictOnOutput.message, 'notice')
+        bumpLedger('spoken', new Date(now))
+        recordSpoke(now)
+        this.onEvent({ type: 'wake-spoke', triggerId: trigger.id })
+        results.push({ triggerId: trigger.id, outcome: 'spoke' })
+      } finally {
+        // Release a driver this wake resolved. The session stays durable on disk and
+        // the next wake resumes it anew; holding it would quietly turn an on-demand
+        // wake into a permanent process, which is the opposite of the design.
+        if (release) {
+          try {
+            await release()
+          } catch {
+            /* releasing must never fail the wake it just performed */
+          }
+        }
       }
-
-      // Only now is the run real: a turn was actually spent. Refusals and
-      // failures never reach this line, so the ledger answers "how many turns did
-      // the den actually take today?" rather than "how many times did it try?".
-      bumpLedger('turns', new Date(now))
-
-      // Committing the cadence after delivery is the ordering that matters: if
-      // the process dies mid-delivery the trigger is still due on the next boot,
-      // and the wake instruction is idempotent, so a duplicate costs one cheap
-      // turn rather than losing the check-in outright.
-      markFired(trigger, now)
-
-      const verdictOnOutput = interpretWakeResult(output)
-      if (!verdictOnOutput.speak) {
-        bumpLedger('skipped', new Date(now))
-        this.onEvent({ type: 'wake-silent', triggerId: trigger.id, reason: verdictOnOutput.reason })
-        results.push({ triggerId: trigger.id, outcome: 'silent', reason: verdictOnOutput.reason })
-        continue
-      }
-
-      // Queue first, then speak. If the process dies between the two, the notice
-      // is still durable and will be delivered on the next boot.
-      queueNotice(trigger.sessionId, verdictOnOutput.message, 'notice')
-      bumpLedger('spoken', new Date(now))
-      recordSpoke(now)
-      this.onEvent({ type: 'wake-spoke', triggerId: trigger.id })
-      results.push({ triggerId: trigger.id, outcome: 'spoke' })
     }
 
     return { due: due.length, results }
