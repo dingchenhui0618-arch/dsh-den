@@ -192,6 +192,11 @@
 
 > **未完成的验收（2026-10-12，如实记录）**：把本轮改动送出去只有两条路——推送远端、重新激活插件——两者在本会话都被上层自动拒绝（门控判为 `ask`，而本会话审批被禁用故拒绝）。因此提交目前只在本地，运行中的 Host 仍是旧代码（状态文件尚未出现即为证）。批准其中任意一步即可闭环。不绕过：那属于规避自己的门控。
 
+> **浏览器半边已实测存活（2026-10-12，读自运行中的客户端）**：通过 Client `Slots` provider 查 `sidebar.panellist` 与 `main` 两个精确 root，占用者里都有 `dsh-den` 且 `active: true`——
+> `{registrant:"dsh-den", id:"dsh-den.status", order:245}` 与 `{registrant:"dsh-den", key:"dsh-den.status"}`。
+> 这比离线测试强得多，因为它顺带证明了整条加载链在真浏览器里跑通：bundle id 与包名一致、`require('react')` **确实解析成功**（否则 factory 会在注册前抛错）、`id` 与 `key` 一致。契约定型为 `test/client-contract.test.mjs`（7 项）。
+> **仍未验证的是这条链上剩下的一段**：面板按钮发出 HTTP 调用、经 `connection.fetch` 路由回到宿主。宿主侧已由 `test/panel-actions.test.mjs` 走真实路由验证；浏览器侧尚未观测到一次真实点击。
+
 ---
 
 ## 5. 与参考实现的边界
