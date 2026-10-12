@@ -54,7 +54,7 @@ All state lives in a **self-contained** `$DSH_HOME/den/` tree, so it can be pack
 ```bash
 npm test          # 200 unit + integration tests
 npm run check:bundle   # 31 offline bundle-contract checks
-npm run check:ui       # 39 panel interaction checks
+npm run check:ui       # 41 panel interaction checks
 npm run check:acceptance   # the two reliability goals, as one observable lifecycle
 npm run check:package      # what a tarball install actually ships
 npm run verify         # all five
@@ -103,7 +103,7 @@ These were read out of the running Host rather than assumed, and two of them cha
 - **D2 authority + notices** — grant binding, expiry, dedup *(done, tested)*
 - **D3 autonomy kernel** — heartbeat, the four-gate decision, cold wake *(done, tested; delivery path is wired, failed wakes retry rather than being consumed)*
 - **D4 outbound approval gate** — pre-execute listener plus a monotonic guard, outside the assistant's own prompt *(done, tested)*
-- **D5 memory + status UI** — scenario-isolated memory domains *(done, tested)*; interactive resident panel *(done: registers in the live sidebar, verified through 39 interaction checks and 19 route tests)*
+- **D5 memory + status UI** — scenario-isolated memory domains *(done, tested)*; interactive resident panel *(done: registers in the live sidebar, verified through 41 interaction checks and 22 route tests)*
 - **D6 7×24** — supervised survival: killed process recovers with no human intervention, verified over a long run
   - *Progress:* the watchdog distinguishes a wedged Host from a healthy one (`StrictHttp`; a TCP-listening-but-HTTP-dead Host was previously logged as healthy), and the plugin's own heartbeat now self-heals instead of deferring permanently. What is still open is a **long unattended run** — the acceptance criterion is a kill-and-recover observed without a human, not a configuration.
 
