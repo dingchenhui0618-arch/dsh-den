@@ -3,7 +3,7 @@
 > A **7×24 resident personal assistant** for [DeepSeek Harness](https://github.com/deepseek-ai/dsh).
 > Not another chat window — an assistant that stays on, keeps its own memory, works while you are away, and stops to ask before it acts outside your trust boundary.
 
-Status: **the safety-critical core is implemented and tested (76/76).** The plugin is installed into a real DSH 0.2.0-rc.2 profile and resolves through the Host's own loader. Live activation is pending a Host restart; per-scenario memory and the status widget are next. See [DESIGN.md](DESIGN.md) for the architecture and acceptance criteria.
+Status: **the core is implemented, tested (103/103), and live.** The plugin is activated inside a real DSH 0.2.0-rc.2 desktop profile — `fiberPhase: active` — and registers 11 model-facing tools, the approval guard, and the heartbeat. Remaining work is D6 (supervised 7×24 survival) and the status widget. See [DESIGN.md](DESIGN.md) for the architecture and acceptance criteria.
 
 ---
 
@@ -38,15 +38,16 @@ These are hard constraints, not aspirations. The reference implementations below
 | `src/atom.js` | Crash-safe JSON persistence: atomic publish, fsync barriers, content-addressed "publish once", validation-gated reads. Directory fsync degrades gracefully where the platform forbids it (Windows). |
 | `src/grant.js` | Human-bound standing autonomy. Verifies the grant against the immutable session log; refuses to record authority for a caller that is not a live direct human driver. |
 | `src/notices.js` | Durable notices with a 12-hour expiry for observations, no expiry for ideas, and content-hash deduplication. |
-| `src/triggers.js` | Schedule definitions (`once` / `interval` / `daily` / `weekly`) with a 300-second interval floor, a bounded prompt, and cadence that survives a shutdown without replaying a backlog. |
-| `src/kernel.js` | The heartbeat and the three gates: **quiet hours → pacing and budget → value**. Re-entrancy guarded, every refusal recorded in a durable daily ledger. |
+| `src/triggers.js` | Schedule definitions (`once` / `interval` / `daily` / `weekly`) with a 300-second interval floor, a bounded prompt, and cadence that survives a shutdown without replaying a backlog. A wake that was admitted but never reached the conversation is **retried** (15-minute throttle) instead of being charged and lost. |
+| `src/kernel.js` | The heartbeat and the four gates: **authority → budget → quiet → pacing**. Re-entrancy guarded, every refusal recorded in a durable daily ledger, and the cadence advance committed only *after* a wake is delivered. |
+| `src/memory.js` | Scenario-isolated long-term memory: one file per scenario, so personal context is structurally unable to surface while working in another domain. Deterministic keyword-plus-recency recall, no embeddings, corruption degrades to an empty store. |
 | `src/gate.js` | The outbound approval gate: credentials refused, outbound actions questioned, unknown tools fail closed. Installed as *both* a pre-execute listener and a monotonic guard. |
-| `src/index.js` | Plugin entry point, seven model-facing tools, and the wiring. Zero external imports. |
+| `src/index.js` | Plugin entry point, eleven model-facing tools, and the wiring. Zero external imports. |
 
 All state lives in a **self-contained** `$DSH_HOME/den/` tree, so it can be packed and moved to another machine or a server without hunting through unrelated DSH storage.
 
 ```bash
-node --test test/primitives.test.mjs test/kernel.test.mjs test/gate.test.mjs test/mount.test.mjs
+node --test test/primitives.test.mjs test/kernel.test.mjs test/gate.test.mjs test/mount.test.mjs test/memory.test.mjs
 ```
 
 ### Verified Host contracts
@@ -54,7 +55,7 @@ node --test test/primitives.test.mjs test/kernel.test.mjs test/gate.test.mjs tes
 These were read out of the running Host rather than assumed, and two of them changed the implementation:
 
 - `@deepseek-ai/cordis` is **not resolvable** from a profile's `node_modules`. A plugin that imports it fails to load, so `dsh-den` uses only the injected `ctx`.
-- A lazily resolved `ctx.get('tools')` is **not** the same object as the injected `ctx.tools` property. Both the gate and the tool registration take the registry as an explicit parameter because of this.
+- Reading `ctx.<service>` for a service that is **not** named in `export const inject` throws `cannot get property "<key>" without inject`, and `apply` never runs. The convention, confirmed against two released plugins: injected services are read as **properties** (`ctx.tools`), while `ctx.get(...)` is reserved for deliberately optional, undeclared services.
 - `PreToolDecision.displayReason` is a **localised object** (`{ en: string, [locale]: string }`), not a string. `info` exists only on the `deny` branch.
 - `ToolExecution.agent` is **optional**; `signal` is required.
 - `agent/status` carries exactly `'idle' | 'running'`, and `.status` is the state *just entered*.
@@ -63,11 +64,11 @@ These were read out of the running Host rather than assumed, and two of them cha
 
 ## Roadmap
 
-- **D1 skeleton** — installable plugin, durable state, status surface *(done: bundle registered in a real profile; entry resolves through the Host loader; activation pending a Host restart)*
+- **D1 skeleton** — installable plugin, durable state, status surface *(done: bundle registered in a real profile; `fiberPhase: active` through the Host loader)*
 - **D2 authority + notices** — grant binding, expiry, dedup *(done, tested)*
-- **D3 autonomy kernel** — heartbeat, the three-gate decision, cold wake *(done, tested; delivery path is wired)*
+- **D3 autonomy kernel** — heartbeat, the four-gate decision, cold wake *(done, tested; delivery path is wired, failed wakes retry rather than being consumed)*
 - **D4 outbound approval gate** — pre-execute listener plus a monotonic guard, outside the assistant's own prompt *(done, tested)*
-- **D5 memory + status UI** — per-scenario memory domains, resident status surface *(next)*
+- **D5 memory + status UI** — scenario-isolated memory domains *(done, tested)*; resident status widget *(next)*
 - **D6 7×24** — supervised survival: killed process recovers with no human intervention, verified over a long run
 
 ## 7×24 in two stages
@@ -87,6 +88,8 @@ Built independently, with two projects read as read-only references for *mechani
 - [86cloudyun-afk/dsh-bot](https://github.com/86cloudyun-afk/dsh-bot) — multi-agent isolation, memory domains, workspace UI
 
 Neither combines standing autonomy with multi-agent structure; that intersection is what this project is for.
+
+This is an **honest positioning, not a green-field claim.** `dsh-muse` publishes its own `docs/gaps.md`, and the top items it lists — a memory seam, event-source ingress, daemonisation, and a mandatory outbound approval point so that credentials never leave the trust domain — are exactly the areas `dsh-den` implements. Read `dsh-den` as a more careful implementation of gaps a released competitor left open, not as a capability that did not previously exist.
 
 ## License
 

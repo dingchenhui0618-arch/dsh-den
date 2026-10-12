@@ -91,6 +91,14 @@ export function normalizeTrigger(input) {
     /** Whether a fired result may interrupt the human, or is recorded only. */
     maySpeak: input.maySpeak === true,
     lastFiredAt: null,
+    /**
+     * Last time a wake was *attempted* and failed to reach the conversation.
+     *
+     * Kept separate from `lastFiredAt` so a failed delivery can be retried
+     * without re-dating the cadence, and so the catch-up step has something to
+     * measure against. A trigger that never failed leaves this null.
+     */
+    lastAttemptAt: null,
     fireCount: 0,
   }
 
@@ -231,6 +239,10 @@ export function dueTriggers(now = Date.now()) {
   for (const trigger of valid) {
     if (!trigger.enabled) continue
     if (Number.isSafeInteger(trigger.maxRuns) && trigger.fireCount >= trigger.maxRuns) continue
+    // An earlier failed attempt deliberately does not advance `lastFiredAt`, so
+    // the original cadence stays intact; the retry throttle is applied here so a
+    // dead conversation cannot be hammered once per heartbeat.
+    if (retryTooSoon(trigger, now)) continue
     const next = nextTriggerAt(trigger, trigger.lastFiredAt ?? 0)
     if (next !== undefined && next <= now) {
       due.push({ trigger, dueAt: next })
@@ -240,7 +252,29 @@ export function dueTriggers(now = Date.now()) {
   return due
 }
 
-/** Record that a trigger fired, advancing its cadence and run count. */
+/**
+ * How long to wait before retrying a wake that failed to reach the conversation.
+ *
+ * Long enough that a broken adapter is not polled every heartbeat, short enough
+ * that a transient failure inside a 24h schedule is still retried same-day.
+ */
+export const FAILED_WAKE_RETRY_MS = 15 * 60 * 1000
+
+/** Whether a failed wake for this trigger is still inside its retry cool-down. */
+export function retryTooSoon(trigger, now = Date.now()) {
+  if (!Number.isFinite(trigger?.lastAttemptAt)) return false
+  // Only throttle when the failure is newer than the last success: a `lastFiredAt`
+  // after `lastAttemptAt` means the cadence has moved on and this is a fresh due.
+  if (Number.isFinite(trigger.lastFiredAt) && trigger.lastFiredAt > trigger.lastAttemptAt) return false
+  return now - trigger.lastAttemptAt < FAILED_WAKE_RETRY_MS
+}
+
+/**
+ * Record that a trigger fired, advancing its cadence and run count.
+ *
+ * @param {object} trigger stored trigger
+ * @param {number} [at] when the wake was admitted
+ */
 export function markFired(trigger, at = Date.now()) {
   const next = { ...trigger, lastFiredAt: at, fireCount: trigger.fireCount + 1 }
   // A `once` trigger has served its purpose; disabling it keeps it visible in
@@ -248,4 +282,15 @@ export function markFired(trigger, at = Date.now()) {
   if (next.kind === 'once') next.enabled = false
   if (Number.isSafeInteger(next.maxRuns) && next.fireCount >= next.maxRuns) next.enabled = false
   return saveTrigger(next)
+}
+
+/**
+ * Record a wake that was admitted but never reached the conversation.
+ *
+ * Deliberately does **not** touch `lastFiredAt` or `fireCount`: the run did not
+ * happen, so charging it would silently drop the check-in and re-date the
+ * cadence. Only the retry throttle advances.
+ */
+export function markAttemptFailed(trigger, at = Date.now()) {
+  return saveTrigger({ ...trigger, lastAttemptAt: at })
 }

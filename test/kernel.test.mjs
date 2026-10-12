@@ -17,6 +17,7 @@ process.env.DSH_HOME = sandbox
 
 const { writeJsonAtomic, digest } = await import('../src/atom.js')
 const {
+  FAILED_WAKE_RETRY_MS,
   MAX_PROMPT_CHARS,
   MIN_INTERVAL_SECONDS,
   deleteTrigger,
@@ -25,6 +26,7 @@ const {
   markFired,
   nextTriggerAt,
   normalizeTrigger,
+  readTrigger,
   saveTrigger,
 } = await import('../src/triggers.js')
 const {
@@ -406,6 +408,61 @@ test('a failing delivery is recorded and does not abort the heartbeat', async ()
 
   assert.equal(result.results[0].outcome, 'failed')
   assert.ok(events.some((event) => event.type === 'wake-failed'))
+  assert.equal(events.find((event) => event.type === 'wake-failed').willRetry, true)
+
+  // The defect this guards: charging `lastFiredAt` before delivery consumed the
+  // trigger, so a single transient failure silently ate the whole interval.
+  const stored = readTrigger(trigger.id)
+  assert.equal(stored.fireCount, 0, 'a failed wake must not count as a fired run')
+  assert.equal(stored.lastFiredAt, 1000, 'a failed wake must not re-date the cadence')
+  assert.equal(stored.lastAttemptAt, 1000 + 300_000, 'the attempt itself is still recorded')
+
+  // Because the cadence did not move, the check-in is still due — just throttled.
+  assert.equal(dueTriggers(1000 + 300_000).length, 0, 'the retry must not hammer every heartbeat')
+  assert.equal(dueTriggers(1000 + 300_000 + FAILED_WAKE_RETRY_MS).length, 1, 'it must become due again')
+})
+
+test('a wake that fails once is retried and then delivered, not lost', async () => {
+  const sessionId = 'session-retry'
+  const agent = authorizedAgent(sessionId)
+  const trigger = normalizeTrigger({
+    kind: 'interval',
+    everySeconds: 300,
+    sessionId,
+    title: 'retry-check',
+    prompt: 'Report only if it broke.',
+  })
+  saveTrigger({ ...trigger, createdAt: 1000, lastFiredAt: 1000 })
+
+  const service = {
+    state: () => ({ dailyTurnBudget: 50, cooldownSeconds: 0, quietHours: null }),
+  }
+  let attempts = 0
+  const kernel = new DenKernel({
+    service,
+    deliver: async () => {
+      attempts += 1
+      if (attempts === 1) throw new Error('model unavailable')
+      return 'CI is red on master.'
+    },
+    onEvent: () => {},
+  })
+
+  const dueAt = 1000 + 300_000
+  const first = await kernel.tick({ agent, now: dueAt })
+  assert.equal(first.results[0].outcome, 'failed')
+
+  // The whole point: after the throttle expires the same check-in runs again,
+  // rather than waiting a full interval for a model that was down for one call.
+  const second = await kernel.tick({ agent, now: dueAt + FAILED_WAKE_RETRY_MS })
+  assert.equal(second.results[0].outcome, 'spoke', 'the retry must actually speak')
+
+  const stored = readTrigger(trigger.id)
+  assert.equal(stored.fireCount, 1, 'exactly one run is charged for the recovered check-in')
+  assert.equal(stored.lastFiredAt, dueAt + FAILED_WAKE_RETRY_MS)
+
+  const notices = allNotices()
+  assert.equal(notices.length, 1, 'the recovered check-in leaves exactly one notice, not two')
 })
 
 test('start and stop leave no timer behind', () => {

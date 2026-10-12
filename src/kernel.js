@@ -8,15 +8,17 @@
  * uninstalled.
  *
  * Gate order is deliberate:
- *   1. QUIET   — is the human asleep or focused right now?
- *   2. PACING  — has the den spoken too recently, or spent today's budget?
- *   3. VALUE   — is this result worth an interruption?
+ *   1. AUTHORITY — is standing autonomy still granted *right now*?
+ *   2. BUDGET    — is today's self-initiated turn budget spent?
+ *   3. QUIET     — is the human asleep or focused right now?
+ *   4. PACING    — has the den spoken too recently?
  *
- * Only gates 1 and 2 can be evaluated mechanically and are enforced here. Gate 3
- * (VALUE) is enforced by the *model*: the den is handed a bounded instruction that
- * tells it to emit a single SKIP token when nothing is worth saying. This module
- * enforces the part that must not depend on the model's cooperation, and records
- * the part that does.
+ * Only these four can be evaluated mechanically and are enforced here. The
+ * separate question of whether a result deserves an interruption is gate 5
+ * (VALUE), and it is enforced by the *model*: the den is handed a bounded
+ * instruction telling it to emit a single SKIP token when nothing is worth
+ * saying. This module enforces the part that must not depend on the model's
+ * cooperation, and records the part that does.
  *
  * Every self-initiated run re-checks live authority. A trigger is never a grant.
  */
@@ -24,7 +26,7 @@
 import { denPath, digest, readJson, writeJsonAtomic } from './atom.js'
 import { hasAutonomy } from './grant.js'
 import { queueNotice } from './notices.js'
-import { dueTriggers, markFired } from './triggers.js'
+import { dueTriggers, markAttemptFailed, markFired } from './triggers.js'
 
 /** Instruction handed to the den for a self-initiated turn. */
 export const WAKE_INSTRUCTION = [
@@ -249,18 +251,31 @@ export class DenKernel {
         continue
       }
 
-      bumpLedger('turns', new Date(now))
-      markFired(trigger, now)
-
       let output
       try {
         output = await this.deliver({ trigger, instruction: WAKE_INSTRUCTION })
       } catch (error) {
+        // The wake was admitted but never reached the conversation. Charge only
+        // the retry throttle — NOT `lastFiredAt`/`fireCount` — so this check-in
+        // is retried instead of being eaten until the next full interval. The
+        // trigger keeps its original cadence anchor either way.
         this.lastError = String(error?.message ?? error)
-        this.onEvent({ type: 'wake-failed', triggerId: trigger.id, message: this.lastError })
-        results.push({ triggerId: trigger.id, outcome: 'failed', reason: this.lastError })
+        markAttemptFailed(trigger, now)
+        this.onEvent({ type: 'wake-failed', triggerId: trigger.id, message: this.lastError, willRetry: true })
+        results.push({ triggerId: trigger.id, outcome: 'failed', reason: this.lastError, willRetry: true })
         continue
       }
+
+      // Only now is the run real: a turn was actually spent. Refusals and
+      // failures never reach this line, so the ledger answers "how many turns did
+      // the den actually take today?" rather than "how many times did it try?".
+      bumpLedger('turns', new Date(now))
+
+      // Committing the cadence after delivery is the ordering that matters: if
+      // the process dies mid-delivery the trigger is still due on the next boot,
+      // and the wake instruction is idempotent, so a duplicate costs one cheap
+      // turn rather than losing the check-in outright.
+      markFired(trigger, now)
 
       const verdictOnOutput = interpretWakeResult(output)
       if (!verdictOnOutput.speak) {

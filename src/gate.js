@@ -270,8 +270,12 @@ export function installGate(ctx, { tools, onDecision } = {}) {
     return classification.reason
   }
 
-  disposers.push(ctx.on('tools/pre-execute', preExecute))
+  // The monotonic guard carries the rules that must never be talked around, so it
+  // is installed unconditionally. The pre-execute listener is what needs an event
+  // bus, and a composition without one must still get the hard rules rather than
+  // losing the whole gate — and with it the plugin — to a missing listener API.
   disposers.push(tools.guard(guard))
+  if (typeof ctx.on === 'function') disposers.push(ctx.on('tools/pre-execute', preExecute))
 
   return () => {
     for (const dispose of disposers) {

@@ -68,6 +68,10 @@ function fakeHost({ withSubagents = true } = {}) {
   }
 
   const ctx = {
+    // Injected properties, as the real Cordis context exposes services it has
+    // declared via `inject`. The plugin reads these, not `ctx.get(...)`.
+    tools: state.toolsApi,
+    agents: state.agentsApi,
     effect(fn) {
       const dispose = fn()
       state.effects.push(dispose)
@@ -115,6 +119,10 @@ test('activation registers every model-facing tool with an explicit schema', () 
   assert.deepEqual(names, [
     'den_configure',
     'den_explain_gate',
+    'den_forget',
+    'den_recall',
+    'den_remember',
+    'den_scenarios',
     'den_schedule_check',
     'den_schedule_delete',
     'den_schedule_list',
@@ -144,7 +152,7 @@ test('the heartbeat starts when a delivery path exists and stops on disposal', (
 test('activation is fully reversible', () => {
   const { ctx, state } = fakeHost()
   const dispose = apply(ctx)
-  assert.equal(state.tools.length, 7)
+  assert.equal(state.tools.length, 11)
   dispose()
   assert.equal(state.tools.length, 0, 'disposal must unregister every tool')
   assert.equal(state.guards.length, 0, 'disposal must remove the guard')
@@ -329,10 +337,10 @@ test('registering tools twice does not duplicate them', () => {
   const service = new DenService(ctx)
   const disposeA = registerTools(state.toolsApi, service)
   const disposeB = registerTools(state.toolsApi, service)
-  assert.equal(state.tools.length, 14, 'the registry itself allows two sets; disposal must be exact')
+  assert.equal(state.tools.length, 22, 'the registry itself allows two sets; disposal must be exact')
 
   disposeA()
-  assert.equal(state.tools.length, 7)
+  assert.equal(state.tools.length, 11)
   disposeB()
   assert.equal(state.tools.length, 0)
 })

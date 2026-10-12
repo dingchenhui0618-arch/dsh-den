@@ -11,9 +11,16 @@
  *   boundary rather than through Node resolution: `@deepseek-ai/cordis` is not
  *   resolvable from a profile's own `node_modules`, so a plugin that imports it
  *   fails to load. Only the Host-provided `ctx` is used.
- * - Only `agents` is a hard dependency. Everything else is resolved lazily
- *   through `ctx.get(...)`, so a profile missing an optional service still loads
- *   the plugin and degrades a single capability instead of failing activation.
+ * - **Services are declared, not probed.** Cordis throws
+ *   `cannot get property "<key>" without inject` when a plugin reads a service it
+ *   never declared, and `apply` does not run at all as a result. So `inject` lists
+ *   what this plugin genuinely requires, and the code reads the injected
+ *   properties instead of reaching for `ctx.get`.
+ * - **`agents` and `tools` are hard dependencies; `subagents` is not.** Without
+ *   the agent registry there is nothing to authorize; without the tool registry
+ *   the approval gate cannot be installed, and an ungated resident assistant is
+ *   an unsafe build rather than a degraded one — it must fail activation. The
+ *   delivery path is genuinely optional, so the kernel defers when it is absent.
  * - The approval gate is installed **before** anything the model controls, and it
  *   is installed through `ctx.tools.guard`, which the Host documents as
  *   monotonic: no later listener can turn its denial back into permission.
@@ -28,9 +35,10 @@ import { allNotices, isExpired, pendingNotices, queueNotice } from './notices.js
 import { installGate, RISK, classifyCall } from './gate.js'
 import { DenKernel, evaluateGates, readLedger, ledgerPath } from './kernel.js'
 import { deleteTrigger, dueTriggers, listTriggers, normalizeTrigger, saveTrigger } from './triggers.js'
+import { ENTRY_KINDS, forget, recall, remember, scenarios } from './memory.js'
 
 export const name = 'dsh-den'
-export const inject = ['agents']
+export const inject = ['agents', 'tools']
 
 const STATE_VERSION = 1
 
@@ -494,6 +502,92 @@ export function registerTools(tools, service) {
     },
   })
 
+  register({
+    name: 'den_remember',
+    description:
+      'Store a durable fact, preference, decision, or open thread in one scenario\'s long-term memory. Scenarios are isolated: what is stored here is never visible from any other scenario. Re-storing the same text refreshes it instead of duplicating it. Use this for things worth knowing months from now, not for conversation state.',
+    parameters: {
+      type: 'object',
+      properties: {
+        scenario: { type: 'string', description: 'Isolation domain, e.g. "personal", "work", or a project name.' },
+        text: { type: 'string', description: 'The memory itself, in one self-contained sentence.' },
+        kind: {
+          type: 'string',
+          enum: ENTRY_KINDS,
+          description: 'fact = durable truth; preference = how the human likes things; decision = a choice already made; open-thread = something unresolved.',
+        },
+      },
+      required: ['scenario', 'text'],
+      additionalProperties: false,
+    },
+    output: { schema: { type: 'object' }, render: (_args, value) => text(value) },
+    async execute(args) {
+      try {
+        const result = remember(String(args.scenario), String(args.text), String(args.kind ?? 'fact'))
+        return { ok: true, id: result.id, created: result.created, evicted: result.evicted, scenario: String(args.scenario) }
+      } catch (error) {
+        return { ok: false, error: String(error?.message ?? error) }
+      }
+    },
+  })
+
+  register({
+    name: 'den_recall',
+    description:
+      'Search ONE scenario\'s long-term memory and return the most relevant entries. This is scoped by design: personal context cannot surface while working in another scenario, and vice versa. Retrieval is deterministic keyword overlap plus recency, so it can miss paraphrases — if a search returns nothing, try the words actually used when the memory was stored.',
+    parameters: {
+      type: 'object',
+      properties: {
+        scenario: { type: 'string', description: 'The scenario to search. Only this scenario is read.' },
+        query: { type: 'string', description: 'What to look for.' },
+        limit: { type: 'integer', description: 'Maximum entries, 1..50. Default 8.' },
+      },
+      required: ['scenario'],
+      additionalProperties: false,
+    },
+    output: { schema: { type: 'object' }, render: (_args, value) => text(value) },
+    async execute(args) {
+      const limit = Number.isSafeInteger(args?.limit) ? Math.min(Math.max(args.limit, 1), 50) : 8
+      const result = recall(String(args.scenario), String(args.query ?? ''), { limit })
+      return {
+        scenario: String(args.scenario),
+        count: result.entries.length,
+        considered: result.considered,
+        truncated: result.truncated,
+        entries: result.entries.map((entry) => ({ id: entry.id, kind: entry.kind, text: entry.text, score: entry.score })),
+      }
+    },
+  })
+
+  register({
+    name: 'den_forget',
+    description: 'Delete one long-term memory by its id. Ids come from den_recall or den_remember.',
+    parameters: {
+      type: 'object',
+      properties: {
+        scenario: { type: 'string', description: 'The scenario holding the memory.' },
+        id: { type: 'string', description: 'Memory id.' },
+      },
+      required: ['scenario', 'id'],
+      additionalProperties: false,
+    },
+    output: { schema: { type: 'object' }, render: (_args, value) => text(value) },
+    async execute(args) {
+      return forget(String(args.scenario), String(args.id))
+    },
+  })
+
+  register({
+    name: 'den_scenarios',
+    description:
+      'List the memory scenarios that currently hold anything, with entry counts. Use this before recalling to find the right scenario name rather than guessing one.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    output: { schema: { type: 'object' }, render: (_args, value) => text(value) },
+    async execute() {
+      return { scenarios: scenarios() }
+    },
+  })
+
   return () => {
     for (const dispose of disposers) {
       try {
@@ -523,23 +617,28 @@ export function apply(ctx) {
 
     // The gate goes in first. Nothing the den does should ever run before the
     // thing that decides whether it is allowed to.
-    const tools = ctx.get?.('tools')
-    if (tools?.guard) {
-      service.gateDisposer = installGate(ctx, {
-        tools,
-        onDecision: ({ classification, decision, tool, sessionId }) => {
-          service.noteEvent({ type: 'gate', tool, rule: classification.rule, risk: classification.risk, decision: decision.kind, sessionId })
-        },
-      })
-      disposers.push(service.gateDisposer)
-      if (tools.register) disposers.push(registerTools(tools, service))
-    }
+    //
+    // `tools` is an injected property, not a `ctx.get(...)` probe. Cordis throws
+    // `cannot get property "tools" without inject` for an undeclared service, so
+    // declaring it in `inject` is what makes this line legal. It is deliberately a
+    // hard dependency: a resident assistant holding real authority with no
+    // registered approval gate is not a degraded build, it is an unsafe one, and
+    // it should fail activation rather than load quietly.
+    const tools = ctx.tools
+    service.gateDisposer = installGate(ctx, {
+      tools,
+      onDecision: ({ classification, decision, tool, sessionId }) => {
+        service.noteEvent({ type: 'gate', tool, rule: classification.rule, risk: classification.risk, decision: decision.kind, sessionId })
+      },
+    })
+    disposers.push(service.gateDisposer)
+    disposers.push(registerTools(tools, service))
 
     // The heartbeat only starts when there is something it could actually do.
     // A kernel with no way to deliver a wake would count turns against the
     // budget and produce nothing, which is worse than not running.
     const subagents = ctx.get?.('subagents')
-    if (subagents?.sendMessage && tools?.register) {
+    if (subagents?.sendMessage) {
       const deliver = createDeliver(ctx, service)
       service.kernel = new DenKernel({
         service,
