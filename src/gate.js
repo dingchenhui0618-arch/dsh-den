@@ -81,11 +81,27 @@ const TOOL_RISK = {
   // Reaching the network, publishing, or spending.
   web_fetch: RISK.ask,
   web_search: RISK.allow,
-  // Shells are reviewed by pattern rather than blanket-denied, because most
-  // legitimate developer work goes through them.
-  bash: RISK.ask,
-  pwsh: RISK.ask,
-  shell: RISK.ask,
+  // Shells are allowed by default because most developer work is local and
+  // read-only. Secret reads and outbound/destructive patterns are checked
+  // above first, so those still deny or ask before the tool-specific rule.
+  // Keeping these at `allow` is also necessary when the Host runs with
+  // `approval: never`: ordinary local inspection must not become an automatic
+  // `user rejected` result merely because the custom gate has no prompt path.
+  bash: RISK.allow,
+  pwsh: RISK.allow,
+  shell: RISK.allow,
+
+  // DSH's built-in inspection, coordination, and question surfaces. These
+  // operate on local session/UI state and do not create durable or outbound
+  // effects. Write/edit/job-control tools remain on the fail-closed default.
+  cordis_inspect_list: RISK.allow,
+  cordis_inspect_query: RISK.allow,
+  list_agents: RISK.allow,
+  job_list: RISK.allow,
+  team_task_list: RISK.allow,
+  grep: RISK.allow,
+  glob: RISK.allow,
+  ask_user_question: RISK.allow,
 
   // The den's own read-only surface.
   //

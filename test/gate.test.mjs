@@ -100,6 +100,26 @@ test('a declared read-only search passes without asking', () => {
   assert.equal(decide(result).kind, 'allow')
 })
 
+test('local inspection shells and DSH read-only tools pass without approval', () => {
+  for (const [name, args] of [
+    ['pwsh', { command: 'pwd; node -v; python --version' }],
+    ['bash', { command: 'printf hello' }],
+    ['shell', { command: 'git status --short' }],
+    ['cordis_inspect_list', {}],
+    ['cordis_inspect_query', { query: 'tools' }],
+    ['list_agents', {}],
+    ['job_list', {}],
+    ['team_task_list', {}],
+    ['grep', { pattern: 'den_status', path: 'src' }],
+    ['glob', { pattern: '**/*.js' }],
+    ['ask_user_question', { questions: [] }],
+  ]) {
+    const result = classifyCall(call(name, args))
+    assert.equal(result.risk, RISK.allow, `${name} must pass without asking`)
+    assert.equal(decide(result).kind, 'allow', `${name} must not raise an approval prompt`)
+  }
+})
+
 test("the den's own read-only tools do not raise an approval prompt", () => {
   // Measured defect, not a hypothetical: `den_status` fell through to the unknown
   // -tool default and produced `approval/asked: unrecognised tool den_status`,
