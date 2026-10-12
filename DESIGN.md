@@ -231,6 +231,14 @@
 > **两次都被测试放行的原因值得单独记住**：两个离线校验器都提供一个假 `ctx`/`host`，而假对象是**照着代码的假设写的**。与实现同形的替身无法证伪实现——它会和错代码一致地通过。所以第三次的判据换成了**外部事实**：本机在跑的其他插件怎么写。`test/client-services.test.mjs` 现在断言 bundle 里不出现 `connection.rpc` 或 `host.call`，`test/client-contract.test.mjs` 断言客户端路径与宿主 `ROUTE` 相等且等于 `/<包名>`。
 >
 > 另外，离线替身现在必须自备 `fetch`——这本身就是个信号：bundle 真的在走浏览器 API 了。
+>
+> **随后拿宿主自己的 `webServer` 契约逐条核对（同一天）**，结论是这条路选对了，而且顺带查出上面那版第二个真实 bug：
+>
+> - `webServer.access.hardDependency.inject = ['webServer']`，表达式 `ctx.webServer` —— 与真实插件一致，声明形式正确。
+> - `register(route: WebRoute): () => void`，其中 `WebRoute = { kind: 'exact' | 'prefix', path: string, handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void> }`。
+> - 文档明确 **`Duplicate (kind, path) throws`** —— 所以 mount 必须捕获注册异常（`fail('register-threw', …)`），这正是 mount 结果要带 `reason` 的原因。
+> - **`req` 的类型就是 Node `IncomingMessage`**。这直接证伪了我第一版实现里的 `await req.text()`：`IncomingMessage` 没有 `text()`，`dsh-vision-diff` 也是用 `req.on('data')` / `req.on('end')` 读 body 的。**面板的第一次 POST 会在宿主里当场抛错**，而两个离线替身都不会发现——因为替身的 `req` 是照代码的假设写的（只有一个 `text()`）。这是同一个错误的第三次现形：**替身与实现同形，就无法证伪实现。** 现在替身是真正会 emit `data`/`end` 的 Node 流形状，跑的读路径就是宿主里的读路径。
+> - 关于 `res`：检查器把 `WebRoute.handler` 的第二参写成 `ServerResponse`，但那是 `connection` 模块里同名 RPC 类型的引用（同一份输出里它被列在 `referencedTypes` 中），不是 HTTP 响应。实际在跑的三个插件一律按 Node `ServerResponse` 用：`res.statusCode = …`、`res.setHeader(…)`、`res.end(…)`。我的实现走这条，并同时接受 web `Response`，以便 handler 不启 HTTP 服务也能直接调用。
 
 ---
 
