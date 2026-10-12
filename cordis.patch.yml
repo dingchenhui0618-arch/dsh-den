@@ -1,0 +1,5 @@
+# dsh-den mounts as a profile-level plugin row. No host rows are overridden.
+- insert:
+    - id: dsh-den
+      name: dsh-den
+      config: {}

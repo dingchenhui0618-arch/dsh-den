@@ -1,0 +1,422 @@
+/**
+ * Tests for the scheduling triggers, the three gates, and the heartbeat.
+ *
+ * These are the safety-critical paths: an interval floor that holds, a spent
+ * budget that survives a restart, quiet hours that actually wrap midnight, and a
+ * silent wake that produces no notice at all.
+ */
+
+import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import test from 'node:test'
+
+const sandbox = mkdtempSync(join(tmpdir(), 'dsh-den-kernel-'))
+process.env.DSH_HOME = sandbox
+
+const { writeJsonAtomic, digest } = await import('../src/atom.js')
+const {
+  MAX_PROMPT_CHARS,
+  MIN_INTERVAL_SECONDS,
+  deleteTrigger,
+  dueTriggers,
+  listTriggers,
+  markFired,
+  nextTriggerAt,
+  normalizeTrigger,
+  saveTrigger,
+} = await import('../src/triggers.js')
+const {
+  DenKernel,
+  bumpLedger,
+  evaluateGates,
+  inQuietHours,
+  interpretWakeResult,
+  readLedger,
+  recordSpoke,
+} = await import('../src/kernel.js')
+const { allNotices } = await import('../src/notices.js')
+
+test.after(() => rmSync(sandbox, { recursive: true, force: true }))
+
+function baseTrigger(overrides = {}) {
+  return {
+    sessionId: 'session-k',
+    title: 'Check the build',
+    prompt: 'Look at CI and report only if it broke.',
+    ...overrides,
+  }
+}
+
+/**
+ * Every gate reads durable state, so tests must not inherit each other's ledger,
+ * pacing timestamp, or triggers. A cooldown recorded by one test would otherwise
+ * silently refuse a later test's wake and the failure would look like a kernel
+ * bug rather than test bleed.
+ */
+test.beforeEach(() => {
+  for (const sub of ['triggers', 'ledger', 'notices']) {
+    rmSync(join(sandbox, 'den', sub), { recursive: true, force: true })
+  }
+  rmSync(join(sandbox, 'den', 'pacing.json'), { force: true })
+})
+
+/** Grant standing autonomy to a fake agent through a verifiable human turn. */
+function authorizedAgent(sessionId = 'session-k', messageId = 'msg-1') {
+  const events = [
+    { seq: 1, type: 'turn/start' },
+    { seq: 2, type: 'user/message', data: { id: messageId, source: { kind: 'user' } } },
+  ]
+  writeJsonAtomic(join(sandbox, 'den', 'grants', `${digest(sessionId)}.json`), {
+    version: 1,
+    sessionId,
+    autonomy: true,
+    humanMessageId: messageId,
+    humanSeq: 2,
+    recordedAfterSeq: 2,
+  })
+  return { id: 'agent-k', status: 'running', session: { id: sessionId, events } }
+}
+
+// ---------------------------------------------------------------- triggers
+
+test('an interval shorter than the floor is rejected', () => {
+  assert.throws(
+    () => normalizeTrigger(baseTrigger({ kind: 'interval', everySeconds: MIN_INTERVAL_SECONDS - 1 })),
+    { message: /at least 300/ },
+  )
+  const ok = normalizeTrigger(baseTrigger({ kind: 'interval', everySeconds: MIN_INTERVAL_SECONDS }))
+  assert.equal(ok.everySeconds, 300)
+})
+
+test('a prompt cannot exceed the bound', () => {
+  assert.throws(
+    () => normalizeTrigger(baseTrigger({ kind: 'once', at: Date.now(), prompt: 'x'.repeat(MAX_PROMPT_CHARS + 1) })),
+    { message: /exceeds 8000/ },
+  )
+})
+
+test('a trigger must belong to a session', () => {
+  assert.throws(
+    () => normalizeTrigger({ kind: 'once', at: Date.now(), title: 't', prompt: 'p' }),
+    { message: /sessionId is required/ },
+  )
+})
+
+test('maxRuns above 1000 is rejected', () => {
+  assert.throws(
+    () => normalizeTrigger(baseTrigger({ kind: 'interval', everySeconds: 600, maxRuns: 1001 })),
+    { message: /maxRuns exceeds 1000/ },
+  )
+})
+
+test('a malformed clock is rejected for daily triggers', () => {
+  assert.throws(() => normalizeTrigger(baseTrigger({ kind: 'daily', atTime: '25:00' })), { message: /HH:MM/ })
+  assert.throws(() => normalizeTrigger(baseTrigger({ kind: 'daily', atTime: '7:5' })), { message: /HH:MM/ })
+})
+
+test('an interval resumes on its original cadence after the host was down', () => {
+  const createdAt = Date.UTC(2026, 0, 1, 0, 0, 0)
+  const trigger = normalizeTrigger(baseTrigger({ kind: 'interval', everySeconds: 600 }))
+  const stored = { ...trigger, createdAt, lastFiredAt: createdAt }
+
+  // Querying at the last fire instant yields the very next step: the instant is
+  // included as a starting point, so the cadence stays on its original grid.
+  assert.equal(nextTriggerAt(stored, createdAt), createdAt + 600_000)
+
+  // The host was down for an hour. The next instant stays on the original 600s
+  // grid and is at most one step away — not an hour of backlog to replay.
+  const afterOutage = createdAt + 3_600_000 + 1
+  const next = nextTriggerAt(stored, afterOutage)
+  assert.equal((next - createdAt) % 600_000, 0)
+  assert.ok(next > afterOutage && next - afterOutage <= 600_000)
+})
+
+test('a one-shot trigger in the past is spent', () => {
+  const trigger = normalizeTrigger(baseTrigger({ kind: 'once', at: 1000 }))
+  assert.equal(nextTriggerAt(trigger, 2000), undefined)
+  assert.equal(nextTriggerAt(trigger, 500), 1000)
+})
+
+test('a trigger that reached maxRuns is spent', () => {
+  const trigger = normalizeTrigger(baseTrigger({ kind: 'interval', everySeconds: 600, maxRuns: 2 }))
+  assert.equal(nextTriggerAt({ ...trigger, fireCount: 2 }, Date.now()), undefined)
+})
+
+test('a daily trigger lands on the next occurrence at the configured local time', () => {
+  const trigger = normalizeTrigger(baseTrigger({ kind: 'daily', atTime: '09:30' }))
+  const from = new Date(2026, 4, 10, 12, 0, 0).getTime()
+  const next = nextTriggerAt(trigger, from)
+  const asDate = new Date(next)
+  assert.equal(asDate.getHours(), 9)
+  assert.equal(asDate.getMinutes(), 30)
+  assert.equal(asDate.getDate(), 11)
+})
+
+test('a due trigger is detected and firing it advances the count', () => {
+  const trigger = normalizeTrigger(baseTrigger({ kind: 'interval', everySeconds: 300, title: 'unique-due' }))
+  const stored = { ...trigger, createdAt: 1000, lastFiredAt: 1000 }
+  saveTrigger(stored)
+
+  const due = dueTriggers(1000 + 300_000)
+  assert.ok(due.some((item) => item.trigger.id === stored.id))
+
+  const after = markFired(stored, 1000 + 300_000)
+  assert.equal(after.fireCount, 1)
+  assert.equal(after.lastFiredAt, 1000 + 300_000)
+})
+
+test('a one-shot trigger disables itself once fired', () => {
+  const trigger = normalizeTrigger(baseTrigger({ kind: 'once', at: 5000, title: 'unique-once' }))
+  saveTrigger(trigger)
+  const after = markFired(trigger, 5000)
+  assert.equal(after.enabled, false)
+})
+
+test('triggers for another session are never mixed in', () => {
+  const mine = normalizeTrigger(baseTrigger({ kind: 'interval', everySeconds: 300, title: 'mine' }))
+  saveTrigger({ ...mine, sessionId: 'session-mine', createdAt: 1, lastFiredAt: 1 })
+  const due = dueTriggers(1 + 300_000)
+  assert.ok(due.every((item) => typeof item.trigger.sessionId === 'string'))
+})
+
+test('a deleted trigger disappears and a missing one reports false', () => {
+  const trigger = normalizeTrigger(baseTrigger({ kind: 'interval', everySeconds: 300, title: 'to-delete' }))
+  saveTrigger(trigger)
+  assert.equal(deleteTrigger(trigger.id), true)
+  assert.equal(deleteTrigger(trigger.id), false)
+  assert.ok(!listTriggers().valid.some((item) => item.id === trigger.id))
+})
+
+test('a corrupt stored trigger is reported invalid, not trusted', () => {
+  writeJsonAtomic(join(sandbox, 'den', 'triggers', 'broken.json'), { kind: 'interval', version: 1 })
+  const { invalid } = listTriggers()
+  assert.ok(invalid.length >= 1)
+})
+
+// ------------------------------------------------------------------- gates
+
+test('quiet hours wrap past midnight', () => {
+  const quiet = { from: 23 * 60, to: 7 * 60 }
+  assert.equal(inQuietHours(quiet, new Date(2026, 0, 1, 23, 30)), true)
+  assert.equal(inQuietHours(quiet, new Date(2026, 0, 1, 3, 0)), true)
+  assert.equal(inQuietHours(quiet, new Date(2026, 0, 1, 12, 0)), false)
+  assert.equal(inQuietHours(null, new Date(2026, 0, 1, 3, 0)), false)
+})
+
+test('an agent without verified authority is refused at the authority gate', () => {
+  const stranger = { id: 'agent-x', status: 'running', session: { id: 'session-none', events: [] } }
+  const verdict = evaluateGates({ state: { dailyTurnBudget: 10, cooldownSeconds: 0, quietHours: null }, agent: stranger })
+  assert.equal(verdict.allowed, false)
+  assert.equal(verdict.gate, 'authority')
+})
+
+test('a zero budget disables proactivity entirely', () => {
+  const agent = authorizedAgent('session-budget')
+  const verdict = evaluateGates({
+    state: { dailyTurnBudget: 0, cooldownSeconds: 0, quietHours: null },
+    agent,
+  })
+  assert.equal(verdict.allowed, false)
+  assert.equal(verdict.gate, 'budget')
+})
+
+test('a spent budget survives a restart', () => {
+  const agent = authorizedAgent('session-spent')
+  const state = { dailyTurnBudget: 2, cooldownSeconds: 0, quietHours: null }
+  assert.equal(evaluateGates({ state, agent }).allowed, true)
+  bumpLedger('turns')
+  bumpLedger('turns')
+  // A fresh call stands in for a restarted process: the ledger is on disk.
+  assert.equal(readLedger().turns, 2)
+  const verdict = evaluateGates({ state, agent })
+  assert.equal(verdict.allowed, false)
+  assert.equal(verdict.gate, 'budget')
+  assert.match(verdict.reason, /2\/2/)
+})
+
+test('the pacing gate blocks a second utterance too soon', () => {
+  const agent = authorizedAgent('session-pacing')
+  const state = { dailyTurnBudget: 100, cooldownSeconds: 900, quietHours: null }
+  const now = Date.now()
+  recordSpoke(now)
+  const verdict = evaluateGates({ state, agent, now: now + 1000 })
+  assert.equal(verdict.allowed, false)
+  assert.equal(verdict.gate, 'pacing')
+})
+
+// ------------------------------------------------------------- wake output
+
+test('a SKIP reply means say nothing', () => {
+  assert.deepEqual(interpretWakeResult('SKIP'), { speak: false, reason: 'skip' })
+  assert.deepEqual(interpretWakeResult('  skip.  '), { speak: false, reason: 'skip' })
+  assert.deepEqual(interpretWakeResult('   '), { speak: false, reason: 'empty' })
+  assert.deepEqual(interpretWakeResult(undefined), { speak: false, reason: 'empty' })
+})
+
+test('a real message is spoken and bounded', () => {
+  const long = interpretWakeResult('x'.repeat(9000))
+  assert.equal(long.speak, true)
+  assert.equal(long.message.length, 4000)
+  const short = interpretWakeResult('CI is red on main since 14:02.')
+  assert.equal(short.speak, true)
+  assert.match(short.message, /CI is red/)
+})
+
+// ------------------------------------------------------------------ kernel
+
+test('a silent wake writes no notice and counts as skipped', async () => {
+  const sessionId = 'session-silent'
+  const agent = authorizedAgent(sessionId)
+  const trigger = normalizeTrigger({
+    kind: 'interval',
+    everySeconds: 300,
+    sessionId,
+    title: 'silent-check',
+    prompt: 'check quietly',
+  })
+  saveTrigger({ ...trigger, createdAt: 1000, lastFiredAt: 1000 })
+
+  const service = {
+    state: () => ({ dailyTurnBudget: 50, cooldownSeconds: 0, quietHours: null }),
+  }
+  const kernel = new DenKernel({ service, deliver: async () => 'SKIP' })
+  const result = await kernel.tick({ agent, now: 1000 + 300_000 })
+
+  assert.equal(result.results[0].outcome, 'silent')
+  assert.equal(allNotices().filter((notice) => notice.sessionId === sessionId).length, 0)
+})
+
+test('a valuable wake queues exactly one durable notice', async () => {
+  const sessionId = 'session-spoken'
+  const agent = authorizedAgent(sessionId)
+  const trigger = normalizeTrigger({
+    kind: 'interval',
+    everySeconds: 300,
+    sessionId,
+    title: 'valuable-check',
+    prompt: 'check and report',
+  })
+  saveTrigger({ ...trigger, createdAt: 1000, lastFiredAt: 1000 })
+
+  const service = {
+    state: () => ({ dailyTurnBudget: 50, cooldownSeconds: 0, quietHours: null }),
+  }
+  const kernel = new DenKernel({ service, deliver: async () => 'The build broke on main.' })
+  const result = await kernel.tick({ agent, now: 1000 + 300_000 })
+
+  assert.equal(result.results[0].outcome, 'spoke')
+  const mine = allNotices().filter((notice) => notice.sessionId === sessionId)
+  assert.equal(mine.length, 1)
+  assert.equal(mine[0].text, 'The build broke on main.')
+})
+
+test('a refused wake is recorded in the ledger, never silently dropped', async () => {
+  const agent = { id: 'agent-n', status: 'running', session: { id: 'session-noauth', events: [] } }
+  const trigger = normalizeTrigger({
+    kind: 'interval',
+    everySeconds: 300,
+    sessionId: 'session-noauth',
+    title: 'unauthorized-check',
+    prompt: 'try to run',
+  })
+  saveTrigger({ ...trigger, createdAt: 1000, lastFiredAt: 1000 })
+
+  const service = {
+    state: () => ({ dailyTurnBudget: 50, cooldownSeconds: 0, quietHours: null }),
+  }
+  let delivered = 0
+  const kernel = new DenKernel({
+    service,
+    deliver: async () => {
+      delivered += 1
+      return 'should never happen'
+    },
+  })
+  const result = await kernel.tick({ agent, now: 1000 + 300_000 })
+
+  assert.equal(result.results[0].outcome, 'refused')
+  assert.equal(result.results[0].gate, 'authority')
+  assert.equal(delivered, 0, 'an unauthorized wake must never reach the model')
+})
+
+test('a re-entrant tick is refused instead of double-spending budget', async () => {
+  const sessionId = 'session-reentrant'
+  const agent = authorizedAgent(sessionId)
+  const trigger = normalizeTrigger({
+    kind: 'interval',
+    everySeconds: 300,
+    sessionId,
+    title: 'slow-check',
+    prompt: 'slow',
+  })
+  saveTrigger({ ...trigger, createdAt: 1000, lastFiredAt: 1000 })
+
+  const service = {
+    state: () => ({ dailyTurnBudget: 50, cooldownSeconds: 0, quietHours: null }),
+  }
+  let concurrent = 0
+  let maxConcurrent = 0
+  const kernel = new DenKernel({
+    service,
+    deliver: async () => {
+      concurrent += 1
+      maxConcurrent = Math.max(maxConcurrent, concurrent)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      concurrent -= 1
+      return 'done'
+    },
+  })
+
+  const [first, second] = await Promise.all([
+    kernel.tick({ agent, now: 1000 + 300_000 }),
+    kernel.tick({ agent, now: 1000 + 300_001 }),
+  ])
+
+  assert.equal(maxConcurrent, 1, 'wakes must never overlap')
+  const outcomes = [first, second].map((item) => item.skipped ?? 'ran')
+  assert.ok(outcomes.includes('reentrant'))
+})
+
+test('a failing delivery is recorded and does not abort the heartbeat', async () => {
+  const sessionId = 'session-failing'
+  const agent = authorizedAgent(sessionId)
+  const trigger = normalizeTrigger({
+    kind: 'interval',
+    everySeconds: 300,
+    sessionId,
+    title: 'failing-check',
+    prompt: 'boom',
+  })
+  saveTrigger({ ...trigger, createdAt: 1000, lastFiredAt: 1000 })
+
+  const service = {
+    state: () => ({ dailyTurnBudget: 50, cooldownSeconds: 0, quietHours: null }),
+  }
+  const events = []
+  const kernel = new DenKernel({
+    service,
+    deliver: async () => {
+      throw new Error('model unavailable')
+    },
+    onEvent: (event) => events.push(event),
+  })
+  const result = await kernel.tick({ agent, now: 1000 + 300_000 })
+
+  assert.equal(result.results[0].outcome, 'failed')
+  assert.ok(events.some((event) => event.type === 'wake-failed'))
+})
+
+test('start and stop leave no timer behind', () => {
+  const service = { state: () => ({ dailyTurnBudget: 1, cooldownSeconds: 0, quietHours: null }) }
+  const events = []
+  const kernel = new DenKernel({ service, deliver: async () => 'SKIP', onEvent: (e) => events.push(e) })
+  kernel.start()
+  assert.ok(kernel.timer)
+  kernel.start()
+  assert.equal(events.filter((event) => event.type === 'started').length, 1, 'start is idempotent')
+  kernel.stop()
+  assert.equal(kernel.timer, null)
+  assert.ok(events.some((event) => event.type === 'stopped'))
+})

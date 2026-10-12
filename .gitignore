@@ -1,0 +1,18 @@
+# Dependencies and build output
+node_modules/
+dist/
+lib/
+
+# Local runtime state - the den's own data must never be committed
+.den-state/
+*.log
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Reference checkouts are separate repositories, never vendored here
+../dsh-muse/
+../dsh-bot/
