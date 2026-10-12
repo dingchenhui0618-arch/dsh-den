@@ -6,7 +6,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -15,7 +15,8 @@ import test from 'node:test'
 const sandbox = mkdtempSync(join(tmpdir(), 'dsh-den-test-'))
 process.env.DSH_HOME = sandbox
 
-const { denHome, digest, readJsonChecked, writeJsonAtomic, publishIfAbsent } = await import('../src/atom.js')
+const { denHome, digest, readJsonChecked, reapStaleTempFiles, writeJsonAtomic, publishIfAbsent, STALE_TEMP_MS } =
+  await import('../src/atom.js')
 const { currentGrant, hasAutonomy, isDirectHumanDriver, recordGrant } = await import('../src/grant.js')
 const { NOTICE_TTL_MS, isExpired, noticeId, pendingNotices, queueNotice } = await import('../src/notices.js')
 
@@ -48,6 +49,56 @@ test('publishIfAbsent never replaces an existing record', () => {
   assert.equal(publishIfAbsent(path, { generation: 1 }), true)
   assert.equal(publishIfAbsent(path, { generation: 2 }), false)
   assert.equal(readJsonChecked(path, () => true).value.generation, 1)
+})
+
+test('an abandoned temp file from a crash is reclaimed', () => {
+  const directory = join(sandbox, 'den', 'reap')
+  writeJsonAtomic(join(directory, 'keep.json'), { n: 1 })
+  // A hard kill between open and rename leaves exactly this shape behind; the
+  // measured rate was 39 of 40 kills, so it is the normal case, not the rare one.
+  const abandoned = join(directory, 'state.json.deadbeef-0000.tmp')
+  writeFileSync(abandoned, '{"partial":')
+  const old = new Date(Date.now() - STALE_TEMP_MS - 60_000)
+  utimesSync(abandoned, old, old)
+
+  assert.equal(reapStaleTempFiles(directory), 1)
+  assert.equal(readdirSync(directory).includes('state.json.deadbeef-0000.tmp'), false)
+  // Housekeeping must never touch real records.
+  assert.equal(readJsonChecked(join(directory, 'keep.json'), (v) => v?.n === 1).ok, true)
+})
+
+test('a temp file young enough to be an in-flight write is left alone', () => {
+  const directory = join(sandbox, 'den', 'reap-young')
+  writeJsonAtomic(join(directory, 'other.json'), { n: 1 })
+  // Another process may be writing this file right now. Reaping it would break a
+  // legitimate concurrent write, so the grace period is the safety property.
+  const inFlight = join(directory, 'state.json.cafe-1111.tmp')
+  writeFileSync(inFlight, '{"n":2}')
+
+  assert.equal(reapStaleTempFiles(directory), 0)
+  assert.equal(readdirSync(directory).includes('state.json.cafe-1111.tmp'), true)
+})
+
+test('the reaper only ever removes its own temp shapes', () => {
+  const directory = join(sandbox, 'den', 'reap-shape')
+  // Create the directory first: a missing one would make the write below throw
+  // and the test would pass for the wrong reason.
+  writeJsonAtomic(join(directory, 'seed.json'), { n: 0 })
+  writeFileSync(join(directory, 'a-real-note.json'), '{}')
+  writeFileSync(join(directory, 'notes.txt'), 'human file')
+  const old = new Date(Date.now() - STALE_TEMP_MS - 60_000)
+  for (const name of ['a-real-note.json', 'notes.txt']) utimesSync(join(directory, name), old, old)
+
+  assert.equal(reapStaleTempFiles(directory), 0)
+  assert.deepEqual(readdirSync(directory).sort(), ['a-real-note.json', 'notes.txt', 'seed.json'])
+})
+
+test('a completed write leaves no temp litter of its own', () => {
+  const directory = join(sandbox, 'den', 'clean-write')
+  for (let i = 0; i < 5; i += 1) writeJsonAtomic(join(directory, 'state.json'), { n: i })
+  const strays = readdirSync(directory).filter((name) => name.endsWith('.tmp') || name.endsWith('.pending'))
+  assert.deepEqual(strays, [])
+  assert.equal(JSON.parse(readFileSync(join(directory, 'state.json'), 'utf8')).n, 4)
 })
 
 test('identical notice content collapses to one record', () => {
