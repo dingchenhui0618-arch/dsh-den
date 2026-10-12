@@ -153,9 +153,51 @@ test('activation mounts the status route when the desktop web server is present'
   assert.equal(state.routes.length, 1)
   assert.equal(state.routes[0].path, '/dsh-den')
   assert.equal(state.routes[0].kind, 'prefix')
-  assert.deepEqual(service.status().statusRoute, { mounted: true, reason: null, message: null, path: '/dsh-den' })
+  assert.deepEqual(service.status().statusRoute, {
+    mounted: true,
+    reason: null,
+    message: null,
+    path: '/dsh-den',
+    // Registering a route is the plugin reporting on itself. Reachability is
+    // recorded only when a request arrives, so it must be null here — a mount must
+    // never be allowed to imply a reach.
+    firstReachedAt: null,
+  })
   dispose()
   assert.equal(state.routes.length, 0)
+})
+
+test('browser reachability is recorded by the request, never inferred from the mount', async () => {
+  // The distinction this pins is the one that cost this plugin two rounds: an
+  // earlier transport reported `mounted: true` while every browser request to it
+  // answered 401. A snapshot taken at mount time must not be able to say "reached".
+  const { ctx, state } = fakeHost()
+  const dispose = apply(ctx)
+  const service = state.provided.get('den')
+  const route = state.routes[0]
+  // `transport` is assembled by statusSnapshot, not by the service's raw status().
+  const { statusSnapshot } = await import('../src/panel-api.js')
+  const snapshotNow = () => statusSnapshot(service, {})
+
+  assert.equal(service.status().statusRoute.firstReachedAt, null, 'mounting is not reaching')
+  assert.equal(snapshotNow().transport.browserReachable, null)
+  assert.equal(snapshotNow().transport.claimedMounted, true)
+  assert.match(snapshotNow().transport.note, /no request has reached it yet/)
+
+  // Now serve one request through the registered handler, the way the host would.
+  const handlers = new Map()
+  const req = { method: 'GET', url: '/dsh-den', on: (event, handler) => handlers.set(event, handler), destroy() {} }
+  const res = { statusCode: null, headers: {}, setHeader(k, v) { this.headers[k] = v }, end(t) { this.body = t } }
+  const pending = route.handler(req, res)
+  handlers.get('end')?.()
+  await pending
+
+  const after = snapshotNow()
+  // statusSnapshot nests it as `route`; firstReachedAt is what the route records.
+  assert.equal(typeof after.route.firstReachedAt, 'number', 'the request records contact')
+  assert.equal(after.transport.browserReachable, after.route.firstReachedAt)
+  assert.match(after.transport.note, /a request has reached this route/)
+  dispose()
 })
 
 test('activation registers every model-facing tool with an explicit schema', () => {

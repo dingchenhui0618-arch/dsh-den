@@ -807,7 +807,32 @@ export function apply(ctx) {
     // failure for a test or host that supplies an incomplete web server object, so
     // a profile without one costs the user the panel and not the assistant.
     const route = mountPanelRoute(ctx, { service, nextTriggerAt })
-    service.statusRoute = { mounted: route.mounted, reason: route.reason, message: route.message, path: route.path }
+    service.statusRoute = {
+      mounted: route.mounted,
+      reason: route.reason,
+      message: route.message,
+      path: route.path,
+      /**
+       * Null until a request actually arrives.
+       *
+       * Deliberately not set at mount time. `mounted` is this plugin reporting on
+       * itself, and an earlier transport here was mounted, reported as mounted, and
+       * unreachable — so the panel's snapshot must be able to say "registered, not
+       * yet reached" without borrowing credit from the mount.
+       */
+      firstReachedAt: null,
+    }
+    /**
+     * Called by the route handler on the first request it serves.
+     *
+     * This is the only place browser reachability is recorded, and it is recorded by
+     * the request rather than inferred by the plugin.
+     */
+    service.markRouteReached = () => {
+      if (service.statusRoute && service.statusRoute.firstReachedAt == null) {
+        service.statusRoute.firstReachedAt = Date.now()
+      }
+    }
     disposers.push(route.dispose)
     if (!route.mounted) {
       service.noteEvent({ type: 'status-route-unmounted', reason: route.reason, message: route.message })

@@ -59,6 +59,36 @@ export function statusSnapshot(service, { sessionId, nextTriggerAt } = {}) {
     reapedTempFiles: status.reapedTempFiles ?? 0,
     /** Present so the panel can explain its own transport failure. */
     route: status.statusRoute ?? null,
+    /**
+     * The transport, with claimed and observed kept apart.
+     *
+     * `route.mounted` is the host describing itself: it means the plugin's
+     * `webServer.register` call returned a disposer. That is a real fact and it is
+     * not the same fact as "a browser reached it" — a previous transport in this
+     * plugin reported `mounted: true` while sitting behind the `/api` auth prefix,
+     * answering 401 to every poll. Reading those two as one cost two rounds.
+     *
+     * `browserReachable` therefore stays null until a request actually arrives, and
+     * the field exists so nothing downstream has to infer reachability from a mount.
+     */
+    transport: {
+      claimedMounted: Boolean(status.statusRoute?.mounted),
+      path: status.statusRoute?.path ?? null,
+      /**
+       * Epoch ms of the first request that actually reached the route, or null.
+       *
+       * Set by the route handler on contact, never inferred from the mount. This is
+       * the one field that turns "the host says it registered a route" into "a client
+       * reached it", which is the distinction that cost two rounds here.
+       */
+      browserReachable: status.statusRoute?.firstReachedAt ?? null,
+      note:
+        status.statusRoute?.firstReachedAt != null
+          ? 'a request has reached this route'
+          : status.statusRoute?.mounted === true
+            ? 'the host registered the route; no request has reached it yet'
+            : 'the route is not mounted, so the panel has nowhere to send its requests',
+    },
   }
 }
 

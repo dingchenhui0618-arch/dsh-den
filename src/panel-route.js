@@ -157,6 +157,17 @@ export function mountPanelRoute(ctx, { service, nextTriggerAt, route = ROUTE } =
       path: route,
       handler: async function (req, res) {
         try {
+          // Record first contact. `statusRoute.mounted` is the host describing
+          // itself; this is the only signal that something actually reached the
+          // route, and it is what lets the panel stop treating reachability as an
+          // assumption. A previous transport here reported `mounted: true` while
+          // answering 401 to every request, so the distinction is not academic.
+          try {
+            service?.markRouteReached?.()
+          } catch {
+            /* observability must never fail the request it is observing */
+          }
+
           const segments = segmentsOf(req?.url, route)
           const method = String(req?.method || '').toUpperCase()
 
