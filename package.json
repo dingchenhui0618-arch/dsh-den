@@ -15,14 +15,17 @@
     "cordis.patch.yml",
     "README.md",
     "DESIGN.md",
-    "LICENSE"
+    "LICENSE",
+    "test",
+    "tools"
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "check:bundle": "node tools/check-client-bundle.mjs",
     "check:ui": "node tools/check-client-interaction.mjs",
     "check:acceptance": "node tools/check-acceptance.mjs",
-    "verify": "npm test && npm run check:bundle && npm run check:ui && npm run check:acceptance"
+    "check:package": "node tools/check-package-contents.mjs",
+    "verify": "npm test && npm run check:bundle && npm run check:ui && npm run check:acceptance && npm run check:package"
   },
   "engines": {
     "node": "^22.19.0 || >=24"
