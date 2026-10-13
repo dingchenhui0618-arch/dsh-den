@@ -314,6 +314,65 @@ test('a valuable wake queues exactly one durable notice', async () => {
   assert.equal(mine[0].text, 'The build broke on main.')
 })
 
+test('two kernels over one home both admit the same check-in, because nothing holds residency', async () => {
+  // Two Hosts over one home is reachable by accident: `~/.dsh/den` is keyed on DSH_HOME, not
+  // on the profile, so two profiles share one state tree and both mount this plugin. There is
+  // no lock, and `pid` in status() is reported and never consulted.
+  //
+  // Two kernels over one home model two Host processes. What they share is the trigger file on
+  // disk, which is the state that actually races.
+  const sessionId = 'session-two-hosts'
+  const agent = authorizedAgent(sessionId)
+  const trigger = normalizeTrigger({
+    kind: 'interval',
+    everySeconds: 300,
+    sessionId,
+    title: 'two-host',
+    prompt: 'check and report',
+  })
+  saveTrigger({ ...trigger, createdAt: 1000, lastFiredAt: 1000 })
+
+  const service = { state: () => ({ dailyTurnBudget: 50, cooldownSeconds: 0, quietHours: null }) }
+
+  let delivered = 0
+  let entered = () => {}
+  const inside = new Promise((resolve) => {
+    entered = resolve
+  })
+  let release = () => {}
+  const held = new Promise((resolve) => {
+    release = resolve
+  })
+  const deliver = async () => {
+    delivered += 1
+    entered()
+    // Park the first delivery inside the window that the real one spends waiting on a Host.
+    if (delivered === 1) await held
+    return 'The build broke on main.'
+  }
+
+  const dueAt = 1000 + 300_000
+  const first = new DenKernel({ service, deliver }).tick({ agent, now: dueAt })
+  await inside // kernel one is now parked inside its delivery
+  const second = await new DenKernel({ service, deliver }).tick({ agent, now: dueAt })
+  release()
+  await first
+
+  // Without this the test passes for the wrong reason: a second kernel that *refused* would
+  // leave the delivery count at one and look exactly like exclusivity working. This is the
+  // mechanism being pinned — nothing holds residency, so both kernels admit the same check-in.
+  assert.equal(
+    second.results[0]?.outcome,
+    'spoke',
+    `the second kernel must have admitted the same check-in, or this proves nothing: ${JSON.stringify(second)}`,
+  )
+  // Measured while writing this: `delivered` was exactly 2 — the same check-in went to the
+  // conversation twice. It is a hazard being pinned, not behaviour being desired. When a lease
+  // lands, this assertion and the one above both have to change, which is the point of
+  // asserting the mechanism rather than the count.
+  assert.ok(delivered >= 2, `nothing excluded the second kernel, so it delivered too: ${delivered}`)
+})
+
 test('a refused wake is recorded in the ledger, never silently dropped', async () => {
   const agent = { id: 'agent-n', status: 'running', session: { id: 'session-noauth', events: [] } }
   const trigger = normalizeTrigger({
