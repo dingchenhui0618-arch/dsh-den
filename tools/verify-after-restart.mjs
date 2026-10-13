@@ -55,6 +55,11 @@ function get(path, timeoutMs = 8000) {
 
 console.log(`dsh-den post-restart verification against ${BASE}\n`)
 
+// Step 1's deployment probe is a GET to this very route, so it *sets* the browser-reachability
+// field that step 2 reads. Without this timestamp the script reported its own traffic as a
+// browser having arrived — which is what it did on the run that prompted this line.
+const scriptStart = Date.now()
+
 /* ------------------------------------------------ step 1: is this build the live one? */
 
 console.log('step 1 - the deployment check (falsification)\n')
@@ -93,11 +98,19 @@ async function browserReachability() {
 const before = await browserReachability()
 if (!before.read) {
   line(false, 'the route answers a readable status payload', `HTTP ${before.status}`)
-} else if (before.reached !== null) {
+} else if (before.reached !== null && before.reached < scriptStart) {
   line(
     true,
-    'a browser request has already reached the route',
-    `first reached ${new Date(before.reached).toISOString()}`,
+    'a browser reached the route before this script started',
+    `first reached ${new Date(before.reached).toISOString()}, which predates this run`,
+  )
+} else if (before.reached !== null) {
+  line(
+    null,
+    'no browser has reached the route yet',
+    `the route reports ${new Date(before.reached).toISOString()} but this run started at ` +
+      `${new Date(scriptStart).toISOString()}, so step 1's own probe is what set it. ` +
+      'Open the den panel in the app and click something.',
   )
 } else {
   line(
@@ -132,12 +145,14 @@ if (!before.read) {
 /* ------------------------------------------------------------------------- verdict */
 
 console.log('')
-if (failures === 0 && before.read && before.reached !== null) {
+const browserSeen = before.read && before.reached !== null && before.reached < scriptStart
+if (failures === 0 && browserSeen) {
   console.log('PASS - the running host serves this tree and a browser request has reached it.')
 } else if (failures === 0) {
   console.log(
     'PARTIAL - the running host serves this tree. The browser observation is still open:\n' +
-      '          open the den panel, click something, then run this again.',
+      '          open the den panel, click something, then run this again.\n' +
+      '          A request this script made itself does not count as a browser having arrived.',
   )
 } else {
   console.log(`FAIL - ${failures} check(s) did not pass.`)

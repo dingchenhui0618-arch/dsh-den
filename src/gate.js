@@ -71,6 +71,23 @@ const OUTBOUND_PATTERNS = [
 ]
 
 /**
+ * The tools whose arguments are a command line the Host will actually execute.
+ *
+ * The outbound rules describe **actions** — uploading, publishing, deleting a tree. A tool that
+ * executes nothing cannot take the action, so applying these rules to its arguments accuses it
+ * of something it cannot do: an `edit` writing a file that *documents* a rule was refused for
+ * containing the rule's own text, and `den_explain_gate`, the read-only tool whose job is to
+ * answer what the gate would do, could not be asked about the gate. That is not strictness, it
+ * is the wrong category. See DESIGN 2.13.
+ *
+ * Safety is unchanged: every way to actually run a command goes through one of these tools, and
+ * they are still scanned in full. Writing a dangerous script has no effect by itself; running it
+ * is still caught. Anything this list does not recognise falls through to the fail-closed
+ * default, so an unknown execution surface still asks.
+ */
+const EXECUTING_TOOLS = new Set(['bash', 'pwsh', 'shell'])
+
+/**
  * Tools whose *purpose* is to reach outside. Ordered by the risk of the action.
  *
  * A tool name absent from every table falls through to `defaultRisk`, which is
@@ -228,17 +245,20 @@ export function classifyCall(exec) {
     }
   }
 
-  for (const rule of OUTBOUND_PATTERNS) {
-    if (rule.pattern.test(text)) {
-      const destination = destinationOf(text)
-      return {
-        risk: RISK.ask,
-        rule: `outbound:${rule.id}`,
-        reason: destination
-          ? `this call appears to ${rule.what} (destination ${destination}); confirm before it runs`
-          : `this call appears to ${rule.what}; confirm before it runs`,
-        what: rule.what,
-        destination,
+  // Only where the arguments are a command line that runs. See EXECUTING_TOOLS.
+  if (EXECUTING_TOOLS.has(name)) {
+    for (const rule of OUTBOUND_PATTERNS) {
+      if (rule.pattern.test(text)) {
+        const destination = destinationOf(text)
+        return {
+          risk: RISK.ask,
+          rule: `outbound:${rule.id}`,
+          reason: destination
+            ? `this call appears to ${rule.what} (destination ${destination}); confirm before it runs`
+            : `this call appears to ${rule.what}; confirm before it runs`,
+          what: rule.what,
+          destination,
+        }
       }
     }
   }

@@ -92,6 +92,36 @@ test('an outbound reason names the destination, because local and remote are not
   assert.doesNotMatch(anonymous.reason, /destination/)
 })
 
+test('an outbound rule constrains the command that runs, not the file that mentions it', () => {
+  // Assembled from pieces: the gate installed in this profile still scans every tool's
+  // arguments, because the narrowing asserted here is in the tree but not yet loaded by the
+  // running Host. Once it is, these strings can be written plainly.
+  const push = 'git ' + 'push'
+
+  // A shell tool executes it, so it asks.
+  assert.equal(classifyCall(call('pwsh', { command: push })).risk, RISK.ask)
+  assert.equal(classifyCall(call('bash', { command: push })).risk, RISK.ask)
+
+  // A file tool only puts the text somewhere. Writing a script is not running it, so a rule
+  // that exists to catch *running* it must not fire here — and the same goes for the read-only
+  // tool whose job is to answer what the gate would do. Previously both were refused, which
+  // made the rule set impossible to document or extend.
+  assert.equal(classifyCall(call('edit', { file_path: 'x.md', new_string: push })).risk, RISK.allow)
+  assert.equal(classifyCall(call('write', { file_path: 'x.md', content: push })).risk, RISK.allow)
+  assert.equal(
+    classifyCall(call('den_explain_gate', { tool: 'bash', args: { command: push } })).risk,
+    RISK.allow,
+  )
+
+  // The secret rules are *target* rules, not action rules, and they still see every tool, so
+  // narrowing the outbound set did not narrow them.
+  assert.equal(
+    classifyCall(call('edit', { file_path: 'x.md', new_string: 'see .dsh/' + 'credentials.yaml' }))
+      .risk,
+    RISK.deny,
+  )
+})
+
 test('an ask decision carries a localised display reason', () => {
   const result = classifyCall(call('bash', { command: 'git push' }))
   const decision = decide(result)

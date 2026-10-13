@@ -113,15 +113,20 @@ if (stateExists) {
 
 /* ------------------------------------------------- 3. the last unobserved seam */
 
+// The field is named `browserReachable` but it records the first request of *any* kind to
+// arrive, and this script is itself such a request: run twice and the second run reads the
+// timestamp the first one set. So the check below is that a request has arrived, which is all
+// the field can support; attributing it to a browser needs a timestamp from before the reading
+// script started, which `verify-after-restart.mjs` has and this script does not.
 if (status) {
   const transport = status.transport ?? {}
   const reached = transport.browserReachable ?? null
   check(
     reached !== null,
-    'a browser request has reached the route',
+    'some HTTP request has reached the route',
     reached === null
       ? 'no request yet; open the den panel in the app and re-run'
-      : `first reached at ${new Date(reached).toISOString()}`,
+      : `first reached at ${new Date(reached).toISOString()} — this does not say a browser sent it`,
   )
   console.log(`       claimedMounted: ${transport.claimedMounted}`)
   console.log(`       note: ${transport.note}`)
