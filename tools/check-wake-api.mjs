@@ -74,6 +74,28 @@ try {
 const wake = payload?.value?.wakeApi
 const reported = wake !== undefined && wake !== null
 
+/**
+ * Who is actually listening, which is not the same question as "did I restart DSH".
+ *
+ * This cost two wrong conclusions. The desktop app spawns several processes; restarting
+ * the app creates new *window* processes while the process holding the route port — and
+ * therefore the loaded plugin fibre — can survive. A fresh process start time was read as
+ * proof of a restart, twice, while the port owner had not changed since before the edits.
+ *
+ * So the check reads the port owner directly and compares it with the pid the plugin
+ * reports about itself. They match only when the thing serving the route is the thing that
+ * loaded the plugin.
+ */
+let listenerPid = null
+try {
+  const { execFileSync } = await import('node:child_process')
+  const out = execFileSync('netstat', ['-ano'], { encoding: 'utf8' })
+  const line = out.split(/\r?\n/).find((row) => row.includes(':19387') && row.includes('LISTENING'))
+  if (line) listenerPid = (line.trim().split(/\s+/).pop() ?? null)
+} catch {
+  listenerPid = null
+}
+
 // A build that predates the field and a build that has it but is not loaded look the same
 // from outside. Say both, name the one transferable fact, and start a clock so a restart
 // can be told apart from a reload by whether this number changed.
@@ -101,12 +123,15 @@ check(
   reported
     ? undefined
     : 'absent from the payload the running Host serves.\n' +
-      `       This process: pid ${pid ?? '?'}, started ${startedAt ?? '?'}` +
-      (previous === null ? '' : ` (previous run: pid ${previous.pid ?? '?'}, started ${previous.startedAt ?? '?'})`) +
-      `\n       Same process as the previous run: ${sameProcess ? 'yes — nothing has been reloaded, so the field cannot' +
-        ' appear no matter how correct the source is' : 'no — a new process is serving an old payload, which is a real problem'}.` +
-      '\n       The source is correct either way; what this measures is whether the running' +
-      ' host has loaded it.',
+      `       Route port 19387 is owned by pid ${listenerPid ?? '?'}; the plugin reports its own pid as ${pid ?? '?'}.` +
+      (previous === null ? '' : ` (previous probe run saw pid ${previous.pid ?? '?'})`) +
+      `\n       Same plugin process as the previous run: ${sameProcess ? 'yes' : 'no'}.` +
+      (listenerPid !== null && pid !== null && listenerPid !== pid
+        ? '\n       The port owner and the plugin disagree, which cannot happen in one process.'
+        : '') +
+      '\n       A restart of the app window does NOT necessarily restart this process — the' +
+      ' loaded plugin fibre lives in whichever process holds the port. Check that pid' +
+      ' against the running DSH processes; a start time from before your edits proves nothing.',
 )
 
 if (!reported) {
