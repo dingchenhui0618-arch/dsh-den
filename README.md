@@ -61,8 +61,15 @@ npm run check:bundle   # 31 offline bundle-contract checks
 npm run check:ui       # 41 panel interaction checks
 npm run check:acceptance   # the two reliability goals, as one observable lifecycle
 npm run check:package      # what a tarball install actually ships
-npm run verify         # all five
+npm run verify         # all five, hermetic, no host required
+
+# these three need the running host instead of a fixture, so they are not in `verify`
+npm run verify:live    # after a restart: is the host serving this tree, end to end?
+npm run check:deployment   # just the deployment half of the above
+npm run check:tools        # disk evidence that den_* tools were really invoked
 ```
+
+**After restarting DSH, run `npm run verify:live`.** It is the scripted form of the acceptance this project is judged on, and it refuses to report success while the host is still running an older build. It first runs the deployment check as a falsification step — if `GET /dsh-den` is not 200, nothing after it would be evidence about this tree, so it stops. Then it reads `transport.browserReachable` **before** sending any probe of its own, so any movement it observes afterwards is attributable to something that is not the script.
 
 `npm test` includes one test that is unlike the rest: `test/roundtrip.test.mjs`
 drives the **real** browser bundle's `call()` against the **real** route handler the
