@@ -10,7 +10,7 @@ Status: **the core is implemented, tested (268/268), and active in a real profil
 ```
 node_modules present in clone: False
 dependencies declared: (none)
-ℹ tests 264   ℹ pass 264   ℹ fail 0
+ℹ tests 268   ℹ pass 268   ℹ fail 0
 test exit: 0
 ```
 
