@@ -370,8 +370,23 @@ test('a grant in the agent own turn is what succeeds, and that is the path the g
   )
 
   const requested = await viaRoute(route, 'autonomy/request', { autonomy: true })
+  const token = requested.value.token
+
+  // Second factor: the human types the token into the conversation. Until this line the
+  // grant must fail, and that is asserted immediately below rather than assumed.
+  const withoutToken = await viaRoute(route, 'autonomy/confirm', {
+    token,
+    autonomy: true,
+    humanMessageId: 'human-1',
+  })
+  assert.equal(withoutToken.result.ok, false, 'an outstanding token that the message does not carry is not proof')
+  assert.match(withoutToken.result.error.message, /does not carry the panel token/)
+
+  const human = service.ctx.agents.get('session-1').session.events.find((event) => event.data?.id === 'human-1')
+  human.data.text = `grant it — ${token}`
+
   const confirmed = await viaRoute(route, 'autonomy/confirm', {
-    token: requested.value.token,
+    token,
     autonomy: true,
     humanMessageId: 'human-1',
   })
@@ -380,7 +395,7 @@ test('a grant in the agent own turn is what succeeds, and that is the path the g
   assert.equal(confirmed.value.boundToMessage, 'human-1')
 
   const again = await viaRoute(route, 'autonomy/confirm', {
-    token: requested.value.token,
+    token,
     autonomy: true,
     humanMessageId: 'human-1',
   })

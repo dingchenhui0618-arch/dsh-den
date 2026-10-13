@@ -604,9 +604,28 @@ ok   a second boot finds the state a first boot left behind
 
 **这不是一个漏洞**，但它是一处「机制被声明、却未实现」的界面文案——与本项目反复出现的那一类相同：**面板在描述一个它没有兑现的凭证模型。** 人在按下按钮前会相信令牌是那个证明，而实际起作用的是别的东西。
 
-**为什么没有当场修**：把令牌接入 `recordGrant`（要求本回合的人类消息**正文**里含有一条未过期、未消费的令牌）是**收紧**授权语义——方向是安全的，而且会让系统真正做到它已经对用户承诺的事。但它改变了授权的必要条件：授权从「一条人类消息 + 闸门审批」变成「一条**含令牌**的人类消息 + 闸门审批」，并且需要让 `panelAutonomyRequest` 参与 `recordGrant`。按本项目约定，**权限语义的改动先问用户**，不单方面做。
+**已接线**（用户 2026-10-13 决定：收紧，让系统做到它已经承诺的事）。
 
-**记录在案，等待决定。** 在那之前，正确的说法是：能力 1 的控制点是**闸门审批**；令牌是待接线的第二因子，不是当前生效的第二因子。
+`recordGrant` 新增 `{ requireToken }`：被引用的人类消息**正文**必须包含那个未过期、未消费的令牌。`setGrant` 负责把令牌取出来并执行单次使用：
+
+```js
+setGrant(agent, autonomy, humanMessageId) {
+  const request = this.panelAutonomyRequest
+  if (!request) throw new Error('dsh-den: no autonomy request is outstanding; mint one from the panel first')
+  if (Date.now() > request.expiresAt) { this.panelAutonomyRequest = null; throw new Error('…expired…') }
+  const record = recordGrant(this.ctx, agent, autonomy, humanMessageId, { requireToken: request.token })
+  this.panelAutonomyRequest = null   // 用后即废
+  return record
+}
+```
+
+**为什么这样就够了**：agent 能铸令牌（`autonomy/request` 本身不设闸），也能引用一个消息 id；但它**无法伪造一条 `user/message`**。所以「正文里有这个令牌」这条证据是它造不出来的——第二因子因此成立。
+
+**两个因子相互独立，谁也不能替代谁**，这一点由测试各自钉住：有请求但消息 id 不是本回合的人类消息 → 拒；有请求、有真实人类消息但正文没有令牌 → 拒（`does not carry the panel token`）；两者齐备 → 授权成功，且令牌随即失效。另有一条断言：**一次失败的尝试不会花掉令牌**——否则一次手抖就会让人类白点一次按钮。
+
+**读取正文时对形状宽容、对主张严格**：`messageText` 同时接受 `data.text` 与 `data.content` 里的文本块。宽容是安全的，因为判据是「这个 32 字符随机串有没有出现」，而不是「消息长什么样」；而**读不出来就拒绝**，是安全的那一侧。
+
+在这次改动之前，正确的说法是：能力 1 的控制点是**闸门审批**，令牌是待接线的第二因子。现在两者都在。
 
 
 

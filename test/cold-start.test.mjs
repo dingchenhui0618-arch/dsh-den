@@ -40,6 +40,7 @@ process.env.DSH_DEN_WAKE_REPLY_TIMEOUT_MS = '1500'
 test.after(() => rmSync(sandboxHome, { recursive: true, force: true }))
 
 const { apply } = await import('../src/index.js')
+const { invokeAction } = await import('../src/panel-api.js')
 const { denHome, denPath, listJsonFiles, readJson, writeJsonAtomic } = await import('../src/atom.js')
 
 /**
@@ -308,8 +309,16 @@ async function callTool(state, name, args, exec) {
 }
 
 /**
- * Grant autonomy through the real tool, so the record on disk has the shape the real
- * code writes rather than one this test invented.
+ * Grant autonomy the way a human does, through both factors the real code requires.
+ *
+ * Factor one: the panel mints a request. It is minted by calling the real
+ * `invokeAction`, not by hand-writing the service field, so the token is one the
+ * production code issued.
+ *
+ * Factor two: the human types that token into the conversation. This is the factor an
+ * agent cannot manufacture — it can mint a token and it can cite a message id, but it
+ * cannot author a `user/message`. Without this, the grant is refused, which is asserted
+ * separately.
  *
  * `exec.agent` is how the host tells a tool which conversation called it. Autonomy is
  * per conversation, so a grant without that scope is refused — which is the correct
@@ -324,6 +333,32 @@ async function grantAutonomy(state) {
   const agent = { id: 'agent-cold', status: 'running', session: state.session }
 
   state.liveAgent = agent
+  const service = state.provided.get('den')
+  const minted = await invokeAction(service, 'autonomy/request', { autonomy: true }, { sessionId: SESSION_ID })
+  assert.equal(minted.ok, true, 'the panel must mint a request')
+
+  const message = state.session.events.find((event) => event.data?.id === HUMAN_MESSAGE_ID)
+  assert.ok(message, 'the fixture must carry the human message that will hold the token')
+  message.data.text = `wake me up if CI breaks — ${minted.value.token}`
+
+  return callTool(
+    state,
+    'den_set_autonomy',
+    { autonomy: true, humanMessageId: HUMAN_MESSAGE_ID },
+    { agent },
+  )
+}
+
+/**
+ * The same grant with the second factor missing: a real, unexpired token is outstanding,
+ * but the human message does not contain it. Used to prove the token is actually checked
+ * rather than merely promised by the panel's copy.
+ */
+async function grantAutonomyWithoutTokenInMessage(state) {
+  const agent = { id: 'agent-cold', status: 'running', session: state.session }
+  state.liveAgent = agent
+  const service = state.provided.get('den')
+  await invokeAction(service, 'autonomy/request', { autonomy: true }, { sessionId: SESSION_ID })
   return callTool(
     state,
     'den_set_autonomy',

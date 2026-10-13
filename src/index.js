@@ -197,9 +197,32 @@ export class DenService {
     return currentGrant(agent)
   }
 
-  /** Record a grant/revocation from a direct human request. Throws otherwise. */
+  /**
+   * Record a grant/revocation from a direct human request. Throws otherwise.
+   *
+   * Two factors, and both are required: the panel must have minted a request — which only
+   * happens when a human is looking at the panel — and the human message the caller cites
+   * must contain that request's token in its text. The token is single-use, so a second
+   * change needs a second human action.
+   *
+   * Before this, the token was never consulted anywhere that could actually grant: the tool
+   * passed only a message id, `recordGrant` checked only that id existed, and the one place
+   * that compared tokens was `autonomy/confirm`, which cannot succeed because a route handler
+   * is not inside the agent's turn. The panel promised a credential model that was not wired.
+   */
   setGrant(agent, autonomy, humanMessageId) {
-    return recordGrant(this.ctx, agent, autonomy, humanMessageId)
+    const request = this.panelAutonomyRequest
+    if (!request) {
+      throw new Error('dsh-den: no autonomy request is outstanding; mint one from the panel first')
+    }
+    if (Date.now() > request.expiresAt) {
+      this.panelAutonomyRequest = null
+      throw new Error('dsh-den: the autonomy request expired; mint a new one from the panel')
+    }
+    const record = recordGrant(this.ctx, agent, autonomy, humanMessageId, { requireToken: request.token })
+    // Single-use: spending it here means a second grant or revoke needs a fresh human action.
+    this.panelAutonomyRequest = null
+    return record
   }
 
   // --------------------------------------------------------------- notices

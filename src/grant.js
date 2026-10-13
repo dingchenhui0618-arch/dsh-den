@@ -45,6 +45,55 @@ function isValidRecord(value) {
 }
 
 /**
+ * The message the caller cites, if the *current turn* actually contains it.
+ *
+ * The turn boundary matters: a grant must be justified by a message in the turn that is
+ * asking for it, not by some earlier message that happened to have a matching id.
+ */
+function citedHumanMessage(agent, messageId) {
+  if (typeof messageId !== 'string' || !messageId) return undefined
+  const events = sessionEvents(agent.session)
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]
+    if (event?.type === 'turn/end') break
+    if (event?.type === 'turn/start') {
+      return events
+        .slice(index + 1)
+        .find(
+          (item) =>
+            item?.type === 'user/message' &&
+            item.data?.id === messageId &&
+            item.data?.source?.kind === 'user',
+        )
+    }
+  }
+  return undefined
+}
+
+/**
+ * Every text fragment a message carries, whatever block shape this Host uses.
+ *
+ * Deliberately permissive about the envelope and strict about the claim: the caller is
+ * asking "did a human type this token", and a Host that wraps text in a block, a string, or
+ * a nested structure should still be readable rather than silently unreadable. An unreadable
+ * message fails the grant, which is the safe direction.
+ */
+function messageText(event) {
+  const data = event?.data
+  if (!data) return ''
+  const parts = []
+  if (typeof data.text === 'string') parts.push(data.text)
+  const blocks = data.content
+  if (Array.isArray(blocks)) {
+    for (const block of blocks) {
+      if (typeof block === 'string') parts.push(block)
+      else if (block && typeof block.text === 'string') parts.push(block.text)
+    }
+  }
+  return parts.join('\n')
+}
+
+/**
  * Authenticate that the calling context is a direct human driver of this agent.
  *
  * This is the gate every grant/revoke path must pass. It intentionally checks the
@@ -57,36 +106,34 @@ export function isDirectHumanDriver(ctx, agent, messageId) {
   if (typeof agents.currentInitiator === 'function' && agents.currentInitiator() !== agent) return false
   if (agent.status !== 'running') return false
   if (typeof agents.roots === 'function' && !agents.roots().includes(agent)) return false
-  if (typeof messageId !== 'string' || !messageId) return false
-
-  const events = sessionEvents(agent.session)
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index]
-    if (event?.type === 'turn/end') break
-    if (event?.type === 'turn/start') {
-      return events
-        .slice(index + 1)
-        .some(
-          (item) =>
-            item?.type === 'user/message' &&
-            item.data?.id === messageId &&
-            item.data?.source?.kind === 'user',
-        )
-    }
-  }
-  return false
+  return citedHumanMessage(agent, messageId) !== undefined
 }
 
 /**
  * Record a grant or revocation, tying it to the human message that carried it.
  *
- * @throws when the caller is not an authenticated direct human driver. Grant and
- * revocation are the only two operations allowed to throw here, because a caller
- * lying about authority is a programming error, not a runtime condition.
+ * `requireToken` is the second factor the panel has always promised and never checked. The
+ * panel's own copy reads *"paste this token to the assistant in the conversation; it will
+ * grant access with this message as proof"*, while this function used to inspect only the
+ * message **id** and never its content — so the token was decorative on every path that
+ * could actually grant, and what really stood in the way was the approval gate. Passing the
+ * outstanding token here makes the message's **text** part of the proof: an agent can mint a
+ * token and can cite a message id, but it cannot author a `user/message`, so it cannot
+ * manufacture the evidence this now requires.
+ *
+ * @throws when the caller is not an authenticated direct human driver, or when a token was
+ * required and the cited message does not carry it. Grant and revocation are the only two
+ * operations allowed to throw here, because a caller lying about authority is a programming
+ * error, not a runtime condition.
  */
-export function recordGrant(ctx, agent, autonomy, humanMessageId) {
+export function recordGrant(ctx, agent, autonomy, humanMessageId, { requireToken } = {}) {
   if (!isDirectHumanDriver(ctx, agent, humanMessageId)) {
     throw new Error('dsh-den: autonomy requires a direct human request')
+  }
+  if (typeof requireToken === 'string' && requireToken) {
+    if (!messageText(citedHumanMessage(agent, humanMessageId)).includes(requireToken)) {
+      throw new Error('dsh-den: the cited human message does not carry the panel token, so it is not the proof it claims to be')
+    }
   }
   const events = sessionEvents(agent.session)
   const human = events.find(

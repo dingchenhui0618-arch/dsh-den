@@ -22,6 +22,7 @@ const { apply, inject, DenService, registerTools, createDeliver } = await import
 // One host fixture, shared with `roundtrip.test.mjs`. Two harnesses inventing their
 // own idea of the host is how a wrong shape gets agreed with instead of caught.
 const { fakeHost } = await import('./support/host.mjs')
+const { invokeAction } = await import('../src/panel-api.js')
 
 test('the plugin declares the web server its status route is mounted on', () => {
   assert.deepEqual(inject, ['agents', 'tools', 'webServer'])
@@ -461,11 +462,26 @@ test('autonomy cannot be self-granted and says so instead of throwing', async ()
   assert.equal(noAgent.ok, false)
   assert.match(noAgent.error, /per conversation/)
 
-  // An agent present, but the message id is not a human message in its log.
+  // An agent in scope, but no human ever asked the panel — so there is no request for this
+  // call to satisfy. This is the cheapest check and it comes first: without a human having
+  // minted a request, nothing else about the call can make it a grant.
   const agent = { id: 'a1', status: 'running', session: { id: 's1', events: [] } }
+  const unasked = await grant.execute({ autonomy: true, humanMessageId: 'never-happened' }, { agent })
+  assert.equal(unasked.ok, false)
+  assert.match(unasked.error, /no autonomy request is outstanding/)
+
+  // With a real request outstanding, a message id that is not a human message in this turn
+  // still fails. The two factors are independent, and neither substitutes for the other.
+  const service = state.provided.get('den')
+  const minted = await invokeAction(service, 'autonomy/request', { autonomy: true }, { sessionId: 's1' })
+  assert.equal(minted.ok, true)
+  agent.session.events.push({ seq: 1, type: 'turn/start', data: {} })
   const forged = await grant.execute({ autonomy: true, humanMessageId: 'never-happened' }, { agent })
   assert.equal(forged.ok, false)
   assert.match(forged.error, /direct human request/)
+
+  // And a failed attempt must not quietly spend the human's single-use token.
+  assert.ok(service.panelAutonomyRequest, 'a refusal must leave the token unspent')
 })
 
 test('the gate explanation tool answers without executing anything', async () => {
