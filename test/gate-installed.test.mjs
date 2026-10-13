@@ -46,6 +46,7 @@ test.after(() => rmSync(sandboxHome, { recursive: true, force: true }))
 const { apply } = await import('../src/index.js')
 const { fakeHost } = await import('./support/host.mjs')
 const { secretShapedPath } = await import('./support/fixtures.mjs')
+const { classifyCall, decide } = await import('../src/gate.js')
 
 /**
  * Build an execution input the way the Host would.
@@ -152,6 +153,52 @@ test('a refusal reaches the durable audit trail, not only the in-memory ring', (
   // copies tool arguments is a second place a secret can leak from.
   const serialised = JSON.stringify(onDisk)
   assert.equal(/credentials\.ya?ml/.test(serialised), false, 'the audit must not quote the path it refused')
+})
+
+test('the durable record names the destination, because the prompt does not survive the process', () => {
+  // Found on the live Host, by this plugin's own gate answering this plugin's author. The
+  // entry was {"tool":"web_fetch","rule":"tool:web_fetch","risk":1,"decision":"ask"} and it
+  // said nothing about where the fetch was aimed, so a read of the local GUI and a read of a
+  // stranger arrived at the human identically. The prompt is now taught to name it — but the
+  // prompt is not the record. `recentEvents` is a bounded ring that dies with the process and
+  // the audit file is what an operator reads afterwards, so a rule that names *why* and not
+  // *where* leaves "why was this refused?" answerable only for the shell rules.
+  //
+  // Driven through the pre-execute listener, not the guard: the guard only ever sees
+  // `risk >= deny` (gate.js line ~445), so an `ask` never reaches it. Reaching for the guard
+  // here was this test's first version, and it failed by recording nothing.
+  const { ctx, state } = fakeHost()
+  apply(ctx)
+  const preExecute = state.listeners.get('tools/pre-execute')
+  const service = state.provided.get('den')
+
+  const call = execution('web_fetch', { url: 'http://127.0.0.1:19387/' })
+
+  // What the person answering sees, before anything is written down.
+  const displayed = decide(classifyCall(call))
+  assert.match(displayed.displayReason.en, /127\.0\.0\.1:19387/)
+  assert.match(displayed.displayReason['zh-CN'], /127\.0\.0\.1:19387/)
+
+  const before = service.gateAudit().length
+  const result = preExecute(call, () => {
+    throw new Error('must not delegate an ask')
+  })
+  assert.equal(result.kind, 'ask')
+  assert.equal(service.gateAudit().length, before + 1, 'the decision must reach the durable audit')
+
+  const entry = service.gateAudit().at(-1)
+  assert.equal(entry.tool, 'web_fetch')
+  assert.equal(entry.destination, '127.0.0.1:19387')
+
+  // Read the file directly, for the same reason as the test above: `gateAudit()` is the
+  // reader, and asserting only through it would pass even if reader and writer were the
+  // same piece of memory.
+  const onDisk = JSON.parse(readFileSync(join(sandboxHome, 'den', 'gate-audit.json'), 'utf8'))
+  assert.equal(onDisk.entries.at(-1).destination, '127.0.0.1:19387')
+
+  // A decision whose arguments name no host records an empty string rather than a guess.
+  preExecute(execution('plugin_manager', {}), () => undefined)
+  assert.equal(service.gateAudit().at(-1).destination, '', 'no destination must not become an invented one')
 })
 
 test('disposing the plugin withdraws the guard, so it cannot outlive its effect', () => {

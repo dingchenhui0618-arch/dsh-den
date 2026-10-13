@@ -987,6 +987,7 @@ export function apply(ctx) {
           risk: classification.risk,
           decision: decision.kind,
           sessionId,
+          destination: classification.destination ?? '',
         }
         service.noteEvent({ type: 'gate', ...entry })
         // Persisted as well as announced, because these are two different surfaces and

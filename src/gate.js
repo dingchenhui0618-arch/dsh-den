@@ -266,7 +266,20 @@ export function classifyCall(exec) {
   if (Object.hasOwn(TOOL_RISK, name)) {
     const risk = TOOL_RISK[name]
     if (risk === RISK.allow) return { risk, rule: `tool:${name}`, reason: 'read-only by declaration' }
-    return { risk, rule: `tool:${name}`, reason: `${name} can have side effects; confirm before it runs` }
+    // A tool-level rule knows *which tool* and nothing about *where the call goes*, and the
+    // person answering the prompt is the one who has to decide. The outbound rules were
+    // already taught to name the destination; this branch was not, so `web_fetch` against a
+    // loopback address and `web_fetch` against a stranger produced the same sentence. Naming
+    // the target adds information without moving the risk, which stays with the human.
+    const destination = destinationOf(text)
+    return {
+      risk,
+      rule: `tool:${name}`,
+      reason: destination
+        ? `${name} can have side effects and would reach ${destination}; confirm before it runs`
+        : `${name} can have side effects; confirm before it runs`,
+      destination,
+    }
   }
 
   return {
@@ -342,10 +355,15 @@ export function decide(classification) {
 /** A Chinese rendering of the reason, so the prompt is readable in this locale. */
 function translateReason(classification) {
   const what = classification.what
-  const target = classification.destination ? `（目标 ${classification.destination}）` : ''
+  const destination = classification.destination
   if (what) {
+    const target = destination ? `（目标 ${destination}）` : ''
     return `这个调用看起来要${what === 'push code to a remote' ? '把代码推到远端' : what}${target}；请先确认。`
   }
+  // No `what` means the rule matched the tool rather than a pattern in a command line. The
+  // destination is computed centrally and must survive this branch too, or the translated
+  // prompt is strictly less informative than the English one it sits beside.
+  if (destination) return `这个调用可能有副作用，目标是 ${destination}；请先确认。`
   return '这个调用可能有副作用；请先确认。'
 }
 
@@ -365,9 +383,9 @@ export function auditPath() {
 /**
  * Record one decision.
  *
- * Deliberately stores the tool name, the rule that matched, and the verdict —
- * never the arguments themselves. An audit log that copies tool arguments is a
- * second place secrets can leak from.
+ * Deliberately stores the tool name, the rule that matched, the destination when the call
+ * named one, and the verdict — never the arguments themselves. An audit log that copies tool
+ * arguments is a second place secrets can leak from.
  */
 export function recordAudit(entry, existing = []) {
   const record = {
@@ -377,6 +395,11 @@ export function recordAudit(entry, existing = []) {
     risk: entry.risk,
     decision: entry.decision,
     sessionId: entry.sessionId ?? null,
+    // The rule says why, this says where. Without it the durable answer to "why was this
+    // refused?" cannot tell a fetch of the local GUI from a fetch of a stranger — the same
+    // information gap the prompt had, one layer further out, in the surface that outlives
+    // the process. It is a derived host and port, not the arguments, and it is bounded.
+    destination: typeof entry.destination === 'string' ? entry.destination.slice(0, 200) : '',
   }
   const next = [...existing, record].slice(-MAX_AUDIT)
   writeJsonAtomic(auditPath(), { version: 1, entries: next })

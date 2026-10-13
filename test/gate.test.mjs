@@ -92,6 +92,31 @@ test('an outbound reason names the destination, because local and remote are not
   assert.doesNotMatch(anonymous.reason, /destination/)
 })
 
+test('a tool-level ask names the destination too, because the tool is not where the call goes', () => {
+  // Measured on the live host. The gate answered a read of the local GUI with
+  // {"tool":"web_fetch","rule":"tool:web_fetch","risk":1,"decision":"ask"} — a prompt naming
+  // the tool and not the address, so reading this Host's own status route and reading any
+  // host on the internet arrive identically at the human. The outbound rules had been taught
+  // to name the destination; this branch had not.
+  const loopback = classifyCall(call('web_fetch', { url: 'http://127.0.0.1:19387/' }))
+  assert.equal(loopback.rule, 'tool:web_fetch')
+  assert.equal(loopback.risk, RISK.ask)
+  assert.equal(loopback.destination, '127.0.0.1:19387')
+  assert.match(loopback.reason, /127\.0\.0\.1:19387/)
+  assert.match(decide(loopback).displayReason['zh-CN'], /127\.0\.0\.1:19387/)
+
+  const stranger = classifyCall(call('web_fetch', { url: 'https://example.invalid/collect' }))
+  assert.equal(stranger.destination, 'example.invalid')
+  assert.match(stranger.reason, /example\.invalid/)
+
+  // A tool-level ask with no address in its arguments must not invent one, in either language.
+  const anonymous = classifyCall(call('web_fetch', { url: '' }))
+  assert.equal(anonymous.rule, 'tool:web_fetch')
+  assert.equal(anonymous.destination, '')
+  assert.doesNotMatch(anonymous.reason, /destination/)
+  assert.doesNotMatch(decide(anonymous).displayReason['zh-CN'], /目标/)
+})
+
 test('an outbound rule constrains the command that runs, not the file that mentions it', () => {
   // Assembled from pieces: the gate installed in this profile still scans every tool's
   // arguments, because the narrowing asserted here is in the tree but not yet loaded by the
