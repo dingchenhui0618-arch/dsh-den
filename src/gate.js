@@ -49,6 +49,34 @@ const SECRET_READ_PATTERNS = [
   { id: 'git-credentials', pattern: /\.git-credentials/i },
   { id: 'kube-config', pattern: /\.kube[/\\]config/i },
   { id: 'codex-auth', pattern: /\.codex[/\\]auth\.json/i },
+  /**
+   * The store names below were found by listing the credential stores **this machine
+   * actually has** — including the ones the user's own home-level instructions enumerate —
+   * and asking the gate about each one. Measured before they were added: all five existed,
+   * and `read` was **allowed** on every one of them, while two rules guarded paths that do
+   * not exist here at all.
+   *
+   * That is the failure mode this list had: it was written from what credential files
+   * generally look like, never audited against what is on the disk. A table built from
+   * recollection protects the recollection. `test/gate-coverage.test.mjs` now asserts the
+   * stores that exist, so one appearing later fails a test instead of going unnoticed.
+   */
+  { id: 'codex-sandbox-secrets', pattern: /\.codex[/\\]\.sandbox-secrets/i },
+  // This file carries the user's own rule set and, per their home instructions, a live token
+  // inside it. Reading it to understand one's own constraints is a real want and it is still
+  // refused: the token comes with it, and the human can read their own file.
+  { id: 'codex-rules-embedded-token', pattern: /\.codex[/\\]rules[/\\]default\.rules/i },
+  { id: 'tokenrouter-config', pattern: /tokenrouter\.config\.toml/i },
+  { id: 'kimi-code-credentials', pattern: /\.kimi-code[/\\]credential/i },
+  { id: 'container-registry-auth', pattern: /\.docker[/\\]config\.json/i },
+  /**
+   * Two locations, and only one of them is on this machine — which is the point.
+   *
+   * The first form is what `gh` uses on POSIX and it does **not** exist here; the second is
+   * `%APPDATA%\\GitHub CLI\\hosts.yml`, which does, and which a rule written from recollection
+   * would have missed. Measured, after the recollection-shaped rule was already written once.
+   */
+  { id: 'gh-cli-hosts', pattern: /(\.config[/\\]gh[/\\]hosts\.ya?ml|GitHub CLI[/\\]hosts\.ya?ml)/i },
 ]
 
 /**

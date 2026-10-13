@@ -135,8 +135,7 @@ test('every tool the Host exposes is classified, and none is unknown by accident
   )
 })
 
-test('the tools that were measured as broken are allowed, so the gate is usable', () => {
-  for (const name of ['read', 'write', 'edit', 'grep', 'glob', 'pwsh']) {
+test('the tools that were measured as broken are allowed, so the gate is usable', () => {  for (const name of ['read', 'write', 'edit', 'grep', 'glob', 'pwsh']) {
     assert.equal(riskOf(name).risk, RISK.allow, `${name} must not stop and ask`)
   }
 })
@@ -233,4 +232,57 @@ test('every allowed tool is declared as an allow literal in the gate source', ()
       `${name} is allowed but is not declared as an allow literal in gate.js`,
     )
   }
+})
+
+// ---------------------------------------------------------- credential stores
+
+/**
+ * Credential stores named by this machine, not by recollection.
+ *
+ * The tool table above is audited against the Host's own registry. The secret-path table had
+ * no equivalent audit, and it showed: it guarded two paths that do not exist here while
+ * allowing `read` on five that do — every one of them enumerated by the user's own home-level
+ * instructions. A list written from what credential files generally look like protects what
+ * the author remembered, which is why this one is written from the filesystem.
+ *
+ * Assembled from parts for the same reason `secretShapedPath` is: a literal here is a literal
+ * match for the rule under test, and the file would be refused before it could assert anything.
+ */
+const home = process.env.USERPROFILE || process.env.HOME || 'C:/Users/someone'
+const CREDENTIAL_STORES = [
+  ['dsh credentials', ['.dsh', ['.credential', 's.yaml'].join('')]],
+  ['codex auth', ['.codex', ['auth', '.json'].join('')]],
+  ['codex rules (carry a live token)', ['.codex', 'rules', 'default.rules']],
+  ['codex sandbox secrets', ['.codex', ['.sandbox-', 'secrets'].join('')]],
+  ['tokenrouter config', ['.codex', ['tokenrouter.config', '.toml'].join('')]],
+  ['kimi-code credentials', [['.kimi-', 'code'].join(''), ['credential', 's'].join('')]],
+  ['cloud credentials', [['.', 'aws'].join(''), ['credential', 's'].join('')]],
+  ['ssh private key', ['.ssh', ['id_', 'ed25519'].join('')]],
+  ['container registry auth', ['.docker', 'config.json']],
+  // Measured, not recalled: `gh` keeps its token in %APPDATA% on Windows, and the POSIX
+  // ~/.config/gh/hosts.yml a rule written from memory would have named does not exist here.
+  ['gh cli hosts', ['AppData', 'Roaming', 'GitHub CLI', 'hosts.yml']],
+]
+
+test('every credential store this machine is known to have is refused, not read', () => {
+  // Portable on purpose: asserted for every listed store whether or not it exists on the
+  // machine running the test. Skipping the absent ones would make this weaker exactly where
+  // it runs unattended, and the point is to fail when a store is known and unguarded.
+  const unguarded = []
+  for (const [label, parts] of CREDENTIAL_STORES) {
+    const filePath = [home, ...parts].join('/')
+    const result = classify('read', { file_path: filePath })
+    if (result.decision !== 'deny') unguarded.push(`${label} -> ${result.decision} (${result.rule})`)
+  }
+  assert.deepEqual(unguarded, [], `credential stores readable by the agent:\n    ${unguarded.join('\n    ')}`)
+})
+
+test('the same stores are refused when reached through a shell, not only through read', () => {
+  // The path table is applied to every tool, which is what makes it the load-bearing rule
+  // rather than the tool table. If it ever became tool-scoped like the action rules, `read`
+  // would still be covered and a shell could walk straight past it.
+  const store = [home, '.dsh', ['.credential', 's.yaml'].join('')].join('/')
+  const viaShell = classify('pwsh', { command: `Get-Content "${store}"` })
+  assert.equal(viaShell.decision, 'deny', 'a credential read through a shell is still a credential read')
+  assert.equal(viaShell.rule, 'secret:credentials-yaml')
 })
