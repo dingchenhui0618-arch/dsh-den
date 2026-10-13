@@ -270,13 +270,26 @@ These were read out of the running Host rather than assumed, and two of them cha
 
 ## Roadmap
 
+**Live verification is tied to an instance, not to a date.** The results below were produced against one running Host — `pid 46900`, plugin instance started `2026-10-13T05:06:55.290Z` — and they are only claims about that instance. A later edit makes them stale by construction, which `tools/check-deployment.mjs` now detects by comparing the instance's `startedAt` against the newest source mtime, so "the tests pass" and "the host is running this tree" stay separate statements.
+
+| probe | result on that instance |
+|---|---|
+| `check-live-autonomy` | PASS — an agent cannot obtain standing autonomy from the live host |
+| `check-live-grant-bypass` | PASS — attacked twice with a real token and the live session id; refused both times, `autonomy=null`, `grantFiles=0` |
+| `check-live-notices` | PASS — the expiry rule holds in the host's own directory |
+| `check-live-memory` | PASS — scenario isolation holds and the host reads the same store |
+| `check-wake-api` | PASS — 8 checks; the live agent carries a callable `followup()` |
+| `check-tools-live` | PASS — the `den_*` tools are callable from the assistant's own turn |
+
+`gate-audit.json` is the seventh artefact and the only one that is not a probe result: it holds the durable record of what the gate refused during that instance's life, with the tool, rule, risk, decision and session but not the arguments.
+
 - **D1 skeleton** — installable plugin, durable state, status surface *(done: bundle registered in a real profile; `fiberPhase: active` through the Host loader)*
 - **D2 authority + notices** — grant binding, expiry, dedup *(done, tested)*
 - **D3 autonomy kernel** — heartbeat, the four-gate decision, cold wake *(done, tested; the heartbeat resolves its own driver and reads the wake's reply back from the session log — see the three production-breaking defects in [DESIGN.md](DESIGN.md) §2.5)*
 - **D4 outbound approval gate** — pre-execute listener plus a monotonic guard, outside the assistant's own prompt *(done, tested; §2.6 records a fourth defect found in the D6 panel half, where the stand-in was a fake runtime rather than a fake service)*
 - **D5 memory + status UI** — scenario-isolated memory domains *(done, tested)*; interactive resident panel *(done: registers in the live sidebar, verified through 41 interaction checks and 22 route tests)*
 - **D6 7×24** — supervised survival: killed process recovers with no human intervention, verified over a long run
-  - *Progress:* the watchdog distinguishes a wedged Host from a healthy one (`StrictHttp`; a TCP-listening-but-HTTP-dead Host was previously logged as healthy), and the plugin's own heartbeat now self-heals instead of deferring permanently. What is still open is a **long unattended run** — the acceptance criterion is a kill-and-recover observed without a human, not a configuration.
+  - *Progress:* the watchdog distinguishes a wedged Host from a healthy one (`StrictHttp`; a TCP-listening-but-HTTP-dead Host was previously logged as healthy), and the plugin's own heartbeat now self-heals instead of deferring permanently. The kernel also runs on its own clock with nobody present: after the instance booted at `05:06:55.290Z` it began ticking on the 60-second cadence and its `lastTickAt` kept advancing across separate checks, none of which the kernel was answering. What is still open is a **long unattended run** — the acceptance criterion is a kill-and-recover observed without a human, not a configuration.
 
 ## 7×24 in two stages
 
