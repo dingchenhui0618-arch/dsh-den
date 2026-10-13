@@ -10,15 +10,15 @@ Status: **the core is implemented, tested (255/255), and active in a real profil
 ```
 node_modules present in clone: False
 dependencies declared: (none)
-ℹ tests 252   ℹ pass 252   ℹ fail 0
+ℹ tests 255   ℹ pass 255   ℹ fail 0
 test exit: 0
 ```
 
-The two files this change added were looked for in that clone by name (`src/resident.js`, `test/resident.test.mjs`), because the failure this proof exists for is a source file that is on disk, is imported by the code, and never made it into the repository — a bare `lib/` in `.gitignore` did exactly that once, and every local test passed while the pushed repo was broken.
+The four files the residency work added were looked for in that clone by name — `src/resident.js`, `test/resident.test.mjs`, `test/two-process.test.mjs`, `test/support/resident-child.mjs` — because the failure this proof exists for is a source file that is on disk, is imported by the code, and never made it into the repository. A bare `lib/` in `.gitignore` did exactly that once, and every local test passed while the pushed repo was broken.
 
-That is the claim worth making precisely: not "it works on my machine", but *a third party with a Node binary and nothing else can check this*. It is also the check that would have caught the worst bug in this project's history. `npm run check:source-tracked` now asserts that every source file on disk is tracked by git, and names the ignore rule that hid it.
+That is the claim worth making precisely: not "it works on my machine", but *a third party with a Node binary and nothing else can check this*. `npm run check:source-tracked` asserts it on every run: every source file on disk is tracked by git, and the ignore rule that hid one is named.
 
-**A transcript is not bookkeeping.** The number above was edited from 240 to 241 to 252 across three commits while the last actual clone run had printed 237 — so the README carried a public claim with no command under it, which is the defect this repository keeps finding in its own work. The number now comes from a run, and the way to keep it that way is to re-run the proof, not to update the count.
+**A transcript is not bookkeeping.** The number above was once edited from 240 to 241 to 252 across three commits while the last actual clone run had printed 237 — a public claim with no command under it, which is the defect this repository keeps finding in its own work. The number now comes from a run at the pushed commit, and the way to keep it that way is to re-run the proof rather than update the count.
 
 
 **The wake delivery path was broken and is now fixed — that history is worth reading, because the test suite was green throughout.** The plugin delivered wakes with `subagents.sendMessage(agent, trigger.sessionId, …)`, where `agent` is the *target conversation's own driver*. The host admits a send only when the sender is the target's direct parent or direct continuable child — `authorizeLineage` requires `parentSession === parent.id` — so the call asked a session to be its own parent and **every admitted wake in production died** with `delivery requires the exact live parent agent`. Five tests covered that path and passed, because the fakes granted any delivery at all: the double was lying about the *calling convention*, not the service.
