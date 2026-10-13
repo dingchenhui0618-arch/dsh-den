@@ -287,6 +287,44 @@ test('the same stores are refused when reached through a shell, not only through
   assert.equal(viaShell.rule, 'secret:credentials-yaml')
 })
 
+test('a script that names a credential cannot be written, which is what closes the indirect path', () => {
+  // The gate sees tool-call text and cannot see inside a program it is asked to run, so
+  // `node <script>` is allowed however dangerous the script is. What makes that survivable is
+  // that getting the dangerous text onto disk *through this profile* requires a tool call, and
+  // that call carries the text — `write` content is argument text too.
+  //
+  // Measured rather than assumed: the path rules run on every tool, so this is refused at the
+  // write, before there is anything to run.
+  const store = [home, '.codex', ['.sandbox-', 'secrets'].join(''), 'probe.json'].join('/')
+  const writing = classify('write', {
+    file_path: 'D:/tmp/probe.mjs',
+    content: `import { readFileSync } from 'node:fs'\nconsole.log(readFileSync('${store}', 'utf8'))\n`,
+  })
+  assert.equal(writing.decision, 'deny', 'writing the credential path into a file is refused')
+  assert.equal(writing.rule, 'secret:codex-sandbox-secrets')
+
+  // The control, without which this test could be passing because `write` is refused for some
+  // other reason. The same script shape with a path that is not a credential store is allowed.
+  const innocent = classify('write', {
+    file_path: 'D:/tmp/probe.mjs',
+    content: `import { readFileSync } from 'node:fs'\nconsole.log(readFileSync('D:/tmp/notes.txt', 'utf8'))\n`,
+  })
+  assert.equal(innocent.decision, 'allow', 'the script shape is not what was refused — the path was')
+})
+
+test('an interpreter invoked on a script file is allowed, because the gate cannot read the file', () => {
+  // Pinning a known boundary, not endorsing it. A command line of `node script.mjs` carries none
+  // of the text a rule could match, so the invocation is allowed; the only defence is the write
+  // above. If this ever narrows, this test fails first and DESIGN 2.13 has to be rewritten — which
+  // is the point of pinning it. The honest scope is stated at the end of 2.14: a text-pattern gate
+  // over tool arguments is not a sandbox, and this repository does not claim credentials can never
+  // leave the domain.
+  const running = classify('pwsh', { command: 'node D:/tmp/probe.mjs' })
+  assert.equal(running.decision, 'allow')
+  const workspace = classify('pwsh', { command: 'node tools/check-deployment.mjs' })
+  assert.equal(workspace.decision, 'allow', 'and narrowing it would refuse every verification command')
+})
+
 // ------------------------------------------------------- reaching the network
 
 /**
