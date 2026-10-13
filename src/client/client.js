@@ -88,6 +88,9 @@ window.__ModuleLoader__.load({
         autonomyTokenHint:
           'Paste this token to the assistant as your next message; it will grant access with that message as proof. The token is single-use and expires.',
         autonomyCopied: 'token ready',
+        autonomyCopyToken: 'copy token',
+        autonomyCopyDone: 'copied — paste it as your next message',
+        autonomyCopyFailed: 'copy failed — select the token above by hand',
         schedules: 'Self-checks',
         scheduleNone: 'none — the den will not wake on its own',
         scheduleTitle: 'Title',
@@ -146,6 +149,11 @@ window.__ModuleLoader__.load({
         grantDockUnknown: '状态未知',
         autonomyTokenHint:
           '把这个令牌作为你的下一条消息发给助理，它会以那条消息作为证据完成写入。令牌一次性有效并会过期。',
+        // 这一条以前在 zh 里缺失，于是中文面板显示的是英文兜底串。
+        autonomyCopied: '令牌已就绪',
+        autonomyCopyToken: '复制令牌',
+        autonomyCopyDone: '已复制 —— 粘贴到下面的输入框发送',
+        autonomyCopyFailed: '复制失败 —— 请手动选中上面的令牌',
         schedules: '自检',
         scheduleNone: '无 —— 助理不会自己醒来',
         scheduleTitle: '名称',
@@ -179,6 +187,57 @@ window.__ModuleLoader__.load({
       } catch (error) {
         return String(ms)
       }
+    }
+
+    /* The one-click copy control for a minted token.
+     *
+     * Written once because this strip renders in two branches of the same component — the dock
+     * above the composer, which is the one a human actually uses, and the full page — and the
+     * two had already drifted: the page grew a copy control while the dock, the one on the
+     * critical path, still offered only `userSelect: all`.
+     *
+     * Why it exists at all: the token is long, single-use and wrapped across lines, and a copy
+     * missing one character is refused downstream as "the message does not quote the token" — a
+     * sentence that names no character and leaves the human with nothing to correct, at the cost
+     * of another round trip. So the control is guarded, and a clipboard that is missing, refuses,
+     * or throws synchronously is reported as a failure rather than as a copy the human cannot
+     * trust. The token still goes nowhere else: this is the same string already shown on the
+     * page, and no page-global is involved. */
+    function copyControl(t, token, note, setNote) {
+      return React.createElement(
+        'button',
+        {
+          key: 'copy',
+          type: 'button',
+          onClick: function () {
+            var fail = function () { setNote('copy-failed') }
+            var clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : null
+            if (!clipboard || typeof clipboard.writeText !== 'function') {
+              fail()
+              return
+            }
+            try {
+              clipboard.writeText(token).then(
+                function () { setNote('copied') },
+                fail,
+              )
+            } catch (error) {
+              fail()
+            }
+          },
+          style: {
+            background: 'transparent',
+            border: '1px solid var(--dsw-alias-border-l2)',
+            borderRadius: 4,
+            color: 'var(--dsw-alias-label-primary)',
+            cursor: 'pointer',
+            fontSize: 12,
+            padding: '2px 8px',
+            whiteSpace: 'nowrap',
+          },
+        },
+        t(note === 'copied' ? 'autonomyCopyDone' : note === 'copy-failed' ? 'autonomyCopyFailed' : 'autonomyCopyToken'),
+      )
     }
 
     /* Status tones resolve through an explicit table rather than string
@@ -519,9 +578,16 @@ window.__ModuleLoader__.load({
           }, t('autonomyRevoke')),
           action.token
             ? React.createElement(
-                'code',
-                { style: { padding: '2px 6px', borderRadius: 4, background: 'var(--dsw-alias-bg-layer-2)', userSelect: 'all' } },
-                action.token,
+                'span',
+                { style: { display: 'inline-flex', alignItems: 'center', gap: 6, maxWidth: '100%' } },
+                React.createElement(
+                  'code',
+                  { style: { padding: '2px 6px', borderRadius: 4, background: 'var(--dsw-alias-bg-layer-2)', userSelect: 'all', wordBreak: 'break-all' } },
+                  action.token,
+                ),
+                copyControl(t, action.token, action.note, function (next) {
+                  setAction(Object.assign({}, action, { note: next }))
+                }),
               )
             : null,
           action.token
@@ -564,9 +630,16 @@ window.__ModuleLoader__.load({
             { key: 'tok', style: { margin: '8px 0', padding: 8, background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 4, fontSize: 12 } },
             React.createElement('div', { style: { color: 'var(--dsw-alias-state-warn-primary)' } }, t('autonomyCopied')),
             React.createElement(
-              'code',
-              { style: { display: 'block', margin: '4px 0', wordBreak: 'break-all', color: 'var(--dsw-alias-label-primary)' } },
-              action.token,
+              'div',
+              { style: { display: 'flex', alignItems: 'flex-start', gap: 8, margin: '4px 0' } },
+              React.createElement(
+                'code',
+                { style: { flex: '1 1 auto', minWidth: 0, wordBreak: 'break-all', color: 'var(--dsw-alias-label-primary)' } },
+                action.token,
+              ),
+              copyControl(t, action.token, action.note, function (next) {
+                setAction(Object.assign({}, action, { note: next }))
+              }),
             ),
             React.createElement('div', { style: { color: 'var(--dsw-alias-label-secondary)' } }, t('autonomyTokenHint')),
           ),

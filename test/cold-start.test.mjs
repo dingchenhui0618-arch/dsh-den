@@ -59,6 +59,7 @@ const { apply } = await import('../src/index.js')
 const { invokeAction } = await import('../src/panel-api.js')
 const { leasePath } = await import('../src/resident.js')
 const { denHome, denPath, listJsonFiles, readJson, writeJsonAtomic } = await import('../src/atom.js')
+const { readLedger } = await import('../src/kernel.js')
 
 /**
  * Boot the plugin the way a host does, and remember how to undo it.
@@ -459,6 +460,15 @@ test('a trigger created before the restart is found and fired after it', async (
   const after = service.listTriggers().valid[0]
   assert.equal(after.fireCount, 1)
   assert.equal(typeof after.lastFiredAt, 'number')
+
+  // The instrument the live drill will be read with, verified here before it is used as
+  // evidence. A real wake charges one turn, and a wake that actually speaks is recorded as
+  // spoken — `turns` is bumped after delivery but `spoken` only when the notice goes out, so a
+  // silent check-in would move the first and not the second. That is exactly why the drill
+  // asserts both counters and not just "something happened".
+  const ledger = readLedger(new Date(now))
+  assert.equal(ledger.turns, 1, 'a delivered wake charges exactly one turn')
+  assert.equal(ledger.spoken, 1, 'a wake that speaks is recorded as spoken, not merely as a turn')
   service.kernel.stop()
 })
 

@@ -142,8 +142,18 @@ function fakeFetch(url, init) {
   })
 }
 
+/**
+ * The browser object the panel looks for.
+ *
+ * This harness starts with no clipboard at all — a real browser state, not a convenience: a
+ * hardened browser has none, so the failure path is what the panel meets here by default. The
+ * check that needs the success path installs `writeText` on this object and takes it away again.
+ */
+const fakeNavigator = { clipboard: undefined }
+
 {
   const sandbox = {
+    navigator: fakeNavigator,
     window: {
       __ModuleLoader__: { load: (spec) => { loaded = spec } },
       // The panel looks for this hook, so an offline harness can observe the
@@ -539,6 +549,28 @@ if (process.env.DEN_DEBUG) {
 }
 check(panel2.text().includes('tok-abc123'), 'the minted token is displayed for the human to carry to the conversation')
 check(panel2.text().includes('一次性'), 'the panel explains the token is single-use')
+
+/* --- carrying the token is one click, and a copy that did not happen says so --- */
+
+// The token is long, single-use and wrapped across lines, and a copy missing one character is
+// refused downstream as "the message does not quote the token" — a message that names no
+// character and leaves the human with nothing to fix. So the strip offers a copy control, and
+// both directions of it are checked here: this harness has no clipboard (as a hardened browser
+// may not), and a label that claims a copy the browser refused would be worse than no button.
+const copyLabel = () => {
+  const button = panel2.buttons().find((candidate) => /复制令牌|已复制|复制失败/.test(textOf(candidate)))
+  return { button, label: button ? textOf(button).trim() : '' }
+}
+check(Boolean(copyLabel().button), 'the token strip offers a copy control')
+await panel2.click(copyLabel().label)
+check(panel2.text().includes('复制失败'), 'with no clipboard available the panel reports the failure instead of claiming a copy')
+
+const copied = []
+fakeNavigator.clipboard = { writeText: (text) => { copied.push(text); return Promise.resolve() } }
+await panel2.click(copyLabel().label)
+check(copied.includes('tok-abc123'), 'and with a clipboard it puts the exact token on it')
+check(panel2.text().includes('已复制'), 'and then says the copy happened')
+fakeNavigator.clipboard = undefined
 
 /* --- creating a self-check sends the right payload ------------------------ */
 
