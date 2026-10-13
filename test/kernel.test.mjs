@@ -7,7 +7,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -39,7 +39,7 @@ const {
   recordSpoke,
 } = await import('../src/kernel.js')
 const { allNotices } = await import('../src/notices.js')
-const { KernelLease, leasePath } = await import('../src/resident.js')
+const { KernelLease, TAKEOVER_GRACE_MS, leasePath } = await import('../src/resident.js')
 
 test.after(() => rmSync(sandbox, { recursive: true, force: true }))
 
@@ -399,14 +399,48 @@ test('a fresh lease whose owner is gone is reclaimed at once, so a restart does 
   // The staleness window exists for a holder that died without releasing. It must not be what a
   // restart waits for: after a restart the previous pid no longer exists, and there is no reason
   // to leave the assistant mute for three heartbeats before noticing.
+  //
+  // "At once" means inside the grace, not literally the same millisecond. A liveness probe was
+  // measured answering "no such process" for a process that was alive, so a record younger than
+  // `TAKEOVER_GRACE_MS` is protected from a negative answer — a wrong answer is cheap to survive,
+  // a deleted live lease is not. The restart this describes is one where the holder ran for a
+  // while, which is every restart: its record is at least a heartbeat old.
   const path = leasePath()
   const dead = new KernelLease({ path, staleMs: 600_000, isAlive: () => false })
   assert.equal(dead.acquire(10_000), true, 'the first holder claims it')
 
   const restarted = new KernelLease({ path, staleMs: 600_000, isAlive: () => false })
-  assert.equal(restarted.acquire(10_001), true, 'a dead owner is reclaimed immediately, well inside the window')
+  assert.equal(
+    restarted.acquire(10_000 + TAKEOVER_GRACE_MS),
+    true,
+    'a dead owner is reclaimed immediately, well inside the window',
+  )
   assert.equal(restarted.report().held, true)
   assert.equal(restarted.report().holderPid, restarted.pid)
+})
+
+test('a record younger than the grace is not taken over on a liveness answer alone', async () => {
+  // The guard itself, and the reason it exists. The probe said the owner was gone; the record was
+  // written a moment ago; a process can be wrong about that and cannot be wrong about having just
+  // written it. Measured: four processes over one lease, a holder one millisecond old declared
+  // gone, its record deleted, and a second owner created.
+  const path = leasePath()
+  const holder = new KernelLease({ path, staleMs: 600_000, isAlive: () => true })
+  assert.equal(holder.acquire(10_000), true)
+
+  const impatient = new KernelLease({ path, staleMs: 600_000, isAlive: () => false })
+  assert.equal(impatient.acquire(10_000 + TAKEOVER_GRACE_MS - 1), false, 'a millisecond inside the grace')
+  assert.equal(impatient.report().held, false)
+  assert.equal(
+    JSON.parse(readFileSync(path, 'utf8')).instance,
+    holder.instance,
+    'and the holder keeps its record',
+  )
+  assert.equal(
+    impatient.acquire(10_000 + TAKEOVER_GRACE_MS),
+    true,
+    'but refusing forever would be the other failure: every host declining',
+  )
 })
 
 test('a refused wake is recorded in the ledger, never silently dropped', async () => {

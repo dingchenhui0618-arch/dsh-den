@@ -16,6 +16,10 @@
  *                            file appears, which is the window a real delivery spends waiting on
  *                            a Host. Another process can only be told the same check-in is due
  *                            while this one is inside it.
+ *   race <file> [--go=<f>]   build a lease over one home, announce readiness, then spin on the
+ *                            shared `go` file and claim. Several of these started together is
+ *                            the only way to see whether two processes can both believe they own
+ *                            the same lease.
  *
  * The result is written to a file rather than piped: the tests run their children with
  * `stdio: 'ignore'` so the fixture never depends on capturing a child's output.
@@ -25,7 +29,10 @@ import { existsSync, writeFileSync } from 'node:fs'
 const [, , mode, resultFile, ...flags] = process.argv
 const park = flags.includes('--park')
 const setup = flags.includes('--setup')
-const goFile = `${resultFile}.go`
+// Shared on purpose where it matters: several racers have to be released by the same file at
+// once, so `--go=` overrides the per-child default.
+const goFlag = flags.find((flag) => flag.startsWith('--go='))
+const goFile = goFlag ? goFlag.slice('--go='.length) : `${resultFile}.go`
 
 const { apply } = await import('../../src/index.js')
 const { fakeHost } = await import('./host.mjs')
@@ -114,6 +121,30 @@ if (mode === 'report' || mode === 'hold') {
     due: result.due ?? null,
     holderPid: result.holderPid ?? null,
     residency: kernel.lease?.report() ?? null,
+  })
+  process.exit(0)
+} else if (mode === 'race') {
+  // The lease is built first and readiness is announced, so the imports and the directory
+  // preparation are already paid for by the time the starting gun goes off. What is left in the
+  // window is the claim itself.
+  //
+  // Spinning on the file rather than sleeping on a timer is the point. A timer, or simply the
+  // order the parent spawned them in, spreads four attempts over milliseconds — wide enough that
+  // a check-then-write implementation would usually get away with it, and the test would pass
+  // while proving nothing about the instant. File polling costs microseconds, so all four are
+  // inside `acquire` at once.
+  const lease = new KernelLease({ path: leasePath(), staleMs: 600_000 })
+  writeFileSync(`${resultFile}.ready`, String(process.pid))
+  while (!existsSync(goFile)) {
+    /* spin: the window has to be tight or this measures nothing */
+  }
+  const held = lease.acquire()
+  record({
+    pid: process.pid,
+    held,
+    instance: lease.instance,
+    report: lease.report(),
+    lastError: lease.lastError ?? null,
   })
   process.exit(0)
 } else {

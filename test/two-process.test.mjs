@@ -22,9 +22,22 @@ import test from 'node:test'
 
 import { fileURLToPath } from 'node:url'
 
+import { TAKEOVER_GRACE_MS } from '../src/resident.js'
+
 const childScript = fileURLToPath(new URL('./support/resident-child.mjs', import.meta.url))
 const sandboxHome = mkdtempSync(join(tmpdir(), 'dsh-den-two-process-'))
 const SESSION_ID = 'session-two-process'
+
+/**
+ * A restart finds a record that has been there a while, not one written a millisecond ago.
+ *
+ * That distinction is now load-bearing: a liveness probe was measured answering "no such process"
+ * for a process that was alive, so a *young* record is protected from a negative answer until it is
+ * older than `TAKEOVER_GRACE_MS`. A test that kills a holder immediately after it claimed residency
+ * would be testing a case no restart produces, and would be measuring the grace rather than
+ * recovery.
+ */
+const pastTakeoverGrace = () => new Promise((resolve) => setTimeout(resolve, TAKEOVER_GRACE_MS + 200))
 
 let children = []
 
@@ -65,21 +78,28 @@ function spawnChild(mode, resultFile, flags = []) {
     stdio: 'ignore',
   })
   children.push(child)
+  // The listener goes on now, not when a test gets around to waiting. `exit` is emitted once, and
+  // a listener attached after that never fires — so a test that asks late would hang instead of
+  // failing, which is the worst way to find out. Measured while building the simultaneous-claim
+  // test: four children released by one file exited inside the gap and three were waited on
+  // forever. These call sites happen to attach before the child can exit; that is luck, not
+  // correctness, so the fixture attaches at spawn and the helpers just read the result.
+  child.exit = new Promise((resolve, reject) => {
+    child.on('exit', (code, signal) => resolve({ code, signal }))
+    child.on('error', reject)
+  })
+  child.exit.catch(() => {})
   return child
 }
 
 const exited = (child) =>
-  new Promise((resolve, reject) => {
-    child.on('exit', (code) => (code === 0 ? resolve(code) : reject(new Error(`child exited ${code}`))))
-    child.on('error', reject)
+  child.exit.then(({ code }) => {
+    if (code !== 0) throw new Error(`child exited ${code}`)
+    return code
   })
 
 /** Wait for a child that was killed rather than one that finished, so any exit code is fine. */
-const stopped = (child) =>
-  new Promise((resolve, reject) => {
-    child.on('exit', resolve)
-    child.on('error', reject)
-  })
+const stopped = (child) => child.exit.then(() => undefined)
 
 async function waitForFile(path, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs
@@ -101,6 +121,7 @@ test('a second real process takes residency once the first one has exited', asyn
   assert.equal(firstReport.residency.held, true, 'the first process holds residency')
   assert.equal(firstReport.pid, firstReport.residency.pid)
   assert.equal(alive(firstReport.pid), false, 'and it is genuinely gone, or this proves nothing')
+  await pastTakeoverGrace()
 
   // Same home, same lease file, left behind by a process that no longer exists.
   const secondFile = at(sandboxHome, 'second.json')
@@ -179,6 +200,7 @@ test('a killed process leaves residency behind and the next one recovers it with
   await waitForFile(holderFile)
   const holderPid = readResult(holderFile).pid
   assert.equal(alive(holderPid), true, 'the holder was alive when it claimed residency')
+  await pastTakeoverGrace()
 
   holder.kill()
   await stopped(holder)

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Residency: one kernel per state tree, best effort.
  *
  * `~/.dsh/den` is keyed on `DSH_HOME`, not on the profile. Two profiles — or the desktop app
@@ -51,6 +51,29 @@ export function leasePath() {
  */
 export const CLOCK_SLACK_MS = 60_000
 
+/** How long to wait between liveness probes before believing a "no such process". */
+export const LIVENESS_RETRY_MS = 5
+
+/** The synchronous sleep used by the liveness retry. */
+const LIVENESS_PARK = new Int32Array(new SharedArrayBuffer(4))
+
+/**
+ * How young a record may be, and still be protected from a liveness answer that says its owner is
+ * gone.
+ *
+ * The staleness window is measured in heartbeats, and a restart must not wait for it. But a
+ * *liveness probe* is not strong enough on its own to justify deleting a record that was written a
+ * moment ago: measured, under load, `process.kill(pid, 0)` answered `ESRCH` for a process that was
+ * alive and went on to deliver. A holder one millisecond old was declared gone, its record was
+ * deleted, and a second owner was created.
+ *
+ * So a negative answer only authorises taking over a record that is at least this old. In the
+ * field that costs nothing: a restart finds the previous holder's record at least one heartbeat
+ * old, which is far beyond this. It is a bound on the damage one wrong answer can do, not a claim
+ * that the probe is now trustworthy — see DESIGN 2.16.
+ */
+export const TAKEOVER_GRACE_MS = 1_000
+
 /**
  * Is this process still running?
  *
@@ -60,12 +83,33 @@ export const CLOCK_SLACK_MS = 60_000
 export function defaultIsAlive(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return false
   if (pid === process.pid) return true
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return error?.code === 'EPERM'
+  // Only a definite "no such process" is a negative — and even that is asked more than once.
+  //
+  // Measured: under load, `process.kill(pid, 0)` answered `ESRCH` for a process that was alive.
+  // Four Hosts racing over one lease, and a holder one millisecond old was declared gone, its
+  // record deleted, and a second owner created. Twenty-four thousand probes from an idle parent
+  // never reproduced it, so it is a load-and-Windows effect rather than a plain bug in the API.
+  //
+  // A second look is cheap and a dead pid stays dead. The wait matters: three tight retries did not
+  // clear it in the reproduction, but the wrong answer belongs to a transient state, so the retries
+  // are spaced by a few milliseconds rather than by nothing. `Atomics.wait` is the synchronous sleep
+  // available here; `acquire` is called once per heartbeat, so a few milliseconds is affordable.
+  //
+  // Note what this is: a mitigation, not a proof. The deletion that a wrong answer authorises is
+  // what makes it worth more than nothing.
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch (error) {
+      // EPERM means the pid exists and belongs to someone else to signal, which is still alive.
+      // Anything else is an answer we do not have, and an answer we do not have must not
+      // authorise deleting a live holder's lease.
+      if (error?.code !== 'ESRCH') return true
+      if (attempt < 3) Atomics.wait(LIVENESS_PARK, 0, 0, LIVENESS_RETRY_MS)
+    }
   }
+  return false
 }
 
 export class KernelLease {
@@ -127,6 +171,40 @@ export class KernelLease {
   }
 
   /**
+   * Claim the right to take over one specific record.
+   *
+   * Deleting a record and creating a new one is not mutual exclusion, however atomic the create is.
+   * Two hosts that judge the same record free both delete it, and the second delete removes the
+   * record the first host has just created — leaving two, or three, hosts that each correctly
+   * believe they created the lease. Measured, before this existed: four real processes over one
+   * empty lease produced three simultaneous owners.
+   *
+   * So the right to take over is itself a create-if-absent, on a name derived from the record being
+   * replaced. Every host that judged *that* record computes the same name, so exactly one proceeds
+   * and the rest stand down against whatever the winner leaves behind.
+   *
+   * The marker is deliberately not cleaned up. A slow host can read a record, lose the race for the
+   * marker, and still try to act on the record it read; the marker existing is what stops it. One
+   * zero-byte file per takeover is a cheaper price than a second resident.
+   *
+   * @returns {boolean} whether this instance may take the record over
+   */
+  #claimTakeover(existing) {
+    const marker = `${this.path}.reclaim-${existing.instance ?? 'unreadable'}.${existing.renewedAt}`
+    try {
+      closeSync(openSync(marker, 'wx', 0o600))
+      return true
+    } catch (error) {
+      // Losing the claim is a race, and the only race here.
+      if (error?.code === 'EEXIST') return false
+      // Anything else is not a race, and the one outcome this module exists to prevent is every
+      // host declining — so this proceeds, and says why.
+      this.lastError = String(error?.message ?? error)
+      return true
+    }
+  }
+
+  /**
    * Take or keep the lease.
    *
    * @returns {boolean} whether this instance may deliver on this tick
@@ -151,9 +229,32 @@ export class KernelLease {
       const fresh = Number.isFinite(age) && age <= this.staleMs && age >= -CLOCK_SLACK_MS
       // An unknown owner counts as ownership while the record is fresh: an unreadable lease is
       // preferred over a second delivery.
-      if (fresh && (existing.instance === null || this.isAlive(existing.pid))) {
+      const alive = existing.instance === null ? true : this.isAlive(existing.pid)
+      // And a *negative* answer is not enough on its own while the record is young. The probe was
+      // measured lying about a holder one millisecond old, so a young record is respected whether
+      // or not the probe believes its owner is gone.
+      const provablyAbandoned = !alive && age >= TAKEOVER_GRACE_MS
+      if (fresh && !provablyAbandoned) {
         this.held = false
         this.holder = existing
+        return false
+      }
+
+      // Taking over is the dangerous half, and a delete-then-create is not mutual exclusion: two
+      // hosts that judge the same record free both delete, and the second delete removes the record
+      // the first host just created. The right to take over is therefore itself a create-if-absent,
+      // on a name derived from the record being replaced.
+      if (!this.#claimTakeover(existing)) {
+        this.held = false
+        this.holder = this.#read()
+        return false
+      }
+      // Between judging and claiming, someone may have replaced the record. If it is no longer the
+      // one judged, its own answer stands and this host stands down.
+      const current = this.#read()
+      if (current && (current.instance !== existing.instance || current.renewedAt !== existing.renewedAt)) {
+        this.held = false
+        this.holder = current
         return false
       }
       this.#remove()
@@ -241,3 +342,5 @@ export class KernelLease {
     }
   }
 }
+
+

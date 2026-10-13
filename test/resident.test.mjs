@@ -104,6 +104,31 @@ test('a record a hair in the future is still fresh, a wildly future one is not',
   )
 })
 
+test('a second host cannot take over a record that has already been taken over', () => {
+  // The takeover claim's whole job, tested without needing two processes to actually overlap.
+  //
+  // Two hosts judge the same expired record free. One deletes it and creates its own. The other is
+  // still holding the record it read — and without a claim it deletes the *winner's* record and
+  // creates a second lease, so both deliver. That is not a rare interleaving: it is what "delete
+  // the record, then create one" means, and it was measured as three simultaneous owners from four
+  // processes.
+  //
+  // Overlap is replayed rather than raced, so this fails every time the claim is removed instead of
+  // most of the time the machine is busy. The losing host's view of the world is put back under it.
+  const path = leaseAt()
+  const expired = { version: 1, pid: 4, instance: 'a-holder-that-is-gone', startedAt: 1000, renewedAt: 1000 }
+  writeFileSync(path, JSON.stringify(expired))
+
+  const taker = new KernelLease({ path, staleMs: 100, isAlive: () => false })
+  assert.equal(taker.acquire(10_000), true, 'the first host takes the expired record over')
+
+  // What the loser read before the winner acted, back on disk.
+  writeFileSync(path, JSON.stringify(expired))
+  const loser = new KernelLease({ path, staleMs: 100, isAlive: () => false })
+  assert.equal(loser.acquire(10_000), false, 'and the second host does not take the same record over again')
+  assert.equal(loser.report().held, false)
+})
+
 test('a stale record is reclaimed even though its owner is alive', () => {
   const path = leaseAt()
   const holder = new KernelLease({ path, staleMs: 1000 })
