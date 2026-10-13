@@ -32,6 +32,15 @@ with `ledger.refused` incremented and the trigger's `fireCount` left at `0` — 
 
 The remaining unverified step is the *admitted* wake and the long unattended run. Both need a human to grant autonomy.
 
+**The authorization flow has a dry run on the running host, and it refuses correctly.** Every step below was exercised over the real route:
+
+1. `autonomy/request` → `ok: true`, a 32-character token, and an instruction that states the design in one line: *call `den_set_autonomy`, `autonomy=true`, `humanMessageId` with this message's id, and cite token …*. It creates **no** grant.
+2. `autonomy/confirm` with that token but no human evidence → `ok: false`, `DEN_ACTION_FAILED`, *"no live conversation for this token: autonomy is granted per conversation"*.
+3. Repeating the failed confirm → the **same** refusal, so the failure did not spend the token.
+4. `status` afterwards → `autonomy: null`, `autonomyKnown: false`. Nothing was created.
+
+Step 2's message is specific rather than generic because `autonomy/confirm` resolves the conversation itself and refuses before it looks at the message id — so a synthetic session stops one layer earlier than a real one would. That is why this dry run proves the transport and the refusal, and *not* what a valid confirmation does. The valid case is the one awaiting a human.
+
 **That the plugin is live is proven from disk, not asserted.** `npm run check:tools` reads the persisted session logs and pairs every `tool/call` record with its result — a call *attempt* is not evidence, because a model can name a tool that was never registered and the attempt is still logged; only a result that is not an `unknown tool` error proves the tool existed in that session's set. Verdict on the live profile: **proven for `den_remember`, `den_schedule_check` and `den_status`**.
 
 **What is *not* yet observed, stated precisely.** The panel's `call()` and the host's route handler are verified against each other end to end, in one process, by `test/roundtrip.test.mjs` — the request bytes, the response bytes, and the payload the panel receives. What has never run is that pair underneath the real Cordis client loader, over a real socket, in a real browser. The host process currently running still executes pre-fix code — the panel's new route is absent from it (`GET /dsh-den` answers 404 while its siblings `GET /dsh-warden` and `GET /dsh-vision-diff` answer 200 with full JSON) — and plugin changes are not hot-reloaded into a running host. So the remaining unknown is the loader and the socket, not the contract. `den_status` reports `transport.browserReachable` once a real request lands, which is how that last step reports itself. See [DESIGN.md](DESIGN.md) for the measurements.
