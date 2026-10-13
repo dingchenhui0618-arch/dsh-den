@@ -445,9 +445,47 @@ authorizeLineage(parent, childId, parentSession) {
 
 为什么回归测试全绿：`test/support/host.mjs` 的假 `subagents.sendMessage` **无条件接受任何投递**。它造假的不只是「服务」，还有**调用方式**——与 §2.5/§2.6 是同一类错误的第三次出现，而这次掩盖的是产品的主路径。
 
-**结论与下一步**：这不是能悄悄改掉的一行。要让唤醒送达人类会话，发送者必须是该会话的 **continuable 子**，而插件**从未捕获「谁创建了这个定时检查」**——`den_schedule_check` 的 `exec.agent` 没有被记录，触发器里只有 `sessionId`。
+**修法（已实现）**：不再借道 `subagents`，改用**驱动自己的收件箱**——`Agent.followup(message)`。宿主自己的文档把语义写得毫无歧义：
 
-候选修法（尚未实现、**尚未验证**，因为它需要一个被准入的唤醒才能观察到）：在创建时记录创建者的 agent 身份，唤醒时以「该目标的 continuable 子」作为 sender 投递；或改走主机侧 `Session.append` + `agent.send` 的落库通路。两条路都需要在真实宿主上验一遍才能声称修好——**而本轮我能给的是定位与代码证据，不是修复**。
+> *"`followup()` queues an ordinary next-turn prompt and wakes the driver; `steer()` submits next-step input and wakes it; `inject()` adds model-facing context without waking the driver."*
+
+实现就是 `send(message, 'next-turn', true)`：把消息 splice 进 `inbox`，空闲时打开回合边界，忙碌时把唤醒闩住。**不涉及任何 lineage**，消息在人类对话里就是一条可见的待办回合，并durably 落成 `user/message`——正好与下面的回复读回配对。
+
+```js
+agent.followup({
+  id: `den-wake-${trigger.id}-${baselineSeq}`,
+  role: 'user',
+  source: { kind: 'user' },
+  content: [{ type: 'text', text }],
+})
+```
+
+`subagents` 从此**不再被读取**；「有没有投递通路」的判据也随之从 `subagents.sendMessage` 变成 `agents.get`，并且**失败时指名缺的是哪个服务**，而不是给一句笼统的 verdict。
+
+**这里要记的是：我原本以为要「记录创建者身份、以 continuable 子身份投递」，那是对着错误的 API 想补丁。** 真正的问题是我把一个**受限的父子通道**当成了通用投递口。换成收件箱之后，那个「谁是创建者」的问题根本不存在——不需要问。
+
+### 2.8 第三个、也是代价最大的那个假替身：假的是「调用方式」
+
+§2.5/§2.6 的教训是替身会假在服务上。这一条更贵：**替身假在了调用方式上，掩盖的是产品主路径。**
+
+`test/support/host.mjs` 与 `test/cold-start.test.mjs` 里各有一个 `subagents.sendMessage` 假实现，都无条件接受任何投递。于是「唤醒投递」这条链在测试里永远成功，在真实宿主上永远失败。
+
+修的时候我**先改错了一个**：改了 `test/support/host.mjs`，套件**依然全绿**——因为 `cold-start.test.mjs` 自己另有一个，而测试用的是那一个。那一刻我没有下结论，而是去查 sender 的真实形状，才发现有两个替身。**如果当时我信了那一片绿，我会得出「我的分析错了」的结论。**
+
+所以修法不是「把真相抄进两个替身」，而是做成**单一来源** `test/support/subagent-delivery.mjs`，导出 `judgeSendMessage` / `assertSendMessage`，**每个替身都必须调用它**。新加一个忘记调的替身，是一个不会失败的替身——这句话现在写在那个模块的头部。
+
+纪律：**只建模拒绝，不建模接受。** 一个也会放行成功的假替身，会让调用方相信一次宿主本会拒绝的投递发生了。宁可让假替身比真宿主更严格。
+
+**验证方式**：把两处假替身都接上规则后，那 5 个测试立刻变红，报的正是
+
+```
+"reason":"subagent \"session-cold\" delivery requires the exact live parent agent:
+          the sender has no recorded parent, so it is not a continuable child of the target"
+```
+
+——**被准入了、然后送不到**。我先标成 `todo` 并写明缺陷（套件保持诚实），修好投递后再删掉标记；现在 226/226、`todo 0`。
+
+**仍未验证的**：这个修复在回归测试台里成立，**但没有在真实宿主上观察到过**——线上跑的仍是旧构建，需要一次重启；而且要先有人类授权。所以能力 2 的活体验收依旧欠着，只是**拦路的缺陷已经修掉，不再是设计问题**。
 
 
 

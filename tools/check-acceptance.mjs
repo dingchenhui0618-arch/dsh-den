@@ -33,11 +33,17 @@ let serial = 0
 /**
  * Bring the plugin up on a Host whose delivery path can appear late.
  *
- * `subagents` is read through `ctx.get`, so the fixture has to dispatch through
- * mutable state — closing over the option makes a late arrival unobservable, and
- * that mistake made a harness bug look like a product bug earlier.
+ * `agents` is read through `ctx.get`, so the fixture has to dispatch through mutable
+ * state — closing over the option makes a late arrival unobservable, and that mistake
+ * made a harness bug look like a product bug earlier.
+ *
+ * This used to stand up `subagents`, because delivery went through
+ * `subagents.sendMessage`. Delivery now goes through the resolved driver's own inbox
+ * (`Agent.followup`), so `agents` is the service whose arrival the kernel waits for. A
+ * fixture that still arranges `subagents` would be testing the plugin's ability to notice
+ * a service it no longer consults.
  */
-async function boot({ home, withSubagents }) {
+async function boot({ home, withAgents }) {
   process.env.DSH_HOME = home
   serial += 1
   const index = await import(`file:///D:/Projects/dsh-den/src/index.js?accept=${serial}`)
@@ -48,8 +54,14 @@ async function boot({ home, withSubagents }) {
     guard: (handler) => (state.guards.push(handler), () => {}),
   }
   const sent = []
-  state.subagents = withSubagents
-    ? { async sendMessage(...args) { sent.push(args); return 'msg-1' } }
+  const agentFor = () => ({
+    id: 'accept-agent',
+    status: 'running',
+    session: { id: 'accept-session', header: { id: 'accept-session' }, snapshotEvents: () => [] },
+    followup: (message) => sent.push(message),
+  })
+  state.agents = withAgents
+    ? { get: () => undefined, resume: async () => ({ agent: agentFor(), dispose: async () => {} }) }
     : null
 
   const ctx = {
@@ -59,10 +71,9 @@ async function boot({ home, withSubagents }) {
     effect: (fn) => fn(),
     provide: (key, value) => (state.provided.set(key, value), () => state.provided.delete(key)),
     get(key) {
-      if (key === 'subagents') return state.subagents
+      if (key === 'agents') return state.agents
       if (key === 'tools') return toolsApi
       if (key === 'connection') return ctx.connection
-      if (key === 'agents') return ctx.agents
       return undefined
     },
     on: (event, handler) => (state.listeners.set(event, handler), () => state.listeners.delete(event)),
@@ -113,7 +124,7 @@ console.log('\n=== GOAL 2 — boot persists state ===')
 console.log('\n=== GOAL 1 — a deferred heartbeat self-heals ===')
 {
   const home = freshHome()
-  const deferred = await boot({ home, withSubagents: false })
+  const deferred = await boot({ home, withAgents: false })
 
   const atBoot = await deferred.tool('den_status').execute({})
   check(atBoot.kernel === null, 'no delivery path means no heartbeat yet')
@@ -125,7 +136,18 @@ console.log('\n=== GOAL 1 — a deferred heartbeat self-heals ===')
   )
 
   // The delivery path arrives, as it does when profile load order differs.
-  deferred.state.subagents = { async sendMessage() { return 'msg-1' } }
+  deferred.state.agents = {
+    get: () => undefined,
+    resume: async () => ({
+      agent: {
+        id: 'accept-agent',
+        status: 'running',
+        session: { id: 'accept-session', header: { id: 'accept-session' }, snapshotEvents: () => [] },
+        followup: () => {},
+      },
+      dispose: async () => {},
+    }),
+  }
   await wait(6500)
 
   const afterArrival = await deferred.tool('den_status').execute({})

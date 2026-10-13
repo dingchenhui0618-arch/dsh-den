@@ -199,7 +199,7 @@ function coldHost({ agent = null } = {}) {
       // A fixture that resumes without registering models a host where resume silently
       // does nothing, and the wake reports "nothing to say" — the right answer to the
       // wrong question.
-      const resumed = { id: 'agent-resumed', status: 'running', session: state.session }
+      const resumed = { id: 'agent-resumed', status: 'running', session: state.session, followup: state.followup }
       state.liveAgent = resumed
       return {
         agent: resumed,
@@ -211,36 +211,43 @@ function coldHost({ agent = null } = {}) {
   }
 
   /**
-   * Delivery, modelled on what the real host does.
+   * Delivery, modelled on what the real host does — and the previous version modelled it
+   * wrong in the direction that hid a broken product.
    *
-   * `sendMessage` returns the accepted message's **inbox id** and nothing else — that
-   * is the real contract, `Promise<MessageId>`. What the den actually said arrives
-   * later, as an `assistant/message` event on the session. So this fixture appends
-   * one, which is the only way the wake's reply can be read back at all.
+   * The wake now goes through `Agent.followup`, which the host documents as *"queues an
+   * ordinary next-turn prompt and wakes the driver"*: `send(message, 'next-turn', true)`,
+   * splicing into the inbox and opening a turn boundary. So this fake records the quoted
+   * message and then appends the `assistant/message` the wake produced. Appending is what
+   * makes the reply readable at all — the first version of this fixture recorded the
+   * delivery and appended nothing, and the test hung for the full reply timeout, which is
+   * the correct behaviour for a wake whose reply never lands.
    *
-   * The first version of this fixture recorded the delivery and appended nothing. The
-   * test then hung for the full two-minute reply timeout — which is the correct
-   * behaviour for a wake whose reply never lands, and is exactly why the timeout and
-   * the `wake-reply-unreadable` event exist.
+   * `sendMessage` is kept, but only to model the *rejection*: the plugin used to deliver
+   * through `subagents.sendMessage`, whose host implementation admits only a child sending
+   * to its parent. A fake for it that accepted anything kept five tests green while every
+   * admitted wake in production died with "delivery requires the exact live parent agent".
+   * A fake that grants deliveries the host refuses is worse than no fake at all.
    */
+  state.followup = (message) => {
+    state.sentMessages.push({ sender: state.liveAgent, sessionId: state.session.id, content: message.content, message })
+    if (state.replyText === null) return // a wake with no readable reply
+    state.session.events.push({
+      seq: state.session.events.length + 1,
+      type: 'assistant/message',
+      data: {
+        turn: 1,
+        step: 1,
+        message: { role: 'assistant', source: { kind: 'model' }, content: [{ type: 'text', text: state.replyText }] },
+        stream: [],
+      },
+    })
+  }
+
   state.subagents = {
     async sendMessage(sender, sessionId, content) {
-      // The host's own admission rule, from one shared module — see
-      // `test/support/subagent-delivery.mjs` for why this is not a copied snippet.
+      // Only the host's rejection is modelled — see `test/support/subagent-delivery.mjs`.
       assertSendMessage(sender, sessionId)
       state.sentMessages.push({ sender, sessionId, content })
-      if (state.replyText === null) return 'msg-wake' // a wake with no readable reply
-      const nextSeq = state.session.events.length + 1
-      state.session.events.push({
-        seq: nextSeq,
-        type: 'assistant/message',
-        data: {
-          turn: 1,
-          step: 1,
-          message: { role: 'assistant', source: { kind: 'model' }, content: [{ type: 'text', text: state.replyText }] },
-          stream: [],
-        },
-      })
       return 'msg-wake'
     },
   }
@@ -327,29 +334,9 @@ async function grantAutonomy(state) {
 
 /* ------------------------------------------------------------------------- tests */
 
-/**
- * KNOWN RED — the wake has no delivery path, and these five tests say so.
- *
- * They were green until the fakes stopped granting deliveries the host refuses. The plugin
- * sends a wake as `sendMessage(agent, trigger.sessionId, …)` where `agent` is the *target
- * conversation's own driver*, and the host admits only a child sending to its parent
- * (`authorizeLineage` requires `parentSession === parent.id`). So an admitted wake reaches
- * "failed" with:
- *
- *   subagent "<session>" delivery requires the exact live parent agent:
- *   the sender has no recorded parent, so it is not a continuable child of the target
- *
- * A wake that is admitted and cannot be delivered is the product's main path, so leaving
- * these red is deliberate: it is a true statement about the code, and it keeps the defect
- * visible instead of restorable by a permissive fake. The fix is to record which agent
- * created a check and deliver as that target's continuable child — see DESIGN.md §2.7.
- *
- * While this marker is here, `npm test` fails on purpose. Do not delete the marker to get a
- * green run; fix the delivery path, then delete it.
- */
-const KNOWN_RED = 'wake delivery has no path to the conversation (DESIGN.md §2.7)'
 
-test('a trigger created before the restart is found and fired after it', { todo: KNOWN_RED }, async () => {
+
+test('a trigger created before the restart is found and fired after it', async () => {
   // --- process one: the human is present, sets up a check, and authorizes it.
   const first = coldHost()
   apply(first.ctx)
@@ -399,7 +386,7 @@ test('a trigger created before the restart is found and fired after it', { todo:
   service.kernel.stop()
 })
 
-test('authority survives the restart because it is re-attested, not re-granted', { todo: KNOWN_RED }, async () => {
+test('authority survives the restart because it is re-attested, not re-granted', async () => {
   const first = coldHost()
   apply(first.ctx)
   await callTool(first.state, 'den_schedule_check', {
@@ -453,7 +440,7 @@ test('a restart without a grant wakes nothing and says which gate stopped it', a
   service.kernel.stop()
 })
 
-test('downtime longer than the interval resumes the cadence instead of firing a storm', { todo: KNOWN_RED }, async () => {
+test('downtime longer than the interval resumes the cadence instead of firing a storm', async () => {
   const first = coldHost()
   apply(first.ctx)
   await callTool(first.state, 'den_schedule_check', {
@@ -479,7 +466,7 @@ test('downtime longer than the interval resumes the cadence instead of firing a 
   service.kernel.stop()
 })
 
-test('the real heartbeat fires the wake, with no agent handed to tick()', { todo: KNOWN_RED }, async () => {
+test('the real heartbeat fires the wake, with no agent handed to tick()', async () => {
   // Every other test in this file calls `tick({ agent })` by hand. The production
   // heartbeat does not: `start()` arms `setInterval(() => this.tick())`, with no
   // arguments. So those calls exercise a path that never runs in the field, and this
@@ -545,7 +532,7 @@ test('the real heartbeat fires the wake, with no agent handed to tick()', { todo
   }
 })
 
-test('a wake whose reply never lands is recorded, retried, and not charged', { todo: KNOWN_RED }, async () => {
+test('a wake whose reply never lands is recorded, retried, and not charged', async () => {
   const first = coldHost()
   apply(first.ctx)
   await callTool(first.state, 'den_schedule_check', {
@@ -599,17 +586,24 @@ test('a refusal distinguishes "no transcript" from "not authorized"', async () =
   apply(second.ctx)
   const service = second.state.provided.get('den')
 
-  // The transcript is readable and the grant is valid, so authority is genuine. There
-  // is no delivery path, so the wake is admitted and then fails to reach anyone — which
-  // is a *different* outcome from a gate refusal, and must be reported as a failure that
-  // will be retried rather than as a wake that chose to stay silent.
-  second.state.subagents = null
+  // The transcript is readable and the grant is valid, so authority is genuine. Delivery
+  // then fails, so the wake is admitted and never reaches anyone — which is a *different*
+  // outcome from a gate refusal, and must be reported as a failure that will be retried
+  // rather than as a wake that chose to stay silent.
+  //
+  // The driver is made to fail rather than the service withdrawn: withdrawing `agents`
+  // would mean no driver could be resolved at all, which is a different path
+  // (`wake-unresolved`). What this test is about is a driver that exists and whose inbox
+  // will not take the message.
+  second.state.followup = () => {
+    throw new Error('the inbox refused the message')
+  }
   const admitted = await service.kernel.tick({ agent: undefined, now })
   assert.equal(admitted.results[0].outcome, 'failed')
   assert.equal(admitted.results[0].willRetry, true)
   assert.ok(
-    service.recentEvents.some((event) => event.type === 'wake-unavailable'),
-    'an admitted wake with nowhere to go must say so',
+    service.recentEvents.some((event) => event.type === 'wake-failed' && event.willRetry === true),
+    'an admitted wake that never reached anyone must be reported as a failure that retries',
   )
   assert.equal(
     service.listTriggers().valid[0].fireCount,

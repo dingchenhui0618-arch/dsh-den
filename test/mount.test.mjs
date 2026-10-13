@@ -147,7 +147,7 @@ test('activation is fully reversible', () => {
 })
 
 test('the kernel defers instead of running blind when no delivery path exists', () => {
-  const { ctx, state } = fakeHost({ withSubagents: false })
+  const { ctx, state } = fakeHost({ withAgents: false })
   apply(ctx)
   const service = state.provided.get('den')
   assert.equal(service.kernel, null, 'without a delivery path the kernel must not run')
@@ -167,13 +167,13 @@ test('a deferred heartbeat starts by itself once a delivery path appears', () =>
   // and the only trace was one event. "Not yet" must not be read as "never".
   mock.timers.enable({ apis: ['setInterval'] })
   try {
-    const { ctx, state } = fakeHost({ withSubagents: false })
+    const { ctx, state } = fakeHost({ withAgents: false })
     apply(ctx)
     const service = state.provided.get('den')
     assert.equal(service.kernel, null, 'nothing to deliver to yet')
 
     // The service arrives late, as it does when profile load order differs.
-    state.arriveSubagents()
+    state.arriveAgents()
     mock.timers.tick(5000)
 
     assert.ok(service.kernel, 'the kernel must start on its own once delivery is possible')
@@ -192,7 +192,7 @@ test('a deferred heartbeat starts by itself once a delivery path appears', () =>
 test('a heartbeat that never finds a delivery path gives up loudly, not silently', () => {
   mock.timers.enable({ apis: ['setInterval'] })
   try {
-    const { ctx, state } = fakeHost({ withSubagents: false })
+    const { ctx, state } = fakeHost({ withAgents: false })
     apply(ctx)
     const service = state.provided.get('den')
 
@@ -213,14 +213,14 @@ test('a heartbeat that never finds a delivery path gives up loudly, not silently
 test('disposal cancels a pending heartbeat retry', () => {
   mock.timers.enable({ apis: ['setInterval'] })
   try {
-    const { ctx, state } = fakeHost({ withSubagents: false })
+    const { ctx, state } = fakeHost({ withAgents: false })
     const dispose = apply(ctx)
     const service = state.provided.get('den')
     dispose()
 
     // If the retry timer survived disposal it would start a kernel on a disposed
     // fiber, which is exactly the kind of leak a resident plugin cannot afford.
-    state.arriveSubagents()
+    state.arriveAgents()
     mock.timers.tick(5000 * 30)
     assert.equal(service.kernel, null, 'a disposed plugin must not start a heartbeat later')
   } finally {
@@ -396,7 +396,7 @@ test('the gate explanation tool answers without executing anything', async () =>
 })
 
 test('the deliver path refuses to fabricate a result when it cannot wake', async () => {
-  const { ctx, state } = fakeHost({ withSubagents: false })
+  const { ctx, state } = fakeHost({ withAgents: false })
   const service = new DenService(ctx)
   const deliver = createDeliver(ctx, service)
 

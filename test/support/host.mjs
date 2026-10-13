@@ -14,7 +14,7 @@
  */
 import { judgeSendMessage } from './subagent-delivery.mjs'
 
-export function fakeHost({ withSubagents = true } = {}) {
+export function fakeHost({ withAgents = true } = {}) {
   const state = {
     provided: new Map(),
     listeners: new Map(),
@@ -22,6 +22,17 @@ export function fakeHost({ withSubagents = true } = {}) {
     guards: [],
     effects: [],
     routes: [],
+    /**
+     * What the fake driver does with a queued wake. Tests that care about the reply
+     * replace it; the default records nothing and appends nothing, which is the
+     * "wake never answered" case the reply timeout exists for.
+     */
+    followup: () => {},
+    /**
+     * A session stand-in for the fake driver. `installGate` reads a session's header when
+     * it classifies a call, so a driver without one is not a driver.
+     */
+    session: { id: 'session-fixture', header: { id: 'session-fixture' }, snapshotEvents: () => [] },
   }
 
   state.toolsApi = {
@@ -76,15 +87,25 @@ export function fakeHost({ withSubagents = true } = {}) {
     },
   }
   /**
-   * Whether a delivery path exists. The option only sets the *initial* value; tests
-   * move it in both directions afterwards, which is the only honest way to exercise
-   * a dependency that arrives late.
+   * Whether the delivery path exists. It used to mean "is `subagents` present", and that
+   * stopped being the same question when delivery moved to the agent's own inbox: what a
+   * wake needs now is the `agents` service, which is what resolves a driver and carries
+   * `Agent.followup`. Keeping the old meaning would leave these tests exercising a
+   * dependency the product no longer consults.
+   *
+   * The option only sets the *initial* value; tests move it in both directions afterwards,
+   * which is the only honest way to exercise a dependency that arrives late.
    */
-  state.subagents = withSubagents ? liveSubagents : null
-  state.agentsApi = {
-    get: () => undefined,
-    resume: async () => ({ agent: { id: 'resumed' }, dispose: async () => {} }),
-  }
+  state.agentsApi = withAgents
+    ? {
+        get: () => undefined,
+        resume: async () => ({
+          agent: { id: 'resumed', session: state.session, followup: state.followup },
+          dispose: async () => {},
+        }),
+      }
+    : null
+  state.subagents = liveSubagents
   // `webServer.register(route)` is the interface — the same one dsh-vision-diff,
   // dsh-warden and dsh-daily declare `inject = [..., 'webServer']` for. There is no
   // `fetch` wrapper on this service.
@@ -132,10 +153,22 @@ export function fakeHost({ withSubagents = true } = {}) {
 
   state.sentMessages = sent
   state.ctx = ctx
-  /** Make the delivery path arrive late, as it does when load order differs. */
-  state.arriveSubagents = () => {
-    state.subagents = liveSubagents
-    return liveSubagents
+  /**
+   * Make the delivery path arrive late, as it does when profile load order differs.
+   *
+   * This used to install `subagents`. It installs `agents` now, because that is the service
+   * a wake actually needs — a test that makes the old one arrive would be testing the
+   * plugin's ability to notice a service it no longer consults.
+   */
+  state.arriveAgents = () => {
+    state.agentsApi = {
+      get: () => undefined,
+      resume: async () => ({
+        agent: { id: 'resumed', session: state.session, followup: state.followup },
+        dispose: async () => {},
+      }),
+    }
+    return state.agentsApi
   }
   return { ctx, state }
 }

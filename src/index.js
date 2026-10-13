@@ -17,12 +17,13 @@
  *   what this plugin genuinely requires, and the code reads the injected
  *   properties instead of reaching for `ctx.get`.
  * - **`agents`, `tools`, and `webServer` are hard dependencies; `subagents` is
- *   not.** Without the agent registry there is nothing to authorize; without
- *   the tool registry the approval gate cannot be installed; without a web server
- *   the status panel has no data route. `webServer` is what the other client
- *   plugins in this profile declare for exactly this purpose — dsh-vision-diff as
- *   `['webServer', 'tools']`, dsh-warden as `['webServer']`, dsh-daily as
- *   `['timer', 'webServer']` — and the panel is mounted on a route there rather
+ *   not — and is no longer read at all.** Without the agent registry there is nothing
+ *   to authorize *and* nothing to deliver through, because a wake is queued with
+ *   `Agent.followup`; without the tool registry the approval gate cannot be installed;
+ *   without a web server the status panel has no data route. `webServer` is what the
+ *   other client plugins in this profile declare for exactly this purpose —
+ *   dsh-vision-diff as `['webServer', 'tools']`, dsh-warden as `['webServer']`,
+ *   dsh-daily as `['timer', 'webServer']` — and the panel is mounted on a route there
  *   than on an exact path under `/api`, which no plugin here demonstrates a
  *   browser can reach. The delivery path is genuinely optional, so the kernel
  *   defers when it is absent.
@@ -324,12 +325,16 @@ export function createAgentResolver(ctx) {
   return async (sessionId) => {
     if (!sessionId) return null
     const agents = ctx.get?.('agents')
-    const subagents = ctx.get?.('subagents')
-    if (!subagents?.sendMessage) return null
+    // `subagents` used to be required here, because delivery went through
+    // `subagents.sendMessage`. It does not any more — see `createDeliver` — and requiring a
+    // service the delivery path no longer uses would refuse to resolve a driver for a host
+    // that has no subagent manager at all, which is a limitation this plugin does not
+    // actually have.
+    if (typeof agents?.get !== 'function') return null
 
     // Prefer the driver that is already live for this conversation, so a wake lands in
     // the session the human is watching rather than a second copy of it.
-    const live = agents?.get?.(sessionId)
+    const live = agents.get(sessionId)
     if (live) return { agent: live, dispose: null }
 
     if (!agents?.resume) return null
@@ -384,10 +389,11 @@ function textOfAssistantEvent(event) {
  * Wait for the reply the wake turn produces, and return it.
  *
  * Polling is not the shape anyone wants here. It is used because the honest
- * alternative does not exist in this devkit: `subagents.sendMessage` resolves at inbox
- * acceptance, before the turn runs, and there is no completion handle for a message
- * sent to an *existing* session — `startContinuable` returns a result promise, but
- * that establishes a new child, not a wake of the human's own conversation.
+ * alternative does not exist in this devkit: `Agent.followup` is synchronous and returns
+ * `void` — it splices into the inbox and wakes the driver — and there is no completion
+ * handle for a turn queued on an *existing* session. `startContinuable` does return a
+ * result promise, but that establishes a new child rather than waking the human's own
+ * conversation.
  *
  * The read is cheap and safe: `snapshotEvents()` on a live session, filtered to events
  * after `baselineSeq`. The timeout is the turn timeout, so a wake that never answers
@@ -416,12 +422,10 @@ async function awaitWakeReply(sessions, sessionId, baselineSeq, timeoutMs = wake
 
 export function createDeliver(ctx, service) {
   return async ({ trigger, instruction, agent }) => {
-    const subagents = ctx.get?.('subagents')
-
     // The kernel resolves (and releases) the driver, because it needs one *before* the
     // authority gate can be evaluated. Delivering to that same driver keeps one
     // resolution per wake instead of two that could disagree.
-    if (!agent || !subagents?.sendMessage) {
+    if (!agent || typeof agent.followup !== 'function') {
       service.noteEvent({ type: 'wake-unavailable', triggerId: trigger.id })
       // Throwing, not returning empty.
       //
@@ -456,12 +460,40 @@ export function createDeliver(ctx, service) {
     const before = sessionEvents(agent.session)
     const baselineSeq = before.length ? Number(before[before.length - 1].seq) || 0 : 0
 
-    await subagents.sendMessage(
-      agent,
-      trigger.sessionId,
-      [{ type: 'text', text }],
-      { signal: AbortSignal.timeout(120_000) },
-    )
+    /**
+     * Deliver into the conversation through the agent's own inbox.
+     *
+     * This used to be `subagents.sendMessage(agent, trigger.sessionId, …)`, and that could
+     * never work. The host admits a send only when the sender is the target's **direct
+     * parent or direct continuable child** — `authorizeLineage` ends in
+     * `if (parentSession !== parent.id) throw UNAUTHORIZED`, which insists the addressed
+     * session is a child of the sender. Here the sender *is* the target conversation's
+     * driver, so the call asked a session to be its own parent and every admitted wake died
+     * with "delivery requires the exact live parent agent". Five tests covered this path and
+     * were green purely because the fake accepted any delivery at all.
+     *
+     * `Agent.followup(message)` is the mechanism the host documents for exactly this:
+     *
+     *   "`followup()` queues an ordinary next-turn prompt and wakes the driver"
+     *
+     * It is `send(message, 'next-turn', true)`: splice the message into the inbox, then open
+     * a turn boundary if the agent is idle, or latch the wake if a turn is already running.
+     * No lineage is involved, the message is visibly a queued turn in the human's chat, and
+     * it durably becomes a `user/message` in the transcript — which is what the reply
+     * read-back below then pairs with the assistant's answer.
+     *
+     * The id is derived from the trigger and the moment so that a redelivery after a crash
+     * is a distinct message rather than a duplicate the inbox projection would reject.
+     */
+    if (typeof agent.followup !== 'function') {
+      throw new Error('dsh-den: the resolved agent cannot accept a followup message')
+    }
+    agent.followup({
+      id: `den-wake-${trigger.id}-${baselineSeq}`,
+      role: 'user',
+      source: { kind: 'user' },
+      content: [{ type: 'text', text }],
+    })
 
     const reply = await awaitWakeReply(sessions, trigger.sessionId, baselineSeq)
     if (reply === null) {
@@ -862,7 +894,7 @@ export function apply(ctx) {
     // A kernel with no way to deliver a wake would count turns against the
     // budget and produce nothing, which is worse than not running.
     //
-    // But "not yet" is not "never": `subagents` presence at activation time
+    // But "not yet" is not "never": a service's presence at activation time
     // depends on profile load order, and an earlier version treated an absent
     // service as a permanent verdict. Measured live, that produced exactly the
     // wrong outcome for a 7x24 assistant — `kernel: null` forever, with one
@@ -870,17 +902,25 @@ export function apply(ctx) {
     // resident was silently absent while everything else looked healthy. A
     // deferred heartbeat must now keep trying, and must say what it is waiting
     // for while it does.
+    //
+    // What it waits for changed with the delivery mechanism. It used to require
+    // `subagents.sendMessage`; delivery now goes through the resolved agent's own inbox
+    // (`Agent.followup`), so `agents` is the service that has to be present. Requiring
+    // `subagents` here would defer the heartbeat forever on a host that has none — the same
+    // failure this block exists to prevent, moved one service over.
     const KERNEL_RETRY_MS = 5000
     const KERNEL_RETRY_LIMIT = 24
     let kernelRetry = null
     let kernelRetryCount = 0
 
-    const kernelCanDeliver = () => Boolean(ctx.get?.('subagents')?.sendMessage)
+    const deliveryServiceReason = () =>
+      typeof ctx.get?.('agents')?.get === 'function' ? null : 'the agents service is not available yet'
+
+    const kernelCanDeliver = () => deliveryServiceReason() === null
 
     const startKernel = () => {
       if (service.kernel) return true
-      const subagents = ctx.get?.('subagents')
-      if (!subagents?.sendMessage) return false
+      if (deliveryServiceReason() !== null) return false
       if (kernelRetry) {
         clearInterval(kernelRetry)
         kernelRetry = null
@@ -912,7 +952,9 @@ export function apply(ctx) {
     }
 
     if (!startKernel() && !kernelCanDeliver()) {
-      const reason = 'no delivery path available in this profile'
+      // Name the service that is actually missing rather than a generic verdict, so a
+      // profile that never starts its heartbeat says why in one line.
+      const reason = deliveryServiceReason() ?? 'no delivery path available in this profile'
       service.kernelDeferred = { reason, attempts: 0, retrying: true }
       service.noteEvent({ type: 'kernel-deferred', reason, retryInMs: KERNEL_RETRY_MS })
       kernelRetry = setInterval(() => {
