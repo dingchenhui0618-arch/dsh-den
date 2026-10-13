@@ -93,7 +93,17 @@ Getting there required fixing the field that was supposed to say so. `stateSurvi
 
 The live status payload then reports the assistant actually running: `kernel.running: true`, `kernel.lastError: null`, a fresh `lastTickAt`, `gate.mounted: true`, and a ledger file on disk with `turns/spoken/skipped/refused` at zero. A scripted drill over the same real socket confirmed the write path end to end — `autonomy/request` minted a 32-character token, `schedules/create` → `schedules/list` → `schedules/delete` round-tripped, and a 10-second interval was correctly refused with `everySeconds must be at least 300`. Everything the drill created was deleted; `~/.dsh/den/triggers/` is empty again.
 
+**A later restart brought this round's fixes live, and the check that had been failing for three rounds turned green.** The deployment check had been reporting `the running instance loaded this tree ... the host is running code older than this tree` since the lease work landed; the host reloaded at `2026-10-13T08:43:05.676Z`, later than the newest source edit (`triggers.js`, `08:39:32.676Z`), and it now passes. What the payload shows that the previous build could not:
+
+- **`residency` exists** — `{held: true, instance: "7969f300…", pid: 34336, staleMs: 180000, holderSince: …}`. On the build before this restart the key was **absent**, so this is the lease code actually running, not a claim about it.
+- **`reapedNotices: 0`** — the field added with the notice sweep, present and answering.
+- **11 `den_*` tools** through the `Tool` inspect provider, matching the source one for one. The deployment check names this as the thing it *cannot* see from where it stands, so it was queried directly.
+- **A browser reached the route** at `08:52:58.246Z`, predating the verification run — the panel polling from the real page.
+
+`npm run verify:live` → **exit 0**, and **all thirteen `check:*` scripts** → exit 0 against the running host, including the six live ones: `deployment`, `autonomy`, `notices`, `memory`, `tools`, `wake-api` (8 checks), plus `grant-bypass`, `bundle`, `ui`, `acceptance`, `package`, `install`, `source-tracked`.
+
 **The assistant speaking on its own has not happened, but the reason is measured rather than assumed — and the boundary turns out to be structural.** `autonomy` is `null` with `autonomyKnown: false`, because no human has granted it.
+
 
 The refusal is deliberate and traceable to one line each in three files:
 
