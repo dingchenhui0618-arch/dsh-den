@@ -10,11 +10,11 @@ Status: **the core is implemented, tested (252/252), and active in a real profil
 ```
 node_modules present in clone: False
 dependencies declared: (none)
-ℹ tests 252   ℹ pass 252   ℹ fail 0
+ℹ tests 237   ℹ pass 237   ℹ fail 0
 test exit: 0
 ```
 
-That is the claim worth making precisely: not "it works on my machine", but *a third party with a Node binary and nothing else can check this*. It is also the check that would have caught the worst bug in this project's history — a `.gitignore` line reading bare `lib/` matched at any depth, so a source file that three live probes imported was **never committed**, and the pushed repo was broken while every local test passed. `npm run check:source-tracked` now asserts that every source file on disk is tracked by git, and names the ignore rule that hid it.
+**That transcript is from the last time this proof was actually run, and it says 237.** The suite is at 252 as of this commit and the clone has not been re-run since, so the number here is deliberately the stale one: it is the last count with a command behind it. Re-running it is the only way to move it, and it is not moved by editing the number. What the proof buys — every source file on disk is tracked, and the packed package installs and loads with no dependencies — is also checked by `npm run check:source-tracked` and `npm run check:install` inside `npm run verify`, which *is* green at the current count.
 
 
 **The wake delivery path was broken and is now fixed — that history is worth reading, because the test suite was green throughout.** The plugin delivered wakes with `subagents.sendMessage(agent, trigger.sessionId, …)`, where `agent` is the *target conversation's own driver*. The host admits a send only when the sender is the target's direct parent or direct continuable child — `authorizeLineage` requires `parentSession === parent.id` — so the call asked a session to be its own parent and **every admitted wake in production died** with `delivery requires the exact live parent agent`. Five tests covered that path and passed, because the fakes granted any delivery at all: the double was lying about the *calling convention*, not the service.
