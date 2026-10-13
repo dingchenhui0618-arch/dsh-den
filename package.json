@@ -20,7 +20,7 @@
     "tools"
   ],
   "scripts": {
-    "test": "node --test test/*.test.mjs",
+    "test": "node --test --test-concurrency=4 test/*.test.mjs",
     "check:bundle": "node tools/check-client-bundle.mjs",
     "check:ui": "node tools/check-client-interaction.mjs",
     "check:acceptance": "node tools/check-acceptance.mjs",

@@ -1,0 +1,117 @@
+/**
+ * One real Host process, for the tests that cannot be honest in-process.
+ *
+ * Every other residency test models two Hosts with two kernel objects in one process. That model
+ * cannot reach the branch the lease actually turns on in the field: `defaultIsAlive(pid)`, which
+ * asks the operating system whether the recorded owner still exists. In one process both owners
+ * are `process.pid`, so the check is a tautology and a broken implementation would still pass.
+ *
+ * So the fixture is a process. Modes:
+ *
+ *   report <file>            mount the plugin, record residency, exit. A process that stops.
+ *   hold <file>              mount, record residency, stay alive. A process that does not.
+ *   tick <file> [--setup]    build a kernel with a real lease, make one check-in due, tick once,
+ *                            record what it decided, exit.
+ *   tick <file> --park       as above, but deliver writes `parked` and then blocks until a `go`
+ *                            file appears, which is the window a real delivery spends waiting on
+ *                            a Host. Another process can only be told the same check-in is due
+ *                            while this one is inside it.
+ *
+ * The result is written to a file rather than piped: the tests run their children with
+ * `stdio: 'ignore'` so the fixture never depends on capturing a child's output.
+ */
+import { existsSync, writeFileSync } from 'node:fs'
+
+const [, , mode, resultFile, ...flags] = process.argv
+const park = flags.includes('--park')
+const setup = flags.includes('--setup')
+const goFile = `${resultFile}.go`
+
+const { apply } = await import('../../src/index.js')
+const { fakeHost } = await import('./host.mjs')
+const { writeJsonAtomic, digest, denPath } = await import('../../src/atom.js')
+const { normalizeTrigger, saveTrigger } = await import('../../src/triggers.js')
+const { DenKernel } = await import('../../src/kernel.js')
+const { KernelLease, leasePath } = await import('../../src/resident.js')
+
+const record = (value) => writeJsonAtomic(resultFile, value)
+
+if (mode === 'report' || mode === 'hold') {
+  const host = fakeHost()
+  apply(host.ctx)
+  const service = host.state.provided.get('den')
+  const status = service.status()
+  record({ pid: process.pid, residency: status.residency, kernelRunning: status.kernel?.running ?? null })
+  if (mode === 'hold') setInterval(() => {}, 1000)
+  else process.exit(0)
+} else if (mode === 'tick') {
+  const sessionId = process.env.DEN_CHILD_SESSION
+  const now = Number(process.env.DEN_CHILD_NOW)
+
+  // The grant and the check-in are written by whichever process runs with `--setup`. Both
+  // children then read the same files, which is what makes them two Hosts over one home rather
+  // than two independent fixtures that happen to agree.
+  if (setup) {
+    const trigger = normalizeTrigger({
+      kind: 'interval',
+      everySeconds: 300,
+      sessionId,
+      title: 'cross-process check',
+      prompt: 'report only failures',
+    })
+    saveTrigger({ ...trigger, createdAt: 1000, lastFiredAt: 1000 })
+    writeJsonAtomic(denPath('grants', `${digest(sessionId)}.json`), {
+      version: 1,
+      sessionId,
+      autonomy: true,
+      humanMessageId: 'msg-child',
+      humanSeq: 2,
+      recordedAfterSeq: 2,
+    })
+  }
+
+  const agent = {
+    id: 'agent-child',
+    status: 'running',
+    session: {
+      id: sessionId,
+      events: [
+        { seq: 1, type: 'turn/start' },
+        { seq: 2, type: 'user/message', data: { id: 'msg-child', source: { kind: 'user' } } },
+      ],
+    },
+  }
+
+  const deliveries = `${resultFile}.deliveries`
+  const service = { state: () => ({ dailyTurnBudget: 50, cooldownSeconds: 0, quietHours: null }) }
+  const kernel = new DenKernel({
+    service,
+    lease: new KernelLease({ path: leasePath(), staleMs: 600_000 }),
+    deliver: async () => {
+      // Append, never truncate: the whole question is how many times this ran.
+      writeFileSync(deliveries, 'delivered\n', { flag: 'a' })
+      if (park) {
+        // Carries the pid: the final result file is only written once the tick returns, and the
+        // other process has to be started while this one is still inside the delivery.
+        writeFileSync(`${resultFile}.parked`, String(process.pid))
+        while (!existsSync(goFile)) {
+          await new Promise((resolve) => setTimeout(resolve, 25))
+        }
+      }
+      return 'the cross-process check spoke'
+    },
+  })
+
+  const result = await kernel.tick({ agent, now })
+  record({
+    pid: process.pid,
+    standby: result.standby ?? false,
+    due: result.due ?? null,
+    holderPid: result.holderPid ?? null,
+    residency: kernel.lease?.report() ?? null,
+  })
+  process.exit(0)
+} else {
+  record({ error: `unknown mode ${JSON.stringify(mode)}` })
+  process.exit(2)
+}
