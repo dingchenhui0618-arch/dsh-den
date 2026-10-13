@@ -14,7 +14,17 @@ Status: **the core is implemented, tested (226/226), and active in a real profil
 
 The live status payload then reports the assistant actually running: `kernel.running: true`, `kernel.lastError: null`, a fresh `lastTickAt`, `gate.mounted: true`, and a ledger file on disk with `turns/spoken/skipped/refused` at zero. A scripted drill over the same real socket confirmed the write path end to end — `autonomy/request` minted a 32-character token, `schedules/create` → `schedules/list` → `schedules/delete` round-tripped, and a 10-second interval was correctly refused with `everySeconds must be at least 300`. Everything the drill created was deleted; `~/.dsh/den/triggers/` is empty again.
 
-**The assistant speaking on its own has not happened, but the reason it has not is now measured rather than assumed.** `autonomy` is `null` with `autonomyKnown: false`, because no human has granted it — and `den_set_autonomy` is deliberately on the gate's `ask` tier (`den_explain_gate` reports `verdict: "ask"`, rule `unknown-tool`), so the agent cannot grant it to itself. That is capability 1 working.
+**The assistant speaking on its own has not happened, but the reason is measured rather than assumed — and the boundary turns out to be structural.** `autonomy` is `null` with `autonomyKnown: false`, because no human has granted it.
+
+The refusal is deliberate and traceable to one line each in three files:
+
+- `src/gate.js` keeps every durable effect on the default tier and says why in a comment: *"`den_set_autonomy` is a privilege change."* `den_status`, `den_recall` and the other read-only tools are `allow`; this one is not.
+- `den_explain_gate` on the running host reports `verdict: "ask"`, rule `unknown-tool`.
+- `src/gate.js` also states the consequence of a host without approval support: *"a missing approval facility turns `ask` into a denial, which is the correct fail-closed direction."*
+
+This session has approval prompts disabled, so `ask` resolves to a denial. **The agent side of this path is therefore closed by construction, not by operator error**, and calling `den_set_autonomy` from an agent turn cannot succeed here at all. The panel is not an alternative: its grant control mints a *request* and says so in its own copy — *paste this token to the assistant in the conversation* — and `autonomy/confirm` resolves a live conversation before it looks at anything else.
+
+So authority needs a human in the loop twice: the token must be cited in a real human message, and the resulting tool call must be approved rather than auto-denied. That is capability 1 in its strongest form — the agent cannot manufacture its own standing autonomy even with write access to the whole tree.
 
 **What the refusal looks like on the running host.** A `once` trigger was created due immediately, with no grant anywhere. The real kernel picked it up on its next heartbeat and recorded, in its own event log:
 
