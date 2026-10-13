@@ -55,6 +55,18 @@ Two more entries in that stream corrected a misattribution of my own: `outbound:
 
 The same evidence exposed a defect worth naming, because it is a whole class rather than a slip: `onDecision` announced decisions through `noteEvent` (the in-memory ring the panel shows) and **never called `recordAudit`**, while `gateAudit()` read `gate-audit.json` — a file no code wrote. So the panel's gate surface reported *"no decisions"* permanently, including while three real ones had just been made. `recordAudit` was dead code and the durable-audit design had never run once. **Reading a file that is never written looks exactly like a gate that has never fired.** The seam is now fixed and pinned from both ends — the service reader *and* the file on disk — because asserting only through `gateAudit()` would pass if reader and writer were the same piece of memory.
 
+**And the state really did cross a restart, measured on the running host rather than argued.** The plugin's own status payload carries when *this* instance last loaded the plugin; the state file carries when it was first written. On the live host those two disagree by roughly an hour, in the direction that proves the point:
+
+```
+state.createdAt   : 2026-10-13T01:49:11.717Z    ← written by an earlier boot
+plugin startedAt  : 2026-10-13T02:56:33.794Z    ← this instance (pid 36704)
+```
+
+So a previous life wrote that file and this one read it back: the assistant came back up **on its own**, with its configuration intact and no human involved. That is the persistence half of capability 2, and it is the half that does not need anybody's permission.
+
+Getting there required fixing the field that was supposed to say so. `stateSurvivesRestart` was computed *inside* `status()` as `readJson(statePath) !== undefined` — evaluated long after the boot had written that very file — so it was `true` on a first-ever boot of a machine that had never been restarted, while the comment above it claimed it *"cannot overstate what survived a restart"*. It had already been cited as proof: `tools/check-acceptance.mjs` asserted `true` on a first boot into an empty home, under a check named *"boot persists state"*. It is now sampled **before** the boot claims the tree, where the answer could still be no, and `stateCreatedAt` ships alongside it so a reader can confirm the claim instead of trusting it. The acceptance block already boots twice, so the fix made that check strictly stronger: it now observes a real `false → true` transition. The reusable rule, at three instances of this class: **a field named for a past event — survived, recovered, delivered, refused — must be sampled at a moment when the event could still not have happened. Sampled later it degrades from measurement to constant, silently, and reports `false` with a straight face.**
+
+
 **The running host was serving an older build; it has since been restarted, and the same check that said so now says otherwise.** Before the restart, the `Tool` inspect provider reported a different tool count from this tree's source and `GET /dsh-den` answered 404. Afterwards, `npm run verify:live` reports:
 
 - `GET /dsh-den` → **200** with a well-formed envelope
