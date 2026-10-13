@@ -625,16 +625,35 @@ window.__ModuleLoader__.load({
         for (var key in payload || {}) body[key] = payload[key]
         if (sessionId) body.sessionId = sessionId
 
-        var signal =
-          typeof AbortSignal !== 'undefined' && AbortSignal.timeout
-            ? AbortSignal.any([lifetime.signal, AbortSignal.timeout(15000)])
-            : undefined
+        var signal = null
+        if (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) {
+          var budget = AbortSignal.timeout(15000)
+          /**
+           * `any` and `timeout` are separate APIs with separate availability: `timeout`
+           * landed in Chrome 103 and `any` not until 116, so a shell in between has the
+           * first and not the second.
+           *
+           * The original guard tested `timeout` and then called `any` unconditionally,
+           * which turns a missing `any` into a `TypeError` thrown on every request. It
+           * was invisible to all three harnesses because each injects the host's own
+           * `AbortSignal`, where both methods exist — the same shape of mistake as the
+           * rest of this file's history: the fake stood in for the caller with
+           * capabilities the real caller is not guaranteed to have.
+           *
+           * Composing is a nicety (cancel on unmount *and* on timeout). Timing out is
+           * the requirement, so `timeout` alone is the correct degradation.
+           */
+          signal =
+            typeof AbortSignal.any === 'function' && lifetime
+              ? AbortSignal.any([lifetime.signal, budget])
+              : budget
+        }
 
         return fetch(API, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(body),
-          signal: signal,
+          signal: signal || undefined,
         }).then(function (res) {
           /**
            * Read the status before the body, and keep the status in the message.

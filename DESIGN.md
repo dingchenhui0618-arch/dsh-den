@@ -355,7 +355,48 @@
 
 ---
 
-## 5. 与参考实现的边界
+### 2.6 第四个缺陷：替身不只是「假的服务」，还包括「假的运行时」
+
+前三个缺陷都是**冷启动测试**抓出来的——它们要求一条生产里真实存在、而手工调用不存在的路径。第四个不是测试抓出来的，是**读代码读出来的**，而且它把同一类错误换了一张脸。
+
+客户端 `call()` 这样构造中止信号：
+
+```js
+typeof AbortSignal !== 'undefined' && AbortSignal.timeout
+  ? AbortSignal.any([lifetime.signal, AbortSignal.timeout(15000)])
+  : undefined
+```
+
+**它检查的是 `AbortSignal.timeout`，调用的却是 `AbortSignal.any`。** 这是两个不同的 API，可用版本也不同：`timeout` 是 **Chrome 103**，`any` 要 **116**。在 103–115 之间的 shell 上，这个守卫通过，然后 `any` 抛 `TypeError`，**每一个请求在到达 `fetch` 之前就死了**。
+
+**三个 harness 都看不见它**——`check-client-bundle.mjs`、`check-client-interaction.mjs`、`roundtrip.test.mjs` **全都注入宿主自己的 `AbortSignal`**，而 Node 的这个对象两个方法都有。
+
+所以这次替身扮的不是**服务**，是**运行时**：
+
+| | 前面的缺陷 | 这一个 |
+|---|---|---|
+| 替身是什么 | 假的**服务**，形状不对 | 假的**运行时**，能力比真实环境多 |
+| 例子 | `sendMessage` 返回了它不返回的东西 | `AbortSignal` 有真实 shell 不保证有的方法 |
+| 为什么测试同意 | 假服务与代码出自同一个假设 | 假 realm 与代码出自同一个假设 |
+
+**修法有两部分，缺一不可。**
+
+第一，修代码：检查**真正要用的那个能力**。`any` 是锦上添花（同时响应卸载和超时），**超时才是要求**，所以缺 `any` 时单独用 `timeout` 就是正确的降级——不是降级到「没有超时」。
+
+第二，修测试，而且**这一点更值得记**：`test/client-compat.test.mjs` **从 `client.js` 源码里把那段真实表达式抽出来求值**，用两种 `AbortSignal` 形状各跑一遍。它**不重写**那段逻辑——重写就会与代码出自同一个假设，而那正是所有漏掉它的 harness 的失败方式。
+
+写完之后，**回退修复验证它真的会失败**，得到精确的报错：
+
+```
+✖ a runtime with `timeout` but no `any` still gets a usable signal
+  TypeError: AbortSignal.any is not a function
+```
+
+另三个用例（表达式确为源码、有 `any` 时正常组合、完全没有 `AbortSignal` 时不崩）仍然通过——**命中精确**，不是「代码变了就红」。
+
+这里还有一条关于我自己写测试的教训。第一版提取器只认 `var signal = null`，回退修复后它在**导入期**就炸了，报「signal 不在我预期的位置」。那证明了代码变了，**没证明它坏了**。改成同时认识新旧两种写法之后，失败的才是那条关于退化运行时的断言——**也就是真正要主张的那句话**。
+
+
 
 - `dsh-muse`、`dsh-bot` 只作**只读参考**，不 fork、不复制代码进本仓库。
 - 借鉴的是**机制与教训**（授权绑定、keeper 重新武装、TTL、多域隔离），实现代码自己写。
