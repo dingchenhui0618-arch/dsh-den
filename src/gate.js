@@ -102,6 +102,26 @@ const SECRET_VALUE_PATTERNS = [
 ]
 
 /**
+ * The verbs that reach another host, recognised by **what they are aimed at**.
+ *
+ * A bare word is not enough: `ssh`, `scp` and `ftp` are ordinary words too, and this project has
+ * already refused its own documentation twice for naming a rule's own text.
+ *
+ * Position is not enough either, and the reason is worth keeping: `flattenArgs` prefixes every
+ * argument with its key, so the text a rule sees for a shell call begins `command …` and never
+ * begins with the command. An anchored rule matches nothing in production while passing any
+ * test that feeds the pattern directly — which is exactly how the first version of this was
+ * written and "verified". So these require a remote-looking operand: a `user@host`, a
+ * `host:path`, or a dotted hostname.
+ */
+function aimedAtRemote(verbs) {
+  return new RegExp(
+    `(?:^|[\\s;&|])(?:${verbs})\\s[^|]*(?:\\S+@\\S+|[A-Za-z0-9._-]+:\\S+|[A-Za-z0-9.-]+\\.[A-Za-z]{2,})`,
+    'i',
+  )
+}
+
+/**
  * Commands that reach outside this machine, spend money, or destroy something
  * without a cheap undo. These stop and ask.
  */
@@ -118,6 +138,26 @@ const OUTBOUND_PATTERNS = [
   { id: 'disk-write', pattern: /\b(mkfs|dd\s+if=|format\s+[A-Z]:)/i, what: 'write to a raw device' },
   { id: 'shutdown', pattern: /\b(shutdown|Restart-Computer|Stop-Computer)\b/i, what: 'shut down this machine' },
   { id: 'registry-write', pattern: /\breg\s+(add|delete)\b|Set-ItemProperty\s+.*HKLM/i, what: 'change the system registry' },
+
+  /**
+   * The platform the author was imagining, versus the platform this runs on.
+   *
+   * Everything above is shaped like a Unix CLI tool. This plugin ships to Windows and its shell
+   * is PowerShell, where the reflex for "send this somewhere" is a cmdlet — and not one of them
+   * was covered. Measured before these were added: twelve distinct ways to move data off this
+   * machine, every one of them `allow`, while the same intent through `curl` asked. The control
+   * case (`Get-ChildItem`) was also allowed, so the classifier was working; the table was simply
+   * written for somewhere else.
+   */
+  { id: 'ps-web-send', pattern: /\b(Invoke-RestMethod|Invoke-WebRequest|irm|iwr|wget)\b[^|]*(\s-Method\s+(POST|PUT|PATCH|DELETE)\b|-InFile\b|-BodyInFile\b|-Body\b|--post-data|--post-file)/i, what: 'send data to a web server' },
+  { id: 'ps-download', pattern: /\b(Invoke-WebRequest|Invoke-RestMethod|iwr|irm|wget)\b[^|]*-OutFile\b|\bcertutil\b[^|]*-urlcache/i, what: 'download a payload from a server' },
+  { id: 'ps-bits-upload', pattern: /\bStart-BitsTransfer\b[^|]*-TransferType\s+Upload/i, what: 'upload a file to a server' },
+  { id: 'dotnet-webclient', pattern: /New-Object\s+Net\.Web(Client|Request)\b|\.(UploadFile|UploadData|UploadString|UploadValues|DownloadFile|DownloadString)\s*\(/i, what: 'move a file over the network from a script' },
+  { id: 'ps-mail', pattern: /\bSend-MailMessage\b/i, what: 'send mail outside this machine' },
+  { id: 'ps-remoting', pattern: /\bInvoke-Command\b[^|]*-ComputerName\b/i, what: 'run a command on another host' },
+  { id: 'remote-transfer', pattern: aimedAtRemote('scp|sftp|rsync|ftp'), what: 'reach another host' },
+  { id: 'remote-shell', pattern: aimedAtRemote('ssh|telnet'), what: 'run a command on another host' },
+  { id: 'netcat', pattern: /(?:^|[\s;&|])(?:nc|ncat|netcat)\s+\S+\s+\d+/i, what: 'open a raw connection to another host' },
 ]
 
 /**
