@@ -3,7 +3,7 @@
 > A **7×24 resident personal assistant** for [DeepSeek Harness](https://github.com/deepseek-ai/dsh).
 > Not another chat window — an assistant that stays on, keeps its own memory, works while you are away, and stops to ask before it acts outside your trust boundary.
 
-Status: **the core is implemented, tested (226/226), and active in a real profile.** The plugin is loaded inside a real DSH 0.2.0-rc.2 desktop profile — it is in that profile's `dsh.profile.bundles`, and the running host reports it as `fiberPhase: active` — registering 11 model-facing tools, the approval guard, the heartbeat, and an interactive status panel. Verified against the *running* system rather than only in tests: the heartbeat ticks on its 60-second cadence, and the panel is an **active occupant** of both `sidebar.panellist` (`id: dsh-den.status`, order 245) and the `main` panel (`key: dsh-den.status`).
+Status: **the core is implemented, tested (229/229), and active in a real profile.** The plugin is loaded inside a real DSH 0.2.0-rc.2 desktop profile — it is in that profile's `dsh.profile.bundles`, and the running host reports it as `fiberPhase: active` — registering 11 model-facing tools, the approval guard, the heartbeat, and an interactive status panel. Verified against the *running* system rather than only in tests: the heartbeat ticks on its 60-second cadence, and the panel is an **active occupant** of both `sidebar.panellist` (`id: dsh-den.status`, order 245) and the `main` panel (`key: dsh-den.status`).
 
 **The wake delivery path was broken and is now fixed — that history is worth reading, because the test suite was green throughout.** The plugin delivered wakes with `subagents.sendMessage(agent, trigger.sessionId, …)`, where `agent` is the *target conversation's own driver*. The host admits a send only when the sender is the target's direct parent or direct continuable child — `authorizeLineage` requires `parentSession === parent.id` — so the call asked a session to be its own parent and **every admitted wake in production died** with `delivery requires the exact live parent agent`. Five tests covered that path and passed, because the fakes granted any delivery at all: the double was lying about the *calling convention*, not the service.
 
@@ -106,7 +106,7 @@ These are hard constraints, not aspirations. The reference implementations below
 All state lives in a **self-contained** `$DSH_HOME/den/` tree, so it can be packed and moved to another machine or a server without hunting through unrelated DSH storage.
 
 ```bash
-npm test          # 226 unit + integration tests
+npm test          # 229 unit + integration tests
 npm run check:bundle   # 31 offline bundle-contract checks
 npm run check:ui       # 41 panel interaction checks
 npm run check:acceptance   # the two reliability goals, as one observable lifecycle
