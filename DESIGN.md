@@ -487,6 +487,30 @@ agent.followup({
 
 **仍未验证的**：这个修复在回归测试台里成立，**但没有在真实宿主上观察到过**——线上跑的仍是旧构建，需要一次重启；而且要先有人类授权。所以能力 2 的活体验收依旧欠着，只是**拦路的缺陷已经修掉，不再是设计问题**。
 
+### 2.9 第四个假替身，落在**授权**路径上
+
+能力 1 的主张是「agent 造不出自己的自治权」。它的实现靠 `tools.guard` 把 `den_set_autonomy` 判成 `ask`，而本机审批设施缺失 → `ask` 变拒绝。
+
+这个主张有一个值得攻击的假设：**闸门是唯一挡路的东西。** 闸门管的是**工具调用**；而面板路由是 HTTP 处理器，且实测**无需认证即可访问**（姊妹插件的路由 200）。所以如果 `autonomy/confirm` 凭一个有效 token 就能授权，那任何本机进程——包括 agent 自己 `curl` 一下——都能自授自治，闸门就是装饰。
+
+**实测（`tools/check-live-grant-bypass.mjs`，用真实活会话 id，不是合成 id）：攻击失败。**
+
+```
+ok   a live conversation is available to attack — session-95cc8a8d-…
+ok   the panel mints a token — 32 characters
+ok   the route refuses autonomy with no message id at all
+     — DEN_ACTION_FAILED:dsh-den: autonomy requires a direct human request
+ok   the route refuses autonomy with a fabricated message id
+     — DEN_ACTION_FAILED:dsh-den: autonomy requires a direct human request
+ok   no authority exists after the attack — autonomy=null grantFiles=0
+```
+
+两条拒绝**报同一个错**，说明卡点不在 messageId，而在更早的那一步：`isDirectHumanDriver` 要求 `agents.currentInitiator() === agent`，**而 HTTP 路由处理器不在任何 agent 的 async 链里**，所以它永远拿不到 initiator。**闸门确实是唯一能授权的路径面。**
+
+**但审计同时翻出一条假测试。** `test/panel-actions.test.mjs` 有一条断言「有效 token + 真实人类消息 → 路由授权成功」，而它通过的唯一原因是替身把 `currentInitiator` 写死成 `() => agent`。改成 `undefined`（**这才是「一次路由调用」的真实模型**）之后，**恰好只有那一条变红**。已改写为断言拒绝，并补一条互补测试钉住「授权只发生在 agent 自己的回合里，而那正是闸门守着的那条路」。
+
+这是同一个坑的第四次，也是最贵的一次——前三次在投递路径上，这次在**授权**路径上。纪律不变：**只建模拒绝，不建模接受**；而这一次还多一条：**替身要建模调用的形状，不只是服务的形状**。「一次 HTTP 路由调用没有 initiator」和「一次工具调用有 initiator」，正是安全模型本身的分界线。
+
 
 
 - `dsh-muse`、`dsh-bot` 只作**只读参考**，不 fork、不复制代码进本仓库。

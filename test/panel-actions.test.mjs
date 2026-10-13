@@ -18,7 +18,7 @@
  *    module instance, so a cached import would keep writing to the first sandbox.
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -31,7 +31,23 @@ test.after(() => {
 let moduleSerial = 0
 
 /** Load the plugin against a throwaway home and bring it up on a fake Host. */
-async function live({ sessionId = 'session-1' } = {}) {
+/**
+ * Bring the plugin up on a fake Host, with a fake driver for `sessionId`.
+ *
+ * `initiator` defaults to `undefined`, and that default is the whole point. A panel route
+ * is an HTTP handler: it runs in the web server's async context, which is **not** descended
+ * from any agent's turn, so `agents.currentInitiator()` inside it is `undefined` — measured
+ * on the real Host: calling `autonomy/confirm` with a valid token and a *real live* session
+ * id is refused with `autonomy requires a direct human request`.
+ *
+ * This fake used to hardcode `currentInitiator: () => agent`, which made every
+ * `isDirectHumanDriver` check pass. A test then asserted that the route grants autonomy —
+ * a behaviour the real route cannot produce. That is the fourth time in this project a
+ * double granted something the Host refuses, and the first time it was the *authorization*
+ * path, so the fake now models a route call honestly and a test that needs an initiator has
+ * to ask for one and say why.
+ */
+async function live({ sessionId = 'session-1', initiator = undefined } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'dsh-den-actions-'))
   sandboxes.push(home)
   process.env.DSH_HOME = home
@@ -51,7 +67,7 @@ async function live({ sessionId = 'session-1' } = {}) {
     tools: toolsApi,
     agents: {
       get: (id) => (id === sessionId ? agent : undefined),
-      currentInitiator: () => agent,
+      currentInitiator: () => initiator,
       roots: () => [agent],
       resume: async () => ({ agent, dispose: async () => {} }),
     },
@@ -303,10 +319,24 @@ test('the right token without human evidence still grants nothing, and is not sp
   assert.match(stillUsable.result.error.message, /direct human request/)
 })
 
-test('a valid token plus real human evidence grants exactly that, and the token is spent', async () => {
-  const { route, state } = await live()
-  // A real grant needs a human message in the session log: that is the evidence
-  // model, so the fixture has to produce one rather than assert around it.
+test('a valid token and a real human message still do NOT let the route grant autonomy', async () => {
+  // This test used to assert the opposite, and it passed — because the fake hardcoded
+  // `currentInitiator: () => agent`. On the real Host the same request, with a valid token
+  // and a *real live session id*, is refused:
+  //
+  //   DEN_ACTION_FAILED: dsh-den: autonomy requires a direct human request
+  //
+  // The reason is structural, not incidental. A route is an HTTP handler, so it runs in the
+  // web server's async context rather than inside the agent's turn, and
+  // `isDirectHumanDriver` requires `agents.currentInitiator() === agent`. An HTTP handler
+  // never has one — in this process or any other — so `autonomy/confirm` cannot grant, no
+  // matter how correct the token is.
+  //
+  // That is the security property capability 1 rests on: the gate guards *tool calls*, and
+  // the worry is that some other surface could grant authority around it. This is the
+  // surface that looks most like one, and it cannot. `tools/check-live-grant-bypass.mjs`
+  // measures the same thing against the running Host.
+  const { route, state, home } = await live()
   state.provided.get('den').ctx.agents.get('session-1').session.events.push(
     { type: 'turn/start', seq: 1 },
     { type: 'user/message', seq: 2, data: { id: 'human-1', source: { kind: 'user' } } },
@@ -315,17 +345,45 @@ test('a valid token plus real human evidence grants exactly that, and the token 
   const requested = await viaRoute(route, 'autonomy/request', { autonomy: true })
   const token = requested.value.token
   const confirmed = await viaRoute(route, 'autonomy/confirm', { token, autonomy: true, humanMessageId: 'human-1' })
+  assert.equal(confirmed.result.ok, false, 'the route must not be able to grant authority')
+  assert.match(confirmed.result.error.message, /direct human request/)
+
+  // And nothing was written: no grant file, no authority on the status surface.
+  assert.equal(existsSync(join(home, 'den', 'grants')), false, 'a refused grant must leave no record')
+  const snapshot = await viaRoute(route, 'status')
+  assert.equal(snapshot.value.autonomy, null, 'a refused grant must not read as granted')
+  assert.equal(snapshot.value.autonomyKnown, false)
+})
+
+test('a grant in the agent own turn is what succeeds, and that is the path the gate guards', async () => {
+  // The complement of the test above: with an initiator present — which is what a *tool
+  // call* has, because it runs inside the agent's turn — the same confirm does grant. The
+  // distinction is the entire security model, so it is pinned rather than assumed: the
+  // surface that can grant authority is the one the approval gate sits in front of.
+  const { route, state } = await live({ initiator: 'agent-in-turn' })
+  const service = state.provided.get('den')
+  // `live({initiator})` names the agent that the fake reports as the current initiator.
+  service.ctx.agents.currentInitiator = () => service.ctx.agents.get('session-1')
+  service.ctx.agents.get('session-1').session.events.push(
+    { type: 'turn/start', seq: 1 },
+    { type: 'user/message', seq: 2, data: { id: 'human-1', source: { kind: 'user' } } },
+  )
+
+  const requested = await viaRoute(route, 'autonomy/request', { autonomy: true })
+  const confirmed = await viaRoute(route, 'autonomy/confirm', {
+    token: requested.value.token,
+    autonomy: true,
+    humanMessageId: 'human-1',
+  })
   assert.equal(confirmed.result.ok, true, JSON.stringify(confirmed.result))
   assert.equal(confirmed.value.autonomy, true)
   assert.equal(confirmed.value.boundToMessage, 'human-1')
 
-  // The status surface now agrees — which is the whole reason the panel routes the
-  // write through the conversation instead of doing it itself.
-  const snapshot = await viaRoute(route, 'status')
-  assert.equal(snapshot.value.autonomy, true, 'a real grant must be visible as granted')
-  assert.equal(snapshot.value.autonomyKnown, true)
-
-  const again = await viaRoute(route, 'autonomy/confirm', { token, autonomy: true, humanMessageId: 'human-1' })
+  const again = await viaRoute(route, 'autonomy/confirm', {
+    token: requested.value.token,
+    autonomy: true,
+    humanMessageId: 'human-1',
+  })
   assert.equal(again.result.ok, false)
   assert.match(again.result.error.message, /no matching autonomy request/)
 })
