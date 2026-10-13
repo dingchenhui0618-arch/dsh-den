@@ -407,6 +407,48 @@ typeof AbortSignal !== 'undefined' && AbortSignal.timeout
 
 这里还有一条关于我自己写测试的教训。第一版提取器只认 `var signal = null`，回退修复后它在**导入期**就炸了，报「signal 不在我预期的位置」。那证明了代码变了，**没证明它坏了**。改成同时认识新旧两种写法之后，失败的才是那条关于退化运行时的断言——**也就是真正要主张的那句话**。
 
+### 2.7 第五个缺陷：把「给会话发消息」当成了通用 API
+
+这条是读 DSH 的 `subagents.sendMessage` **实现**读出来的，不是跑出来的——而它证明了**能力 2 的投递通路在真实宿主上从未成功过，且结构上不可能成功**。
+
+`createDeliver` 的投递是：
+
+```js
+await subagents.sendMessage(agent, trigger.sessionId, [{ type: 'text', text }], {...})
+```
+
+而 `agent` 来自 `createAgentResolver(sessionId)`，它返回的是**被唤醒会话自己的 agent**（`agents.get(sessionId)`，或 `agents.resume({resumeSessionId})`）。于是 **sender 与 targetId 是同一个会话**。
+
+DSH 的实现（`app.asar` 内 `SubagentRuntime` 的 continuations manager）：
+
+```js
+async sendMessage(sender, targetId, content, options) {
+  if (this.ctx.agents.get(sender.id) !== sender) throw UNAUTHORIZED
+  const act = this.activations.get(sender.id)
+  if (act && act.handle.agent === sender && act.parentSession === targetId)
+      return this.sendToParent(act, sender, content)          // 只有这一条能成功
+  if (sender.session.header.parentSession === targetId) throw ...  // 父不是 resident child
+  return this.deliverToChild(sender, targetId, {...})          // 否则按「子」处理
+}
+```
+
+自投递落到 `deliverToChild`，最终在 `coldResume` 里过 `authorizeLineage`：
+
+```js
+authorizeLineage(parent, childId, parentSession) {
+  if (this.ctx.agents.get(parent.id) !== parent) throw UNAUTHORIZED
+  if (parentSession !== parent.id) throw UNAUTHORIZED   // ← 要求被投递的会话是父会话的子
+}
+```
+
+**要求 `parentSession === parent.id`，而 parent 就是那个会话自己——等于要求会话是自己的父亲。** 所以唯一能走通的交叉是「sender 是 target 的 continuable 子 → `sendToParent`」，而插件的 sender 恰恰是 **target 自己**。
+
+为什么回归测试全绿：`test/support/host.mjs` 的假 `subagents.sendMessage` **无条件接受任何投递**。它造假的不只是「服务」，还有**调用方式**——与 §2.5/§2.6 是同一类错误的第三次出现，而这次掩盖的是产品的主路径。
+
+**结论与下一步**：这不是能悄悄改掉的一行。要让唤醒送达人类会话，发送者必须是该会话的 **continuable 子**，而插件**从未捕获「谁创建了这个定时检查」**——`den_schedule_check` 的 `exec.agent` 没有被记录，触发器里只有 `sessionId`。
+
+候选修法（尚未实现、**尚未验证**，因为它需要一个被准入的唤醒才能观察到）：在创建时记录创建者的 agent 身份，唤醒时以「该目标的 continuable 子」作为 sender 投递；或改走主机侧 `Session.append` + `agent.send` 的落库通路。两条路都需要在真实宿主上验一遍才能声称修好——**而本轮我能给的是定位与代码证据，不是修复**。
+
 
 
 - `dsh-muse`、`dsh-bot` 只作**只读参考**，不 fork、不复制代码进本仓库。

@@ -12,6 +12,8 @@
  * registry as a precondition, and testing their degradation belongs in `apply`, not
  * in a fixture that silently removes the registry they require.
  */
+import { judgeSendMessage } from './subagent-delivery.mjs'
+
 export function fakeHost({ withSubagents = true } = {}) {
   const state = {
     provided: new Map(),
@@ -42,6 +44,33 @@ export function fakeHost({ withSubagents = true } = {}) {
   const sent = []
   const liveSubagents = {
     async sendMessage(sender, targetId, content, options) {
+      /**
+       * This fake used to accept any delivery, and that is how a broken delivery path
+       * stayed green: the plugin sends a wake with the *target conversation's own agent*
+       * as the sender, which the real host rejects before it ever reaches the session.
+       *
+       * The real rule, read out of `SubagentRuntime`'s continuations manager:
+       *
+       *   if (act && act.handle.agent === sender && act.parentSession === targetId)
+       *       return this.sendToParent(...)                       // the one crossing that works
+       *   if (sender.session.header.parentSession === targetId) throw ...   // parent is not resident
+       *   return this.deliverToChild(sender, targetId, ...)        // else treat target as a child
+       *
+       * and `deliverToChild` ends in `authorizeLineage(parent, childId, parentSession)`,
+       * which requires `parentSession === parent.id` — i.e. it insists the target session is
+       * a child of the sender. A sender that *is* the target therefore always fails.
+       *
+       * Only the rejection is modelled, not the acceptance: a fake that also granted
+       * success would let a caller believe a delivery happened when the host would have
+       * refused it. Deliveries that the real host accepts are the ones this file cannot
+       * establish, and pretending otherwise is what got us here.
+       */
+      const verdict = judgeSendMessage(sender, targetId)
+      if (!verdict.ok) {
+        const error = new Error(verdict.message)
+        error.code = verdict.code
+        throw error
+      }
       sent.push({ sender, targetId, content, options })
       return 'msg-1'
     },

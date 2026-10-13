@@ -3,7 +3,17 @@
 > A **7×24 resident personal assistant** for [DeepSeek Harness](https://github.com/deepseek-ai/dsh).
 > Not another chat window — an assistant that stays on, keeps its own memory, works while you are away, and stops to ask before it acts outside your trust boundary.
 
-Status: **the core is implemented, tested (226/226), and active in a real profile.** The plugin is loaded inside a real DSH 0.2.0-rc.2 desktop profile — it is in that profile's `dsh.profile.bundles`, and the running host reports it as `fiberPhase: active` — registering 11 model-facing tools, the approval guard, the heartbeat, and an interactive status panel. Verified against the *running* system rather than only in tests: the heartbeat ticks on its 60-second cadence, and the panel is an **active occupant** of both `sidebar.panellist` (`id: dsh-den.status`, order 245) and the `main` panel (`key: dsh-den.status`).
+Status: **the core is implemented, tested (221 passing, 5 marked known-red), and active in a real profile — but a wake that is admitted currently has no delivery path, so the assistant does not yet speak on its own.** The plugin is loaded inside a real DSH 0.2.0-rc.2 desktop profile — it is in that profile's `dsh.profile.bundles`, and the running host reports it as `fiberPhase: active` — registering 11 model-facing tools, the approval guard, the heartbeat, and an interactive status panel. Verified against the *running* system rather than only in tests: the heartbeat ticks on its 60-second cadence, and the panel is an **active occupant** of both `sidebar.panellist` (`id: dsh-den.status`, order 245) and the `main` panel (`key: dsh-den.status`).
+
+**The delivery defect, stated plainly, because it is the one thing that does not work.** The plugin delivers an autonomous wake with `subagents.sendMessage(agent, trigger.sessionId, …)`, where `agent` is the *target conversation's own driver*. The host admits only a child sending to its parent: `authorizeLineage` requires `parentSession === parent.id`, so a sender that is the target can never pass. An admitted wake therefore ends as:
+
+```
+{"outcome":"failed",
+ "reason":"subagent \"<session>\" delivery requires the exact live parent agent:
+           the sender has no recorded parent, so it is not a continuable child of the target"}
+```
+
+Five tests cover the admitted-wake path and all five are marked `todo` against this defect rather than deleted or weakened. They were green until the test fakes stopped granting deliveries the host refuses — the fake `sendMessage` accepted anything, so it modelled the *calling convention* incorrectly, which is the third appearance of "the double lies about more than the service" in this project. Fixing it needs the plugin to record which agent created a check and deliver as a continuable child of that target; see `DESIGN.md` §2.7.
 
 **The running host was serving an older build; it has since been restarted, and the same check that said so now says otherwise.** Before the restart, the `Tool` inspect provider reported a different tool count from this tree's source and `GET /dsh-den` answered 404. Afterwards, `npm run verify:live` reports:
 
@@ -100,7 +110,7 @@ These are hard constraints, not aspirations. The reference implementations below
 All state lives in a **self-contained** `$DSH_HOME/den/` tree, so it can be packed and moved to another machine or a server without hunting through unrelated DSH storage.
 
 ```bash
-npm test          # 226 unit + integration tests
+npm test          # 221 unit + integration tests, 5 marked known-red
 npm run check:bundle   # 31 offline bundle-contract checks
 npm run check:ui       # 41 panel interaction checks
 npm run check:acceptance   # the two reliability goals, as one observable lifecycle
