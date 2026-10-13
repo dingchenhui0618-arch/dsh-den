@@ -75,6 +75,15 @@ export function statusSnapshot(service, { sessionId, nextTriggerAt } = {}) {
     pid: status.pid ?? null,
     startedAt: status.startedAt ?? null,
     /**
+     * Whether this instance loaded the tree beside it.
+     *
+     * Added here in the same commit that added it to `status()`, because the comment three
+     * fields up is the record of what happens otherwise: the field works, the unit tests
+     * pass, and the route keeps answering without it. `test/panel-payload-coverage.test.mjs`
+     * now fails on that mistake instead of leaving it to be noticed.
+     */
+    freshness: status.freshness ?? null,
+    /**
      * Whether a previous life left state behind, and when that state was first written.
      * Carried through the same allow-list for the same reason as the fields above: the
      * value is only worth anything if the human-facing surface can actually see it.

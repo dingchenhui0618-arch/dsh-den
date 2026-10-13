@@ -439,6 +439,41 @@ check(
   'the status page does not ask for a conversation it cannot name',
 )
 
+/* --- the panel says whether the running process loaded this code ----------- */
+
+/**
+ * The page as it renders for a given freshness verdict from the host.
+ *
+ * A healthy-looking panel is precisely what makes a stale host invisible, so the verdict has
+ * to reach the panel: the human is the only one who can restart DSH, and this is the one place
+ * they are already looking.
+ */
+async function mainPanelWith(freshness) {
+  const component = boot({
+    scripted: {
+      status: healthyStatus({ freshness }),
+      'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } },
+    },
+  })
+  const mounted = mount(component, {})
+  await mounted.settle()
+  return mounted.text()
+}
+
+const staleText = await mainPanelWith({ known: true, stale: true, newestSourceFile: 'client\\client.js', toleranceMs: 1000 })
+check(staleText.includes('比代码树旧'), 'a stale instance is reported as stale where the human is already looking')
+check(staleText.includes('client\\client.js'), 'and it names the file that is newer than the running process')
+
+const currentText = await mainPanelWith({ known: true, stale: false, newestSourceFile: 'src/index.js' })
+check(currentText.includes('与代码树一致'), 'a current instance says so, on the same row')
+
+const unknownText = await mainPanelWith({ known: false, stale: null, detail: 'this instance did not say when it loaded' })
+check(unknownText.includes('判断不了'), 'an instance that cannot judge itself says so')
+check(
+  !unknownText.includes('与代码树一致'),
+  'which is the point: "I cannot tell" must not render as "fine"',
+)
+
 /* --- the per-conversation controls sit where a conversation arrives --------- */
 
 const dock = bootDock({

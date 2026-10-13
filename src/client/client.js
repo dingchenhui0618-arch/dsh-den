@@ -68,6 +68,11 @@ window.__ModuleLoader__.load({
         none: 'none',
         never: 'never',
         recovered: 'crash litter reclaimed',
+    /** Whether this process loaded the code this panel is drawn from. */
+    codeFreshness: 'running code',
+    freshCurrent: 'current',
+    freshStale: 'older than the tree - restart DSH',
+    freshUnknown: 'cannot be judged by this instance',
         reapedNotices: 'expired reminders reclaimed',
         unavailable: 'The host did not answer',
         errors: 'Last error',
@@ -123,6 +128,11 @@ window.__ModuleLoader__.load({
         none: '无',
         never: '从未',
         recovered: '回收的崩溃残留',
+    /** 这个进程是否加载了画这块面板的代码。 */
+    codeFreshness: '运行中的代码',
+    freshCurrent: '与代码树一致',
+    freshStale: '比代码树旧 —— 需要重启 DSH',
+    freshUnknown: '这个实例判断不了',
         reapedNotices: '回收的过期提醒',
         unavailable: '宿主未应答',
         errors: '最近错误',
@@ -616,6 +626,29 @@ window.__ModuleLoader__.load({
             }),
             React.createElement(Row, { label: t('scenarios'), value: scenarios.length ? scenarios.join(', ') : t('none') }),
           ),
+        )
+
+        /**
+         * Whether the process drawing this panel loaded the code it is drawn from.
+         *
+         * Not a diagnostic for the den's own work: it is here because a panel that looks
+         * healthy is exactly what makes a stale host invisible. The restart that fixes it is
+         * the human's to make, so the fact has to reach the human, in the one place they are
+         * already looking. An instance that cannot judge itself says so rather than reading
+         * as current — `known: false` is not a pass.
+         */
+        var fresh = d && d.freshness ? d.freshness : null
+        children.push(
+          React.createElement(Row, {
+            key: 'fresh',
+            label: t('codeFreshness'),
+            value: !fresh || fresh.known !== true
+              ? t('freshUnknown')
+              : fresh.stale
+                ? t('freshStale') + ' · ' + String(fresh.newestSourceFile ?? '')
+                : t('freshCurrent'),
+            tone: fresh && fresh.known === true && fresh.stale ? 'warn' : undefined,
+          }),
         )
 
         if (d.reapedTempFiles) {

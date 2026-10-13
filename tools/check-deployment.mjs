@@ -202,6 +202,42 @@ if (Number.isNaN(startedAtMs)) {
   )
 }
 
+/*
+ * The instance judges itself now, and the two judgements come from different code paths over
+ * different trees: the host walks the files beside the modules it actually loaded, while this
+ * script walks this repository. Agreement is therefore evidence rather than a tautology, and
+ * disagreement means the two are describing different trees — worth knowing before either is
+ * believed. They are compared only when the gap is larger than the tolerance, because inside
+ * it neither answer is evidence and a cross-check that cannot tell is not a check.
+ */
+const selfJudged = status?.freshness ?? null
+if (!selfJudged) {
+  check(
+    false,
+    'the running instance reports its own freshness',
+    'absent from the payload — this instance predates the field, so it is running code older than this tree',
+  )
+} else if (selfJudged.known !== true) {
+  check(false, 'the running instance reports its own freshness', `it cannot judge itself: ${selfJudged.detail}`)
+} else {
+  const gapMs = newestMs - startedAtMs
+  const toleranceMs = Number(selfJudged.toleranceMs) || 0
+  if (Math.abs(gapMs) <= toleranceMs) {
+    console.log(
+      `       the two trees' clocks are ${Math.round(gapMs)}ms apart, inside the ${toleranceMs}ms tolerance, ` +
+        'so agreement here would not be evidence either way',
+    )
+  } else {
+    check(
+      Boolean(selfJudged.stale) === gapMs > 0,
+      'the instance and this script agree about staleness',
+      selfJudged.stale
+        ? `both call it stale — ${selfJudged.detail}`
+        : `both call it current — ${selfJudged.detail}`,
+    )
+  }
+}
+
 /* ------------------------------------------------- what this script cannot see */
 
 console.log(

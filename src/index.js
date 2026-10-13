@@ -36,6 +36,7 @@
  */
 
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { denHome, listJsonFiles, reapStaleTempFiles, readJson, toLosslessJson, writeJsonAtomic } from './atom.js'
 import { currentGrant, recordGrant, sessionEvents } from './grant.js'
@@ -45,12 +46,20 @@ import { KernelLease } from './resident.js'
 import { DenKernel, evaluateGates, readLedger, ledgerPath } from './kernel.js'
 import { deleteTrigger, dueTriggers, listTriggers, nextTriggerAt, normalizeTrigger, saveTrigger } from './triggers.js'
 import { ENTRY_KINDS, forget, recall, remember, scenarios } from './memory.js'
+import { collectSourceEdits, judgeFreshness, newestSourceEdit } from './freshness.js'
 import { mountPanelRoute } from './panel-route.js'
 
 export const name = 'dsh-den'
 export const inject = ['agents', 'tools', 'webServer']
 
 const STATE_VERSION = 1
+
+/**
+ * This plugin's own source directory, resolved from this file rather than from the working
+ * directory: a Host may start anywhere, and the question "did I load the tree beside me"
+ * has to be answered about the files that were actually loaded.
+ */
+const SRC_ROOT = fileURLToPath(new URL('.', import.meta.url))
 
 /**
  * How far back to read the audit file before appending one entry.
@@ -297,6 +306,37 @@ export class DenService {
   // ---------------------------------------------------------------- status
 
   /**
+   * Judge this instance against the newest edit in its own source tree.
+   *
+   * Never throws. An instance that cannot read its own tree has *not* learned that it is
+   * current, so an unreadable walk reports `known: false` — never a healthy default, which
+   * is the whole reason this module exists one level down.
+   */
+  describeFreshness() {
+    try {
+      const newest = newestSourceEdit(collectSourceEdits(SRC_ROOT))
+      const verdict = judgeFreshness({
+        startedAt: this.startedAt,
+        newestSourceAt: newest ? newest.mtimeMs : null,
+        newestSourceFile: newest ? newest.file : null,
+      })
+      return {
+        ...verdict,
+        sourceRoot: SRC_ROOT,
+        newestSourceAt: newest ? new Date(newest.mtimeMs).toISOString() : null,
+        newestSourceFile: newest ? newest.file : null,
+      }
+    } catch (error) {
+      return {
+        known: false,
+        stale: null,
+        sourceRoot: SRC_ROOT,
+        detail: `could not read this instance's own source tree: ${error?.message ?? error}`,
+      }
+    }
+  }
+
+  /**
    * A filesystem-level summary. Counts come from disk, never from memory, so this
    * cannot overstate what survived a restart.
    */
@@ -379,6 +419,17 @@ export class DenService {
        */
       pid: typeof process !== 'undefined' && Number.isFinite(process.pid) ? process.pid : null,
       startedAt: this.startedAt,
+      /**
+       * Whether this instance loaded the tree beside it — the one fact a long-lived process
+       * cannot be trusted about, and the one that made a whole round of live verification
+       * meaningless: `npm run verify` was green while the host was running modules from
+       * before the edits, because the offline suite cannot see a running process.
+       *
+       * Computed here, at request time, and not at construction: files edited *after* this
+       * instance loaded are exactly the case being asked about, so a value cached at boot
+       * would answer about the wrong moment. Small enough to afford — twelve files.
+       */
+      freshness: this.describeFreshness(),
       /**
        * Whether the wake delivery surface actually exists on this Host, measured rather
        * than assumed.
