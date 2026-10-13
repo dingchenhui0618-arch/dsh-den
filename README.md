@@ -120,8 +120,8 @@ These were read out of the running Host rather than assumed, and two of them cha
 
 - **D1 skeleton** — installable plugin, durable state, status surface *(done: bundle registered in a real profile; `fiberPhase: active` through the Host loader)*
 - **D2 authority + notices** — grant binding, expiry, dedup *(done, tested)*
-- **D3 autonomy kernel** — heartbeat, the four-gate decision, cold wake *(done, tested; the heartbeat resolves its own driver and reads the wake's reply back from the session log — see the three defects recorded in [DESIGN.md](DESIGN.md))*
-- **D4 outbound approval gate** — pre-execute listener plus a monotonic guard, outside the assistant's own prompt *(done, tested)*
+- **D3 autonomy kernel** — heartbeat, the four-gate decision, cold wake *(done, tested; the heartbeat resolves its own driver and reads the wake's reply back from the session log — see the three production-breaking defects in [DESIGN.md](DESIGN.md) §2.5)*
+- **D4 outbound approval gate** — pre-execute listener plus a monotonic guard, outside the assistant's own prompt *(done, tested; §2.6 records a fourth defect found in the D6 panel half, where the stand-in was a fake runtime rather than a fake service)*
 - **D5 memory + status UI** — scenario-isolated memory domains *(done, tested)*; interactive resident panel *(done: registers in the live sidebar, verified through 41 interaction checks and 22 route tests)*
 - **D6 7×24** — supervised survival: killed process recovers with no human intervention, verified over a long run
   - *Progress:* the watchdog distinguishes a wedged Host from a healthy one (`StrictHttp`; a TCP-listening-but-HTTP-dead Host was previously logged as healthy), and the plugin's own heartbeat now self-heals instead of deferring permanently. What is still open is a **long unattended run** — the acceptance criterion is a kill-and-recover observed without a human, not a configuration.
