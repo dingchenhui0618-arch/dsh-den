@@ -154,6 +154,32 @@ try {
     )
   }
 
+  // 6. The same content, made again now that the record is dead, must be deliverable again.
+  //    `queueNotice` used to decide duplication by whether a file with that name existed, and an
+  //    expired notice is still a file, so a current observation was silenced permanently while the
+  //    queue call reported success. Dedup asks "is an identical notice still deliverable".
+  //
+  //    Deliberately after step 5: it revives the aged notice, which is the contrast step 5 needs.
+  const respoken = queueNotice(SYNTHETIC, TEXT, 'notice')
+  const afterRespeak = await status()
+  const revived =
+    respoken.queued === true &&
+    respoken.id === queued.id &&
+    afterRespeak.notices.deliverable === afterIdea.notices.deliverable + 1 &&
+    afterRespeak.notices.expired === afterIdea.notices.expired - 1
+  if (revived) {
+    ok(
+      'a dead record does not silence the same observation',
+      `queued again as ${String(respoken.id).slice(0, 12)}…, ${JSON.stringify(afterRespeak.notices)}`,
+    )
+  } else {
+    bad(
+      'a dead record does not silence the same observation',
+      `queued ${respoken.queued}, id ${respoken.id === queued.id ? 'held' : 'changed'}, ` +
+        `counts ${JSON.stringify(afterIdea.notices)} -> ${JSON.stringify(afterRespeak.notices)}`,
+    )
+  }
+
   // 6. The content-addressed id must be a pure function of session, kind and text, or the
   //    duplicate suppression above is a coincidence rather than a property.
   const recomputed = noticeId(SYNTHETIC, 'notice', `  ${TEXT}  `)

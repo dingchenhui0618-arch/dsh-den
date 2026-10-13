@@ -301,7 +301,7 @@ These were read out of the running Host rather than assumed, and two of them cha
 |---|---|
 | `check-live-autonomy` | PASS — an agent cannot obtain standing autonomy from the live host |
 | `check-live-grant-bypass` | PASS — attacked twice with a real token and the live session id; refused both times, `autonomy=null`, `grantFiles=0` |
-| `check-live-notices` | PASS — the expiry rule holds in the host's own directory |
+| `check-live-notices` | PASS — 8 checks; the expiry rule holds in the host's own directory, and a dead record no longer silences the same observation |
 | `check-live-memory` | PASS — scenario isolation holds and the host reads the same store |
 | `check-wake-api` | PASS — 8 checks; the live agent carries a callable `followup()` |
 | `check-tools-live` | PASS — the `den_*` tools are callable from the assistant's own turn |
