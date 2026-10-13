@@ -737,14 +737,15 @@ export function registerTools(tools, service) {
   register({
     name: 'den_set_autonomy',
     description:
-      'Grant or revoke the den\'s standing autonomy for this conversation. A grant REQUIRES the id of the human message that requested it; the den can never grant this to itself, and a timer or subagent can never grant it. Revocation always wins over any automated re-arming.',
+      'Grant or revoke the den\'s standing autonomy for this conversation. Two factors are required and neither substitutes for the other: the human must have minted a request from the status panel, and the human message cited by `humanMessageId` must contain that request\'s token in its text. The den can never grant this to itself — it can mint a token and cite a message id, but it cannot author a human message. Revocation always wins over any automated re-arming.',
     parameters: {
       type: 'object',
       properties: {
         autonomy: { type: 'boolean', description: 'true to grant standing autonomy, false to revoke.' },
         humanMessageId: {
           type: 'string',
-          description: 'The id of the human message that carried this request. Required as proof.',
+          description:
+            'The id of the human message that carried this request. Its text must contain the token the panel issued; an id alone is not proof.',
         },
       },
       required: ['autonomy', 'humanMessageId'],
