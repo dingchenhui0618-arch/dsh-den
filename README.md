@@ -298,6 +298,8 @@ Neither combines standing autonomy with multi-agent structure; that intersection
 
 This is an **honest positioning, not a green-field claim.** `dsh-muse` publishes its own `docs/gaps.md`, and the top items it lists — a memory seam, event-source ingress, daemonisation, and a mandatory outbound approval point so that credentials never leave the trust domain — are exactly the areas `dsh-den` implements. Read `dsh-den` as a more careful implementation of gaps a released competitor left open, not as a capability that did not previously exist.
 
+**With the outbound point's scope stated rather than implied.** `dsh-den` implements the approval point; it does not implement "credentials never leave the trust domain", and it does not claim to. The gate classifies tool calls by matching patterns against their arguments, so it closes the reflexive and direct paths — a credential-shaped read is refused outright, an upload command is stopped and escalated — and it records every decision durably. It is not a boundary against an adversarial agent: the gate runs in the same process as the agent, which has filesystem and shell access, and a constructed path matches no pattern. Its value is that the costly actions stop and are seen, not that they are impossible. DESIGN 2.14 has the measured half and the unmeasurable half side by side.
+
 ## License
 
 MIT
