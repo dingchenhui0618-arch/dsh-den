@@ -26,6 +26,7 @@
     "check:acceptance": "node tools/check-acceptance.mjs",
     "check:deployment": "node tools/check-deployment.mjs",
     "check:autonomy": "node tools/check-live-autonomy.mjs",
+    "check:notices": "node tools/check-live-notices.mjs",
     "verify:live": "node tools/verify-after-restart.mjs",
     "check:tools": "node tools/check-tools-live.mjs",
     "diagnose:status": "node tools/diagnose-status-output.mjs",
