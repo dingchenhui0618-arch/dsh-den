@@ -3,7 +3,7 @@
 > A **7×24 resident personal assistant** for [DeepSeek Harness](https://github.com/deepseek-ai/dsh).
 > Not another chat window — an assistant that stays on, keeps its own memory, works while you are away, and stops to ask before it acts outside your trust boundary.
 
-Status: **the core is implemented, tested (224/224), and active in a real profile.** The plugin is loaded inside a real DSH 0.2.0-rc.2 desktop profile — it is in that profile's `dsh.profile.bundles`, and the running host reports it as `fiberPhase: active` — registering 11 model-facing tools, the approval guard, the heartbeat, and an interactive status panel. Verified against the *running* system rather than only in tests: the heartbeat ticks on its 60-second cadence, and the panel is an **active occupant** of both `sidebar.panellist` (`id: dsh-den.status`, order 245) and the `main` panel (`key: dsh-den.status`).
+Status: **the core is implemented, tested (226/226), and active in a real profile.** The plugin is loaded inside a real DSH 0.2.0-rc.2 desktop profile — it is in that profile's `dsh.profile.bundles`, and the running host reports it as `fiberPhase: active` — registering 11 model-facing tools, the approval guard, the heartbeat, and an interactive status panel. Verified against the *running* system rather than only in tests: the heartbeat ticks on its 60-second cadence, and the panel is an **active occupant** of both `sidebar.panellist` (`id: dsh-den.status`, order 245) and the `main` panel (`key: dsh-den.status`).
 
 **The running host was serving an older build; it has since been restarted, and the same check that said so now says otherwise.** Before the restart, the `Tool` inspect provider reported a different tool count from this tree's source and `GET /dsh-den` answered 404. Afterwards, `npm run verify:live` reports:
 
@@ -14,7 +14,23 @@ Status: **the core is implemented, tested (224/224), and active in a real profil
 
 The live status payload then reports the assistant actually running: `kernel.running: true`, `kernel.lastError: null`, a fresh `lastTickAt`, `gate.mounted: true`, and a ledger file on disk with `turns/spoken/skipped/refused` at zero. A scripted drill over the same real socket confirmed the write path end to end — `autonomy/request` minted a 32-character token, `schedules/create` → `schedules/list` → `schedules/delete` round-tripped, and a 10-second interval was correctly refused with `everySeconds must be at least 300`. Everything the drill created was deleted; `~/.dsh/den/triggers/` is empty again.
 
-**What remains unverified is the assistant speaking on its own.** `autonomy` is `null` with `autonomyKnown: false`, because no human has granted it in this conversation — and `den_set_autonomy` is deliberately on the gate's `ask` tier (`den_explain_gate` reports `verdict: "ask"`, rule `unknown-tool`), so the agent cannot grant it to itself. That is capability 1 working. It also means the autonomous-wake drill and the long unattended run need a human's approval to run, and neither has happened.
+**The assistant speaking on its own has not happened, but the reason it has not is now measured rather than assumed.** `autonomy` is `null` with `autonomyKnown: false`, because no human has granted it — and `den_set_autonomy` is deliberately on the gate's `ask` tier (`den_explain_gate` reports `verdict: "ask"`, rule `unknown-tool`), so the agent cannot grant it to itself. That is capability 1 working.
+
+**What the refusal looks like on the running host.** A `once` trigger was created due immediately, with no grant anywhere. The real kernel picked it up on its next heartbeat and recorded, in its own event log:
+
+```json
+{"type":"wake-refused",
+ "triggerId":"bc83e334…",
+ "gate":"authority",
+ "reason":"no standing autonomy from a direct human request",
+ "hadSession":false}
+```
+
+with `ledger.refused` incremented and the trigger's `fireCount` left at `0` — so the intent survived rather than being consumed. That is capabilities 1 and 2 together, end to end, on a real host: **the autonomous wake ran, and the authority gate stopped it for the stated reason.** The drill's trigger was deleted afterwards and `~/.dsh/den/triggers/` is empty.
+
+**Two production defects came out of that drill, and are fixed.** The refusal record appeared twice, exactly sixty seconds apart, which is what exposed the first: the refusal path never throttled, so a permanently unauthorized trigger was re-evaluated on *every* heartbeat — 1,440 log entries a day for one `once` trigger. The second came from writing an assertion that `tick()` has one return shape: the idle branch omitted `results` and the busy branch omitted `woke`/`spoke`, so `tick().results.length` threw on exactly the quiet ticks that are the common case. Both fixes are in `src/kernel.js` with regression tests in `test/cold-start.test.mjs`, each verified by reverting it.
+
+The remaining unverified step is the *admitted* wake and the long unattended run. Both need a human to grant autonomy.
 
 **That the plugin is live is proven from disk, not asserted.** `npm run check:tools` reads the persisted session logs and pairs every `tool/call` record with its result — a call *attempt* is not evidence, because a model can name a tool that was never registered and the attempt is still logged; only a result that is not an `unknown tool` error proves the tool existed in that session's set. Verdict on the live profile: **proven for `den_remember`, `den_schedule_check` and `den_status`**.
 
@@ -65,7 +81,7 @@ These are hard constraints, not aspirations. The reference implementations below
 All state lives in a **self-contained** `$DSH_HOME/den/` tree, so it can be packed and moved to another machine or a server without hunting through unrelated DSH storage.
 
 ```bash
-npm test          # 224 unit + integration tests
+npm test          # 226 unit + integration tests
 npm run check:bundle   # 31 offline bundle-contract checks
 npm run check:ui       # 41 panel interaction checks
 npm run check:acceptance   # the two reliability goals, as one observable lifecycle
