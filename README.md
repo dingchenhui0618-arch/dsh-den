@@ -9,7 +9,22 @@ Status: **the core is implemented, tested (229/229), and active in a real profil
 
 Delivery now goes through `Agent.followup`, which the host documents as *"queues an ordinary next-turn prompt and wakes the driver"* — `send(message, 'next-turn', true)`, splicing into the inbox and opening a turn boundary. No lineage is involved, the wake is visibly a queued turn in the conversation, and it durably becomes a `user/message` that the reply read-back pairs with the assistant's answer. `subagents` is no longer read anywhere.
 
-**Not yet verified on a live host.** The fix is proven in the harness, and the running host still executes the previous build, so the *live* wake drill remains outstanding — it needs a restart to pick this up, and it needs a human to grant autonomy first. See `DESIGN.md` §2.7 for the code evidence and §2.8 for how the fakes were made to stop hiding it.
+**The delivery surface is now verified on the running host, not just in the harness.** `npm run check:wake-api` asks the live Host what it actually offers and reports:
+
+```
+PASS — the agents service exposes get()
+PASS — the agents service exposes resume()
+PASS — `followup` is absent from the service contract, as expected
+PASS — a live agent was found and identified
+       id: session-95cc8a8d-a3e9-4e2a-a67d-12292d17ba24
+PASS — the live agent carries a callable followup()
+       this is the capability the delivery path needs, measured on the running Host
+RESULT: PASS — 8 checks, and the delivery surface is the one this Host actually offers.
+```
+
+That check exists because the defect it guards against was an *assumption about an API*, and it is placed where the assumption can be measured: `agents.get`/`agents.resume` are declared to return `Agent`, and `Agent` is declared as `{ readonly id }`. `followup` appears in no service signature — it is a method on the live agent object the factory builds — so the surfaced contract is narrower than the runtime object and no amount of reading signatures answers "will delivery work on this Host". The probe reports `sawLiveAgent: false` rather than a pass when no agent is live: *I could not look* is not *it is not there*.
+
+**What is still outstanding is one human step, not a defect.** No admitted wake has ever been delivered, because admitting one requires standing autonomy and no human has granted it. That single drill is the last unverified path in the project; everything on either side of it is measured. See `DESIGN.md` §2.7 for the code evidence and §2.8 for how the fakes were made to stop hiding it.
 
 **The running host was serving an older build; it has since been restarted, and the same check that said so now says otherwise.** Before the restart, the `Tool` inspect provider reported a different tool count from this tree's source and `GET /dsh-den` answered 404. Afterwards, `npm run verify:live` reports:
 
