@@ -588,6 +588,26 @@ ok   a second boot finds the state a first boot left behind
 
 **可复用的判据**：一个字段若以**过去事件**命名（survived / recovered / delivered / refused），就必须在**该事件还有可能没发生**的时刻采样。晚一步采样，它就从测量退化成常量，而且**不会报错**——只会安静地为假。
 
+### 2.12 面板承诺了一条没有接线的机制：令牌
+
+面板对用户的原文是：
+
+> Paste this token to the assistant in the conversation; it will grant access with this message as proof. The token is single-use and expires.
+
+**没有任何一条能授权的路径校验过这个令牌。**
+
+- 工具的实现在 `src/index.js`：`service.setGrant(agent, args.autonomy === true, String(args.humanMessageId))`，它的 schema 只要求 `autonomy` 与 `humanMessageId`。**令牌不在这条路径上。**
+- `recordGrant` → `isDirectHumanDriver` 校验的是「本回合里存在一条 id 等于 `humanMessageId`、且 `source.kind === 'user'` 的消息」。**它检查的是消息的 id，不是消息的内容**，所以令牌是否出现在那条消息里从未被读过。
+- 唯一读令牌的地方是 `autonomy/confirm`，而 §2.9 已实测证明它**永远不可能成功**（路由处理器拿不到 initiator）。
+
+所以令牌在**每一条能授权的路径上都是装饰**。真正阻止 agent 自授的是闸门审批，不是令牌。
+
+**这不是一个漏洞**，但它是一处「机制被声明、却未实现」的界面文案——与本项目反复出现的那一类相同：**面板在描述一个它没有兑现的凭证模型。** 人在按下按钮前会相信令牌是那个证明，而实际起作用的是别的东西。
+
+**为什么没有当场修**：把令牌接入 `recordGrant`（要求本回合的人类消息**正文**里含有一条未过期、未消费的令牌）是**收紧**授权语义——方向是安全的，而且会让系统真正做到它已经对用户承诺的事。但它改变了授权的必要条件：授权从「一条人类消息 + 闸门审批」变成「一条**含令牌**的人类消息 + 闸门审批」，并且需要让 `panelAutonomyRequest` 参与 `recordGrant`。按本项目约定，**权限语义的改动先问用户**，不单方面做。
+
+**记录在案，等待决定。** 在那之前，正确的说法是：能力 1 的控制点是**闸门审批**；令牌是待接线的第二因子，不是当前生效的第二因子。
+
 
 
 - `dsh-muse`、`dsh-bot` 只作**只读参考**，不 fork、不复制代码进本仓库。
