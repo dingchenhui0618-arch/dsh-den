@@ -152,6 +152,52 @@ test('the secret-path rule outranks the tool allowlist', () => {
   }
 })
 
+// Assembled rather than written out, for two reasons that both matter: the repository's own
+// pre-push scan looks for exactly these shapes and would report this file, and a test file
+// full of things that look like live credentials is a trap for whoever reads it next.
+const openAiShaped = `sk-${'A'.repeat(4)}${'b'.repeat(20)}`
+const gitHubShaped = `ghp_${'a'.repeat(30)}`
+
+test('a credential value aimed at a network tool is caught, and the rule says which shape', () => {
+  // `web_search` is `allow`, and the justification for that — written in this file's own
+  // header — was that a credential is caught "whichever tool carries it". For this tool the
+  // claim was false: the path rules match paths, so a *value* was invisible, and the outbound
+  // action rules never ran because a search does not push code anywhere. Measured: pasting a
+  // key into a query was allowed, with no decision and no audit line, while the same key
+  // carried by a shell command that uploads a body asked and was logged.
+  const searched = classify('web_search', { query: `leaked key ${openAiShaped}` })
+  assert.equal(searched.decision, 'ask', 'a query carrying a key shape must stop, not run')
+  assert.match(searched.rule, /^outbound:secret-value:/, 'the audit line must name the mechanism')
+  assert.ok(searched.rule.includes('openai-key'), 'and which family matched')
+
+  const fetched = classify('web_fetch', { url: `https://example.invalid/?k=${gitHubShaped}` })
+  assert.equal(fetched.decision, 'ask')
+  assert.ok(fetched.rule.includes('github-token'), 'a token in a URL is attributed too')
+})
+
+test('an ordinary search is still allowed, because a resident assistant that cannot search is not one', () => {
+  // The cheap fix here was to make `web_search` ask like `web_fetch`. That closes the hole by
+  // removing the capability, and in a profile with approvals off `ask` is a silent refusal —
+  // the pressure that makes a human turn the gate off entirely. So the shape rule asks and
+  // ordinary searching is untouched. If this test ever fails, the fix was applied too broadly.
+  for (const query of ['weather in Shanghai', 'how do I rotate an API key', 'sk- prefix openai']) {
+    assert.equal(classify('web_search', { query }).decision, 'allow', `"${query}" must remain searchable`)
+  }
+})
+
+test('the value rule is scoped to network payloads, so it never fires on the scanner itself', () => {
+  // Applying it to shell text was measured against, not imagined: the pre-push scan in this
+  // repository greps for the OpenAI key prefix followed by characters, so a value-shape rule
+  // over commands would refuse the scan that exists to find credentials. That is the same
+  // mistake as gating a delete rule on the word for deleting. Network tools have no other
+  // mechanism; shells have the outbound action rules, which do not misfire on their own text.
+  const scanning = classify('pwsh', { command: `git grep -nE "sk-[A-Za-z0-9]{16,}"` })
+  assert.equal(scanning.decision, 'allow', 'the credential scanner must be runnable')
+
+  const documenting = classify('edit', { file_path: 'DESIGN.md', old_string: 'a', new_string: 'the gate would push code' })
+  assert.equal(documenting.decision, 'allow', 'and documenting a rule is not performing it')
+})
+
 test('changing the den\'s own authority is never a plain allow', () => {
   // The whole design rests on this: the assistant cannot grant itself standing
   // autonomy, and a timer or a subagent cannot either.

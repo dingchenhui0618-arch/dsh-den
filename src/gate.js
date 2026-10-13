@@ -52,6 +52,28 @@ const SECRET_READ_PATTERNS = [
 ]
 
 /**
+ * Credential *values*, as opposed to the paths that hold them.
+ *
+ * A deliberately small set: prefixes specific enough to be worth acting on, common enough to
+ * matter. A match **asks** rather than denies, because a shape is weaker evidence than a
+ * filename — `id_rsa` names a key, while `sk-` followed by thirty characters only looks like
+ * one, and a person may legitimately be searching for documentation about keys. The reason
+ * carries which family matched, so that difference is visible where the decision is made.
+ *
+ * This closes the reflexive path — a model pasting a key into a search query — and leaves a
+ * line in the audit either way. It does not stop an obfuscated secret, and nothing here
+ * claims it does; see DESIGN 2.14.
+ */
+const SECRET_VALUE_PATTERNS = [
+  { id: 'openai-key', pattern: /\bsk-[A-Za-z0-9_-]{16,}/, what: 'send an API key' },
+  { id: 'github-token', pattern: /\bgh[pousr]_[A-Za-z0-9]{20,}/, what: 'send a repository token' },
+  { id: 'slack-token', pattern: /\bxox[abposr]-[A-Za-z0-9-]{10,}/, what: 'send a workspace token' },
+  { id: 'aws-key-id', pattern: /\bAKIA[0-9A-Z]{16}\b/, what: 'send a cloud access key id' },
+  { id: 'google-key', pattern: /\bAIza[0-9A-Za-z_-]{30,}/, what: 'send an API key' },
+  { id: 'private-key', pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----/, what: 'send a private key' },
+]
+
+/**
  * Commands that reach outside this machine, spend money, or destroy something
  * without a cheap undo. These stop and ask.
  */
@@ -86,6 +108,27 @@ const OUTBOUND_PATTERNS = [
  * default, so an unknown execution surface still asks.
  */
 const EXECUTING_TOOLS = new Set(['bash', 'pwsh', 'shell'])
+
+/**
+ * The tools whose *arguments are the payload* and leave this machine.
+ *
+ * `web_search` is `allow`, and that stays: a resident assistant that cannot search is less
+ * useful, and `ask` in a profile with approvals off is a silent refusal rather than a
+ * question. But that decision rested on a claim written into
+ * `test/gate-coverage.test.mjs` — that a credential is caught "whichever tool carries it" —
+ * and for this tool the claim was false. The path rules match *paths* (`.env`, `id_rsa`), so
+ * a credential *value* was invisible to them; the outbound action rules never ran, because a
+ * search does not push code to a remote. The reflexive path — paste the key into a query —
+ * therefore had neither a decision nor a trace, while the same key carried by a shell command
+ * that uploads a body asked and was logged.
+ *
+ * Scoped to these tools and deliberately not to shell text. A value-shape rule applied to
+ * commands would fire on the text of the scanner itself: this repository's own pre-push scan
+ * greps for the OpenAI key prefix followed by characters, which is precisely the shape being
+ * looked for. That is the same mistake as gating a delete rule on the word for deleting,
+ * which was measured here once already.
+ */
+const NETWORK_PAYLOAD_TOOLS = new Set(['web_search', 'web_fetch'])
 
 /**
  * Tools whose *purpose* is to reach outside. Ordered by the risk of the action.
@@ -241,6 +284,22 @@ export function classifyCall(exec) {
         risk: RISK.deny,
         rule: `secret:${rule.id}`,
         reason: `refused: this would pull a stored credential into the conversation (${rule.id})`,
+      }
+    }
+  }
+
+  // Tools whose arguments are the payload and leave this machine. There is no other
+  // mechanism for these: the path rules cannot see a value, and the action rules below
+  // describe actions a search cannot take. See NETWORK_PAYLOAD_TOOLS.
+  if (NETWORK_PAYLOAD_TOOLS.has(name)) {
+    for (const rule of SECRET_VALUE_PATTERNS) {
+      if (rule.pattern.test(text)) {
+        return {
+          risk: RISK.ask,
+          rule: `outbound:secret-value:${rule.id}`,
+          what: rule.what,
+          reason: `this sends something shaped like a credential (${rule.id}) to a third party; confirm before it runs`,
+        }
       }
     }
   }
