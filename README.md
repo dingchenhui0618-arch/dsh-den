@@ -86,6 +86,18 @@ The refusal is deliberate and traceable to one line each in three files:
 
 This session has approval prompts disabled, so `ask` resolves to a denial. **The agent side of this path is therefore closed by construction, not by operator error**, and calling `den_set_autonomy` from an agent turn cannot succeed here at all. The panel is not an alternative: its grant control mints a *request* and says so in its own copy — *paste this token to the assistant in the conversation* — and `autonomy/confirm` resolves a live conversation before it looks at anything else.
 
+**That is no longer an argument from the rule table — it has been attempted, on the live host, from the conversation itself.** The assistant called `den_set_autonomy` with `autonomy: true` on the running system, and the plugin's own gate stopped it and wrote down what it did:
+
+```json
+{"type":"gate","tool":"den_set_autonomy","rule":"unknown-tool","risk":1,"decision":"ask",
+ "sessionId":"session-95cc8a8d-a3e9-4e2a-a67d-12292d17ba24"}
+```
+
+That `sessionId` is the session the attempt was made *in* — not a probe standing in for one. After the refusal the same status payload reports `autonomy: null` and `grants: 0`: **the privilege change did not happen, and the agent could not make it happen.** Earlier rounds could only cite `den_explain_gate`, which reports what the gate *would* do; this is the gate doing it to a real call.
+
+It also settles a question the docs had been vague about: **the `den_*` tools are callable by the assistant's own turns** — `den_status` works from the conversation — so this was not a hypothetical attempt from outside the trust boundary but the assistant reaching for its own authority with every capability it actually has.
+
+
 So authority needs a human in the loop twice: the token must be cited in a real human message, and the resulting tool call must be approved rather than auto-denied. That is capability 1 in its strongest form — the agent cannot manufacture its own standing autonomy even with write access to the whole tree.
 
 **What the refusal looks like on the running host.** A `once` trigger was created due immediately, with no grant anywhere. The real kernel picked it up on its next heartbeat and recorded, in its own event log:
