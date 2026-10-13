@@ -14,7 +14,9 @@
  *    duplicates that the human must wade through.
  */
 
-import { denPath, digest, listJsonFiles, publishIfAbsent, readJson } from './atom.js'
+import { unlinkSync } from 'node:fs'
+
+import { denPath, digest, listJsonFiles, publishIfAbsent, readJson, writeJsonAtomic } from './atom.js'
 
 /** How long an observation-style notice stays deliverable. */
 export const NOTICE_TTL_MS = 12 * 60 * 60 * 1000
@@ -52,19 +54,46 @@ function isValidNotice(value) {
 /**
  * Queue a notice for a session.
  *
- * @returns {{ id: string, queued: boolean }} `queued: false` means an identical
- * notice already exists and was left untouched.
+ * Duplicate suppression is decided by whether an identical notice is still **deliverable**, not by
+ * whether a file with that name exists. The id is content-addressed, so the file from a notice that
+ * expired hours ago is still sitting there, and suppressing against it silences the content
+ * permanently: measured, the same observation made thirteen hours apart came back `queued: false`
+ * while `pendingNotices` kept reporting `deliverable: 0, expired: 1`, forever. A record that could
+ * never be delivered — expired, or unreadable — is not a duplicate, it is a dead one.
+ *
+ * @returns {{ id: string, queued: boolean }} `queued: false` means an identical notice is already
+ *   queued and still deliverable, and was left untouched.
  */
-export function queueNotice(sessionId, text, kind = 'notice') {
+export function queueNotice(sessionId, text, kind = 'notice', now = Date.now()) {
   const body = normalize(text)
   if (!sessionId || !body) throw new Error('dsh-den: notice needs a session and non-empty text')
   if (body.length > 12000) throw new Error('dsh-den: notice text exceeds 12000 characters')
   if (!NOTICE_KINDS.includes(kind)) throw new Error(`dsh-den: invalid notice kind ${kind}`)
 
   const id = noticeId(sessionId, kind, body)
-  const notice = { version: 1, id, sessionId, kind, text: body, createdAt: Date.now() }
-  const queued = publishIfAbsent(denPath('notices', `${id}.json`), notice)
-  return { id, queued }
+  const notice = { version: 1, id, sessionId, kind, text: body, createdAt: now }
+  const path = denPath('notices', `${id}.json`)
+
+  const existing = readExisting(path)
+  if (existing && isValidNotice(existing) && !isExpired(existing, now)) {
+    return { id, queued: false }
+  }
+  if (existing) {
+    // Replace the dead record in place. The id, session, kind and text are identical by
+    // construction, so the only field that moves is the one that was wrong: `createdAt`.
+    writeJsonAtomic(path, notice)
+    return { id, queued: true }
+  }
+  return { id, queued: publishIfAbsent(path, notice) }
+}
+
+/** Read a notice file, tolerating absence and damage. Absent and unreadable are both "not a duplicate". */
+function readExisting(path) {
+  try {
+    return readJson(path)
+  } catch {
+    return null
+  }
 }
 
 /** Ideas never expire; observation notices do. */
@@ -106,6 +135,33 @@ export function pendingNotices(sessionId, now = Date.now()) {
 
   deliverable.sort((a, b) => a.createdAt - b.createdAt)
   return { deliverable, expired, invalid }
+}
+
+/**
+ * Remove observation notices that can no longer be delivered.
+ *
+ * Nothing used to delete a notice file, so the tree only grew: a resident assistant running for
+ * months accumulates one file per distinct thing it ever said, and `allNotices()` reads every one of
+ * them on every status call. The same reasoning that reaps abandoned temp files at boot applies.
+ *
+ * Unreadable records are left alone — `pendingNotices` reports those rather than deciding for itself
+ * that a file it cannot parse is worthless.
+ *
+ * @returns {number} how many expired notices were reclaimed
+ */
+export function sweepExpiredNotices(now = Date.now()) {
+  let reclaimed = 0
+  for (const path of listJsonFiles(noticeDirectory())) {
+    try {
+      const notice = readJson(path)
+      if (!isValidNotice(notice) || !isExpired(notice, now)) continue
+      unlinkSync(path)
+      reclaimed += 1
+    } catch {
+      /* someone else reclaimed it, or it is locked; both are fine */
+    }
+  }
+  return reclaimed
 }
 
 /** Notices for every session, used by the status surface. */

@@ -39,7 +39,7 @@ import { join } from 'node:path'
 
 import { denHome, listJsonFiles, reapStaleTempFiles, readJson, toLosslessJson, writeJsonAtomic } from './atom.js'
 import { currentGrant, recordGrant, sessionEvents } from './grant.js'
-import { allNotices, isExpired, pendingNotices, queueNotice } from './notices.js'
+import { allNotices, isExpired, pendingNotices, queueNotice, sweepExpiredNotices } from './notices.js'
 import { installGate, RISK, classifyCall, recordAudit, auditPath } from './gate.js'
 import { KernelLease } from './resident.js'
 import { DenKernel, evaluateGates, readLedger, ledgerPath } from './kernel.js'
@@ -123,6 +123,9 @@ export class DenService {
     // accumulate, so sweep once at boot. Only the den's own tree is touched, and
     // the grace period keeps a concurrent writer's in-flight file safe.
     this.reapedTempFiles = reapStaleTempFiles(this.root) + reapStaleTempFiles(join(this.root, 'memory'))
+    // Same argument for notices: an expired one can never be delivered, and nothing used to remove
+    // it, so a long-lived assistant grew a file per distinct thing it ever said.
+    this.reapedNotices = sweepExpiredNotices()
     /**
      * When this instance was constructed, which is when this process last loaded the
      * plugin. Distinct from the Host's own start time and from any file's mtime, and the
@@ -344,6 +347,8 @@ export class DenService {
       gate: this.gateDisposer ? 'mounted' : 'not-mounted',
       /** Temp litter reclaimed at boot; non-zero means the process was hard-killed. */
       reapedTempFiles: this.reapedTempFiles,
+      /** Expired notices reclaimed at boot. They could never have been delivered again. */
+      reapedNotices: this.reapedNotices,
       /**
        * Whether the browser panel's data route actually mounted.
        *

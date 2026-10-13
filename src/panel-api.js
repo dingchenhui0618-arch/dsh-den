@@ -59,6 +59,7 @@ export function statusSnapshot(service, { sessionId, nextTriggerAt } = {}) {
     scenarios: service.listScenarios?.() ?? [],
     recentEvents: status.recentEvents,
     reapedTempFiles: status.reapedTempFiles ?? 0,
+    reapedNotices: status.reapedNotices ?? 0,
     /**
      * What the running Host actually offers for waking a conversation, measured.
      *

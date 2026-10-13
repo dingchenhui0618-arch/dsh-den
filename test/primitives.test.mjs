@@ -6,7 +6,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -18,7 +18,9 @@ process.env.DSH_HOME = sandbox
 const { denHome, digest, readJsonChecked, reapStaleTempFiles, writeJsonAtomic, publishIfAbsent, STALE_TEMP_MS } =
   await import('../src/atom.js')
 const { currentGrant, hasAutonomy, isDirectHumanDriver, recordGrant } = await import('../src/grant.js')
-const { NOTICE_TTL_MS, isExpired, noticeId, pendingNotices, queueNotice } = await import('../src/notices.js')
+const { NOTICE_TTL_MS, isExpired, noticeId, pendingNotices, queueNotice, sweepExpiredNotices } = await import(
+  '../src/notices.js'
+)
 
 test.after(() => rmSync(sandbox, { recursive: true, force: true }))
 
@@ -138,6 +140,79 @@ test('expired notices are withheld from delivery but reported', () => {
   assert.deepEqual(
     expired.map((notice) => notice.text),
     ['stale reminder'],
+  )
+})
+
+test('an expired notice does not silence the same observation made again', () => {
+  const session = 'session-respoken'
+  const text = 'the build is red'
+  const t0 = Date.now()
+
+  const first = queueNotice(session, text, 'notice', t0)
+  assert.equal(first.queued, true, 'queued while fresh')
+
+  const later = t0 + NOTICE_TTL_MS + 60_000
+  assert.equal(pendingNotices(session, later).deliverable.length, 0, 'it has expired by then')
+
+  // The same observation, made again when it matters again. The record on disk is dead, so this is
+  // a new queue, not a duplicate - if the guard is "a file with this name exists", the content is
+  // silenced permanently and the caller is told it succeeded.
+  const again = queueNotice(session, text, 'notice', later)
+  assert.equal(again.queued, true, 'a record that could never be delivered is not a duplicate')
+  assert.equal(again.id, first.id, 'and the id is still content-addressed')
+
+  const after = pendingNotices(session, later)
+  assert.deepEqual(
+    after.deliverable.map((notice) => notice.text),
+    [text],
+    'the new observation is deliverable',
+  )
+  assert.deepEqual(after.expired, [], 'the dead record was replaced, not joined by a twin')
+})
+
+test('an identical notice that is still deliverable is still suppressed', () => {
+  // The control for the test above: without this, "always replace" would pass it too.
+  const session = 'session-dedup-alive'
+  const t0 = Date.now()
+  const first = queueNotice(session, '  build is green  ', 'notice', t0)
+  const second = queueNotice(session, 'build is green', 'notice', t0 + 1000)
+
+  assert.equal(first.id, second.id)
+  assert.equal(first.queued, true)
+  assert.equal(second.queued, false, 'still deliverable, so still a duplicate')
+  const stored = JSON.parse(readFileSync(join(sandbox, 'den', 'notices', `${first.id}.json`), 'utf8'))
+  assert.equal(stored.createdAt, t0, 'and a duplicate did not move its clock')
+})
+
+test('the sweep reclaims expired notices, and only those', () => {
+  const session = 'session-sweep'
+  const stale = Date.now() - NOTICE_TTL_MS - 60_000
+  const rows = [
+    ['notice', 'gone stale', stale],
+    ['idea', 'an idea does not go stale', stale],
+    ['notice', 'still fresh', Date.now()],
+  ]
+  for (const [kind, text, createdAt] of rows) {
+    const id = noticeId(session, kind, text)
+    writeJsonAtomic(join(sandbox, 'den', 'notices', `${id}.json`), {
+      version: 1,
+      id,
+      sessionId: session,
+      kind,
+      text,
+      createdAt,
+    })
+  }
+  const fileFor = (kind, text) => join(sandbox, 'den', 'notices', `${noticeId(session, kind, text)}.json`)
+
+  sweepExpiredNotices()
+
+  assert.equal(existsSync(fileFor('notice', 'gone stale')), false, 'the expired observation is gone')
+  assert.equal(existsSync(fileFor('idea', 'an idea does not go stale')), true, 'an idea is never reaped')
+  assert.equal(existsSync(fileFor('notice', 'still fresh')), true, 'a live observation is never reaped')
+  assert.deepEqual(
+    pendingNotices(session).deliverable.map((notice) => notice.text).sort(),
+    ['an idea does not go stale', 'still fresh'],
   )
 })
 

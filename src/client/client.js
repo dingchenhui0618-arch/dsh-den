@@ -65,6 +65,7 @@ window.__ModuleLoader__.load({
         none: 'none',
         never: 'never',
         recovered: 'crash litter reclaimed',
+        reapedNotices: 'expired reminders reclaimed',
         unavailable: 'The host did not answer',
         errors: 'Last error',
         working: 'working…',
@@ -113,6 +114,7 @@ window.__ModuleLoader__.load({
         none: '无',
         never: '从未',
         recovered: '回收的崩溃残留',
+        reapedNotices: '回收的过期提醒',
         unavailable: '宿主未应答',
         errors: '最近错误',
         working: '处理中…',
@@ -468,6 +470,15 @@ window.__ModuleLoader__.load({
 
         if (d.reapedTempFiles) {
           children.push(React.createElement(Row, { key: 'r', label: t('recovered'), value: String(d.reapedTempFiles) }))
+        }
+        if (d.reapedNotices) {
+          children.push(
+            React.createElement(Row, {
+              key: 'rn',
+              label: t('reapedNotices'),
+              value: String(d.reapedNotices),
+            }),
+          )
         }
         if (d.kernel && d.kernel.lastError) {
           children.push(
