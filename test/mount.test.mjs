@@ -146,8 +146,61 @@ test('activation is fully reversible', () => {
   assert.equal(state.provided.size, 0, 'disposal must unprovide the service')
 })
 
-test('the kernel defers instead of running blind when no delivery path exists', () => {
+test('the wake surface is measured, not asserted, and reports its own limits', () => {
+  // A live agent carrying the method the delivery path calls.
+  const { ctx, state } = fakeHost()
+  const live = {
+    id: 'live-1',
+    inbox: { nextTurn: [], nextStep: [] },
+    followup: () => {},
+  }
+  state.agentsApi.list = () => [live]
+  apply(ctx)
+  const service = state.provided.get('den')
+
+  const seen = service.status().wakeApi
+  assert.equal(seen.checked, true, 'the measurement must run when the service is wired')
+  assert.equal(seen.sawLiveAgent, true)
+  assert.equal(seen.liveAgent.followup, true, 'the capability must be reported from the live object')
+  assert.equal(
+    seen.contract.followup,
+    undefined,
+    'the contract check must report what the service signatures offer, which excludes followup',
+  )
+  assert.equal(seen.contract.get, true)
+  assert.equal(seen.contract.resume, true)
+})
+
+test('the wake measurement reports "could not look" rather than a result it did not get', () => {
+  const { ctx, state } = fakeHost()
+  // `list` exists but nothing is live: the capability is unobservable, which is neither a
+  // pass nor a failure. Reporting it as a pass is exactly the mistake that hid the broken
+  // delivery path.
+  state.agentsApi.list = () => []
+  apply(ctx)
+  const service = state.provided.get('den')
+
+  const seen = service.status().wakeApi
+  assert.equal(seen.checked, true)
+  assert.equal(seen.sawLiveAgent, false, 'no live agent means the capability was not observed')
+  assert.equal(seen.liveAgent, null)
+})
+
+test('the wake measurement says which service is missing, not that delivery is broken', () => {
   const { ctx, state } = fakeHost({ withAgents: false })
+  apply(ctx)
+  const service = state.provided.get('den')
+
+  const seen = service.status().wakeApi
+  assert.equal(seen.checked, false)
+  assert.match(
+    seen.reason,
+    /agents service is not wired/,
+    'a profile with no agents service is a configuration fact, and must not read as a defect',
+  )
+})
+
+test('the kernel defers instead of running blind when no delivery path exists', () => {  const { ctx, state } = fakeHost({ withAgents: false })
   apply(ctx)
   const service = state.provided.get('den')
   assert.equal(service.kernel, null, 'without a delivery path the kernel must not run')

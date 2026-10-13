@@ -101,6 +101,12 @@ export class DenService {
     this.statusRoute = null
     /** Non-null while the heartbeat could not start; cleared once it does. */
     this.kernelDeferred = null
+    /**
+     * Set by apply() to a closure that measures the live wake-delivery surface. Null
+     * outside a running plugin, which `status()` reports as "not wired" rather than as a
+     * failing check — a service object with no Host behind it has nothing to measure.
+     */
+    this.probeWakeApi = null
     this.recentEvents = []
     // A hard kill between open and rename leaves temp litter behind — measured at
     // 39 of 40 kills. A resident assistant restarts often enough that this would
@@ -288,6 +294,23 @@ export class DenService {
        * looked healthy. This field makes the waiting state itself observable.
        */
       kernelDeferred: this.kernelDeferred ?? null,
+      /**
+       * Whether the wake delivery surface actually exists on this Host, measured rather
+       * than assumed.
+       *
+       * This field exists because the delivery path was broken by an assumption, and the
+       * assumption was about an API: `subagents.sendMessage` was read as a general
+       * "send a message to a conversation" and is in fact a restricted parent/child
+       * channel, so every admitted wake failed. Anything this plugin needs from the Host
+       * should be something the Host can be asked about at runtime.
+       *
+       * It matters here more than usual, because the surfaced service contract is
+       * **narrower than the runtime object**: `agents.get`/`resume` are declared to return
+       * `Agent`, and `Agent` is declared as `{ readonly id }`. `followup` is not in any
+       * service signature — it is a method on the live agent the factory builds. So the
+       * contract cannot be checked statically; the only honest check is at runtime.
+       */
+      wakeApi: this.probeWakeApi ? this.probeWakeApi() : { checked: false, reason: 'not wired' },
       recentEvents: this.recentEvents.slice(-10),
     }
   }
@@ -915,6 +938,46 @@ export function apply(ctx) {
 
     const deliveryServiceReason = () =>
       typeof ctx.get?.('agents')?.get === 'function' ? null : 'the agents service is not available yet'
+
+    /**
+     * Measure, do not assert, the wake-delivery surface.
+     *
+     * Returns a plain JSON report so the status payload can carry it: whether a service is
+     * wired at all is a different question from whether a live agent has the method the
+     * delivery path calls, and the second one cannot be read off the service contract —
+     * `Agent` is declared as `{ readonly id }` while the runtime object carries
+     * `followup`. Reporting `undefined` for a method that is genuinely absent is the point;
+     * a report that guessed would repeat the mistake the delivery path was fixed for.
+     */
+    const probeWakeApi = () => {
+      const agents = ctx.get?.('agents')
+      if (!agents) return { checked: false, reason: 'the agents service is not wired in this profile' }
+      let live = null
+      try {
+        const listed = typeof agents.list === 'function' ? agents.list() : []
+        live = Array.isArray(listed) && listed.length ? listed[0] : null
+      } catch (error) {
+        return { checked: false, reason: `listing live agents threw: ${error?.message ?? error}` }
+      }
+      return {
+        checked: true,
+        // What the Host's own service signatures offer. `followup` is expected NOT to
+        // appear here — see the note on this field.
+        contract: {
+          get: typeof agents.get === 'function',
+          resume: typeof agents.resume === 'function',
+          list: typeof agents.list === 'function',
+        },
+        // The capability the delivery path actually calls, on a real agent object.
+        sawLiveAgent: live !== null,
+        liveAgent: live === null ? null : {
+          id: typeof live.id === 'string' ? live.id : null,
+          followup: typeof live.followup === 'function',
+          inbox: live.inbox ? { nextTurn: live.inbox.nextTurn?.length ?? null, nextStep: live.inbox.nextStep?.length ?? null } : null,
+        },
+      }
+    }
+    service.probeWakeApi = probeWakeApi
 
     const kernelCanDeliver = () => deliveryServiceReason() === null
 
