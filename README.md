@@ -3,14 +3,19 @@
 > A **7×24 resident personal assistant** for [DeepSeek Harness](https://github.com/deepseek-ai/dsh).
 > Not another chat window — an assistant that stays on, keeps its own memory, works while you are away, and stops to ask before it acts outside your trust boundary.
 
-Status: **the core is implemented, tested (304/304), and active in a real profile.** The plugin is loaded inside a real DSH 0.2.0-rc.2 desktop profile — it is in that profile's `dsh.profile.bundles`, and the running host reports it as `fiberPhase: active` — registering 11 model-facing tools, the approval guard, the heartbeat, and an interactive status panel. Verified against the *running* system rather than only in tests: the heartbeat ticks on its 60-second cadence, and the panel is an **active occupant** of both `sidebar.panellist` (`id: dsh-den.status`, order 245) and the `main` panel (`key: dsh-den.status`) — read from the live browser page through the host's read-only Slot inspector, not from the plugin's own registration call.
+Status: **the core is implemented, tested (307/307), and active in a real profile.** The plugin is loaded inside a real DSH 0.2.0-rc.2 desktop profile — it is in that profile's `dsh.profile.bundles`, and the running host reports it as `fiberPhase: active` — registering 11 model-facing tools, the approval guard, the heartbeat, and an interactive status panel. Verified against the *running* system rather than only in tests: the heartbeat ticks on its 60-second cadence, and the panel is an **active occupant** of both `sidebar.panellist` (`id: dsh-den.status`, order 245) and the `main` panel (`key: dsh-den.status`) — read from the live browser page through the host's read-only Slot inspector, not from the plugin's own registration call.
+
+**Those live sentences are about one instance, and this is which one.** They were measured against the instance that reports `startedAt: 2026-10-13T08:43:05.676Z`. Editing a file does not change a running process, and that gap cost this project a round: after the panel fix landed at `09:24:00`, that instance was still serving the previous panel while six live probes went on printing passes — each one run on its own, and each one describing code that was no longer on disk. Two things now make that state impossible to report as a pass. The plugin reports `status.freshness`: the newest source edit beside it against its own start, computed per request rather than cached at boot, with "cannot tell" as its own answer instead of a healthy default. And every live probe script is chained behind `tools/require-fresh-host.mjs`, which refuses to run it when the instance is stale or cannot say. `npm run verify:live` re-establishes these live claims and stops at step 1 when the host is not serving this tree; the panel shows the same verdict, because the person who can restart DSH is the person looking at it.
+
+**One live claim is owed rather than made.** The panel change that moved the grant control and the self-check form into `conversation.input.dock` — the seat whose live catalog lists `sessionId` among its standard props — is asserted offline by `npm run check:ui` and has **not** been observed on a running page. That needs the restart named above. It is written here rather than left implicit because "a checker asserts it" and "it was seen working" are different claims, and reporting the first as the second is the defect this file keeps documenting.
+
 
 **And it reproduces from this repository alone.** A fresh `git clone` of the published repo — no `node_modules`, because the package declares **no dependencies at all** — runs the whole suite green:
 
 ```
 node_modules present in clone: False
 dependencies declared: (none)
-ℹ tests 304   ℹ pass 304   ℹ fail 0
+ℹ tests 307   ℹ pass 307   ℹ fail 0
 test exit: 0
 ```
 
@@ -222,7 +227,7 @@ These are hard constraints, not aspirations. The reference implementations below
 All state lives in a **self-contained** `$DSH_HOME/den/` tree, so it can be packed and moved to another machine or a server without hunting through unrelated DSH storage.
 
 ```bash
-npm test          # 304 unit + integration tests
+npm test          # 307 unit + integration tests
 npm run check:bundle   # 31 offline bundle-contract checks
 npm run check:ui       # 54 panel interaction checks
 npm run check:acceptance   # the two reliability goals, as one observable lifecycle

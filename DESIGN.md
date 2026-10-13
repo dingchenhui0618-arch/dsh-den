@@ -1108,6 +1108,18 @@ created
 
 **还有一条结构性测试**：`package.json` 里任何跑 `tools/check-live-*.mjs`（以及 `check-tools-live`、`check-wake-api`）的脚本，都必须串在守卫后面，否则测试红。`check:deployment` 明确豁免——**它就是那个测量本身**，它必须还能报告一个旧宿主，而不是拒绝谈论它。加新的 live 脚本的人不会漏，因为漏了会红。
 
+### 2.27 公开仓库的 Status 是一句没有日期的 live 声明
+
+README 开头写着「Verified against the *running* system」,但**没有说那是哪个 instance**。读者只能理解成「现在也是」。而这一整个 session 的教训恰恰是:live 声明是关于**某一个进程**的,改文件不会改变一个正在跑的进程。
+
+**改法不是删掉那句话**(它是真的,而且是最值得展示的部分),而是**给它出处和边界**:写清它是针对 `startedAt: 2026-10-13T08:43:05.676Z` 那个实例测的;写清面板修复落地后那个实例仍在服务旧面板;写清现在有两样东西让这种状态无法被报成通过(宿主自报 `status.freshness` + 每个 live 探针前的 `require-fresh-host.mjs`);写清重新确立这些声明的那条命令是 `npm run verify:live`。
+
+并且补了一段**明确欠着的 live 声明**:搬进 `conversation.input.dock` 的授予控件目前只有 `check:ui` 的离线断言,**没有在运行中的页面上被看到过**。写出来而不是含糊过去,是因为「有检查断言」和「亲眼见过它工作」是两个不同的主张——把前者当后者报出去,正是这份文件一直在记录的那种缺陷。
+
+**顺带把「公开数字」变成可机检的。** 新增 `test/doc-claims.test.mjs`:README 说「11 model-facing tools」「six named actions」「no dependencies at all」,这三条都对着代码量一遍(工具数用 `registerTools` 的最小桩数,动作数用导出的 `PANEL_ACTIONS`,依赖用 `package.json` 的三个字段)。**测试总数故意不在里面**——测试没法数包含自己的测试,那条数字永远是「一次真实运行的 transcript」,只能重跑,不能手改。
+
+**写这个测试时又踩了一个自己造的坑。** 第一版正则写成 `([a-z]+|\d+)\s+(?:[a-z-]+\s+){0,2}named actions`,在「and the six named actions」上它**匹配成功了**,但捕获组是 `and`;而我的代码对非数字捕获直接跳过——于是这次匹配**把整个短语吞掉了**,引擎再也不会从 `six` 重新开始。测试于是报告「README 里没有这条声明」,而那句话明明就在那里。修法是:捕获不是数字时把 `lastIndex` 退回 `match.index + 1` 重试。一个匹配成功后吞掉了自己没能捕获的东西——这类缺陷的读数和「东西不在那里」完全一样。
+
 - `dsh-muse`、`dsh-bot` 只作**只读参考**，不 fork、不复制代码进本仓库。
 - 借鉴的是**机制与教训**（授权绑定、keeper 重新武装、TTL、多域隔离），实现代码自己写。
 - 两者均为 MIT；本项目同样 MIT，若未来复制其代码片段须保留原始版权声明。
