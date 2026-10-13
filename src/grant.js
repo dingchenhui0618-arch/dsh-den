@@ -45,13 +45,12 @@ function isValidRecord(value) {
 }
 
 /**
- * The message the caller cites, if the *current turn* actually contains it.
+ * Every human message in the *current turn*.
  *
  * The turn boundary matters: a grant must be justified by a message in the turn that is
  * asking for it, not by some earlier message that happened to have a matching id.
  */
-function citedHumanMessage(agent, messageId) {
-  if (typeof messageId !== 'string' || !messageId) return undefined
+function currentTurnHumanMessages(agent) {
   const events = sessionEvents(agent.session)
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]
@@ -59,15 +58,16 @@ function citedHumanMessage(agent, messageId) {
     if (event?.type === 'turn/start') {
       return events
         .slice(index + 1)
-        .find(
-          (item) =>
-            item?.type === 'user/message' &&
-            item.data?.id === messageId &&
-            item.data?.source?.kind === 'user',
-        )
+        .filter((item) => item?.type === 'user/message' && item.data?.source?.kind === 'user')
     }
   }
-  return undefined
+  return []
+}
+
+/** The message the caller cites by id, if the current turn contains it. */
+function citedHumanMessage(agent, messageId) {
+  if (typeof messageId !== 'string' || !messageId) return undefined
+  return currentTurnHumanMessages(agent).find((item) => item.data?.id === messageId)
 }
 
 /**
@@ -100,13 +100,40 @@ function messageText(event) {
  * live registry and status rather than trusting the caller's own claim.
  */
 export function isDirectHumanDriver(ctx, agent, messageId) {
+  return driverIsLiveDirectHuman(ctx, agent) && citedHumanMessage(agent, messageId) !== undefined
+}
+
+/**
+ * The half of the driver check that does not depend on which message is cited.
+ *
+ * Split out because the token path resolves its message *from the token* rather than from
+ * an id, and it still has to clear every one of these checks.
+ */
+function driverIsLiveDirectHuman(ctx, agent) {
   const agents = ctx?.agents
   if (!agents || !agent?.session) return false
   if (typeof agents.get === 'function' && agents.get(agent.id) !== agent) return false
   if (typeof agents.currentInitiator === 'function' && agents.currentInitiator() !== agent) return false
   if (agent.status !== 'running') return false
   if (typeof agents.roots === 'function' && !agents.roots().includes(agent)) return false
-  return citedHumanMessage(agent, messageId) !== undefined
+  return true
+}
+
+/**
+ * Which human message the caller means.
+ *
+ * A caller may cite an id, but a model driving a tool call has no reliable way to *know*
+ * the id of the message it is answering — and requiring one made the flow impossible to
+ * complete in practice even though every other part of it worked. So the token may stand in
+ * for the id: it is a 32-character random string that only a human who read the panel can
+ * type, which makes "the current turn contains a human message quoting this token" both
+ * sufficient and unforgeable.
+ */
+function resolveCitedMessage(agent, humanMessageId, requireToken) {
+  const byId = citedHumanMessage(agent, humanMessageId)
+  if (byId) return byId
+  if (typeof requireToken !== 'string' || !requireToken) return undefined
+  return currentTurnHumanMessages(agent).find((item) => messageText(item).includes(requireToken))
 }
 
 /**
@@ -127,28 +154,39 @@ export function isDirectHumanDriver(ctx, agent, messageId) {
  * error, not a runtime condition.
  */
 export function recordGrant(ctx, agent, autonomy, humanMessageId, { requireToken } = {}) {
-  if (!isDirectHumanDriver(ctx, agent, humanMessageId)) {
+  if (!driverIsLiveDirectHuman(ctx, agent)) {
     throw new Error('dsh-den: autonomy requires a direct human request')
   }
-  if (typeof requireToken === 'string' && requireToken) {
-    if (!messageText(citedHumanMessage(agent, humanMessageId)).includes(requireToken)) {
-      throw new Error('dsh-den: the cited human message does not carry the panel token, so it is not the proof it claims to be')
-    }
+
+  const citedById = citedHumanMessage(agent, humanMessageId)
+  // A cited id that is not a human message in this turn is a forgery, and saying so is more
+  // useful than the generic refusal. Checked before the token so the two factors stay
+  // independently diagnosable.
+  if (!citedById && typeof humanMessageId === 'string' && humanMessageId) {
+    throw new Error('dsh-den: autonomy requires a direct human request')
   }
-  const events = sessionEvents(agent.session)
-  const human = events.find(
-    (event) =>
-      event?.type === 'user/message' &&
-      event.data?.id === humanMessageId &&
-      event.data?.source?.kind === 'user',
-  )
+
+  const tokenRequired = typeof requireToken === 'string' && requireToken
+  if (citedById && tokenRequired && !messageText(citedById).includes(requireToken)) {
+    throw new Error('dsh-den: the cited human message does not carry the panel token, so it is not the proof it claims to be')
+  }
+
+  const human = citedById ?? resolveCitedMessage(agent, humanMessageId, requireToken)
+  if (!human) {
+    throw new Error(
+      tokenRequired
+        ? 'dsh-den: no human message in this turn carries the panel token, so there is nothing to grant against'
+        : 'dsh-den: autonomy requires a direct human request',
+    )
+  }
+  const citedMessageId = human.data.id
   const record = {
     version: SCHEMA_VERSION,
     sessionId: agent.session.id,
     autonomy,
-    humanMessageId,
+    humanMessageId: citedMessageId,
     humanSeq: human.seq,
-    recordedAfterSeq: events.at(-1)?.seq ?? human.seq,
+    recordedAfterSeq: sessionEvents(agent.session).at(-1)?.seq ?? human.seq,
     updatedAt: Date.now(),
   }
   writeJsonAtomic(grantPath(record.sessionId), record)

@@ -737,7 +737,7 @@ export function registerTools(tools, service) {
   register({
     name: 'den_set_autonomy',
     description:
-      'Grant or revoke the den\'s standing autonomy for this conversation. Two factors are required and neither substitutes for the other: the human must have minted a request from the status panel, and the human message cited by `humanMessageId` must contain that request\'s token in its text. The den can never grant this to itself — it can mint a token and cite a message id, but it cannot author a human message. Revocation always wins over any automated re-arming.',
+      'Grant or revoke the den\'s standing autonomy for this conversation. Two factors are required and neither substitutes for the other: the human must have minted a request from the status panel, and a human message in this turn must quote that request\'s token. The den can never grant this to itself — it can mint a token, but it cannot author a human message. Revocation always wins over any automated re-arming.',
     parameters: {
       type: 'object',
       properties: {
@@ -745,10 +745,10 @@ export function registerTools(tools, service) {
         humanMessageId: {
           type: 'string',
           description:
-            'The id of the human message that carried this request. Its text must contain the token the panel issued; an id alone is not proof.',
+            'Optional. The id of the human message that carried this request. If omitted, the den finds the human message in this turn that quotes the panel token — which is the honest default, because a model has no reliable way to know message ids.',
         },
       },
-      required: ['autonomy', 'humanMessageId'],
+      required: ['autonomy'],
       additionalProperties: false,
     },
     output: { schema: { type: 'object' }, render: (_args, value) => text(value) },
@@ -756,7 +756,7 @@ export function registerTools(tools, service) {
       const agent = exec?.agent
       if (!agent) return { ok: false, error: 'no agent in scope: autonomy is per conversation' }
       try {
-        const record = service.setGrant(agent, args.autonomy === true, String(args.humanMessageId))
+        const record = service.setGrant(agent, args.autonomy === true, String(args.humanMessageId ?? ''))
         return { ok: true, autonomy: record.autonomy, boundToMessage: record.humanMessageId }
       } catch (error) {
         return { ok: false, error: String(error?.message ?? error) }

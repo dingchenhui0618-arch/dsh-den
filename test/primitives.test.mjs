@@ -179,6 +179,31 @@ test('a verified human turn grants, and revocation always wins', () => {
   assert.equal(hasAutonomy(agent), false)
 })
 
+test('the token identifies the human message, so a caller need not know its id', () => {
+  const token = `tok-${'a'.repeat(28)}`
+  const turn = (text) => [
+    { seq: 1, type: 'turn/start' },
+    { seq: 2, type: 'user/message', data: { id: 'msg-1', source: { kind: 'user' }, text } },
+  ]
+
+  // A model driving a tool call has no reliable way to *know* the id of the message it is
+  // answering, and requiring one made an otherwise complete flow impossible to finish. The
+  // token stands in for the id, and the record still names the message it found.
+  const agent = fakeAgent({ events: turn(`please grant — ${token}`) })
+  const record = recordGrant(fakeCtx(agent), agent, true, '', { requireToken: token })
+  assert.equal(record.humanMessageId, 'msg-1', 'the record must name the message the token was found in')
+  assert.equal(currentGrant(agent), true)
+
+  // A token nobody typed is not a grant. This is the entire second factor: the string is
+  // random, only a human who read the panel can type it, and an agent cannot author a
+  // `user/message` to put it in.
+  const silent = fakeAgent({ events: turn('no token in this one') })
+  assert.throws(
+    () => recordGrant(fakeCtx(silent), silent, true, '', { requireToken: token }),
+    /no human message in this turn carries the panel token/,
+  )
+})
+
 test('a grant attempt with a message id absent from the log is refused', () => {
   const agent = fakeAgent({ events: humanTurn('msg-1') })
   assert.throws(
