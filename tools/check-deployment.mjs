@@ -28,7 +28,7 @@
  * Usage:  node tools/check-deployment.mjs [baseUrl]
  */
 
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { request } from 'node:http'
 
 const BASE = process.argv[2] ?? 'http://127.0.0.1:19387'
@@ -127,6 +127,49 @@ if (status) {
   console.log(`       note: ${transport.note}`)
 }
 
+/* --------------------------------- 4. is the running instance built from this tree? */
+
+console.log('\n=== is the running instance built from this tree? ===')
+
+// The tool-name comparison above catches a *different build*. It cannot catch a changed
+// *behaviour*, because editing a handler does not rename a tool — so a host running last
+// week's grant path still lists this week's tool names and passes. The honest question is
+// not "does the registry look right" but "did this instance load after the last edit", and
+// the plugin already reports the one fact needed to answer it: `startedAt` is when the
+// service was constructed, which is when the Host loaded these modules.
+const srcDir = new URL('../src/', import.meta.url)
+let newestMs = 0
+let newestFile = ''
+for (const entry of readdirSync(srcDir, { recursive: true })) {
+  const name = String(entry)
+  if (!/\.(js|mjs|json)$/.test(name)) continue
+  const info = statSync(new URL(name, srcDir))
+  if (!info.isFile()) continue
+  if (info.mtimeMs > newestMs) {
+    newestMs = info.mtimeMs
+    newestFile = name
+  }
+}
+
+const startedAtMs = status?.startedAt ? Date.parse(status.startedAt) : Number.NaN
+if (Number.isNaN(startedAtMs)) {
+  check(
+    false,
+    'the running instance says when it loaded',
+    'startedAt is absent from the status payload, so staleness cannot be judged',
+  )
+} else {
+  check(
+    startedAtMs >= newestMs,
+    'the running instance loaded this tree',
+    startedAtMs >= newestMs
+      ? `loaded ${status.startedAt}, newest source edit ${new Date(newestMs).toISOString()} (${newestFile})`
+      : `the instance loaded at ${status.startedAt} but ${newestFile} changed at ` +
+        `${new Date(newestMs).toISOString()} — the host is running code older than this tree, ` +
+        'so restart DSH before believing anything below',
+  )
+}
+
 /* ------------------------------------------------- what this script cannot see */
 
 console.log(
@@ -144,7 +187,7 @@ console.log(
 
 console.log(
   failures === 0
-    ? '\nPASS - the running host is serving this tree.'
+    ? '\nPASS - the running host is serving this tree, and it loaded it after the last edit.'
     : `\nFAIL - ${failures} claim(s) about the running host are unverified.`,
 )
 process.exit(failures === 0 ? 0 : 1)

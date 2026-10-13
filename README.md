@@ -192,6 +192,16 @@ npm run check:tools        # disk evidence that den_* tools were really invoked
 
 **After restarting DSH, run `npm run verify:live`.** It is the scripted form of the acceptance this project is judged on, and it refuses to report success while the host is still running an older build. It first runs the deployment check as a falsification step — if `GET /dsh-den` is not 200, nothing after it would be evidence about this tree, so it stops. Then it reads `transport.browserReachable` **before** sending any probe of its own, so any movement it observes afterwards is attributable to something that is not the script.
 
+**"The running host is serving this tree" is a claim that has to be earned twice, and the second half was missing.** Comparing the Host's tool names against the names in `src/index.js` catches a *different build* but not a changed *behaviour* — editing a handler does not rename a tool, so a host running last week's delivery path or last week's grant path still lists this week's tool names and passes. The check now also asks whether the running instance loaded after the last source edit, using the `startedAt` the plugin already reports as the moment the Host loaded these modules:
+
+```
+FAIL the running instance loaded this tree
+  the instance loaded at 2026-10-13T02:56:33.794Z but index.js changed at 2026-10-13T04:02:16.393Z
+  — the host is running code older than this tree, so restart DSH before believing anything below
+```
+
+That is the honest verdict while an edit is pending, and it means `verify:live` now stops instead of proceeding to describe a tree the host is not running.
+
 `npm test` includes one test that is unlike the rest: `test/roundtrip.test.mjs`
 drives the **real** browser bundle's `call()` against the **real** route handler the
 plugin registered, in a single process. It exists because a test double is written
