@@ -29,7 +29,8 @@
     "check:tools": "node tools/check-tools-live.mjs",
     "diagnose:status": "node tools/diagnose-status-output.mjs",
     "check:package": "node tools/check-package-contents.mjs",
-    "verify": "npm test && npm run check:bundle && npm run check:ui && npm run check:acceptance && npm run check:package"
+    "check:install": "node tools/check-install.mjs",
+    "verify": "npm test && npm run check:bundle && npm run check:ui && npm run check:acceptance && npm run check:package && npm run check:install"
   },
   "engines": {
     "node": "^22.19.0 || >=24"
