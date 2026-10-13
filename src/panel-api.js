@@ -57,6 +57,17 @@ export function statusSnapshot(service, { sessionId, nextTriggerAt } = {}) {
     scenarios: service.listScenarios?.() ?? [],
     recentEvents: status.recentEvents,
     reapedTempFiles: status.reapedTempFiles ?? 0,
+    /**
+     * What the running Host actually offers for waking a conversation, measured.
+     *
+     * `statusSnapshot` builds this payload field by field on purpose — a panel payload is
+     * an allow-list, so a new `status()` field is invisible until it is named here. That
+     * is exactly what happened to this one: the field was added, the tests passed, and the
+     * route kept reporting a payload without it, which read as "the running Host is a
+     * stale build" when the build was current. An allow-list is the right shape; the trap
+     * is that adding a field is a two-file change and only one of them fails loudly.
+     */
+    wakeApi: status.wakeApi ?? null,
     /** Present so the panel can explain its own transport failure. */
     route: status.statusRoute ?? null,
     /**

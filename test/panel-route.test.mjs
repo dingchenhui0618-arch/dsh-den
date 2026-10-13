@@ -118,6 +118,25 @@ test('an unknown session stays unknown instead of falling back to a global value
   assert.equal(snap.autonomyKnown, false)
 })
 
+test('the panel payload carries the wake-surface measurement through to the route', () => {
+  // This payload is an allow-list built field by field, and that has a trap: a field added
+  // to `status()` is invisible on the route until it is also named here. That happened with
+  // `wakeApi` — the field existed, the unit tests for it passed, and the running route
+  // reported a payload without it, which read as "the Host is running a stale build" when
+  // the build was current. Adding a status field is a two-file change and only one of the
+  // two fails loudly, so pin the seam between them.
+  const measured = { checked: true, contract: { get: true, resume: true }, sawLiveAgent: false, liveAgent: null }
+  const service = stubService()
+  service.status = () => ({ ...stubService().status(), wakeApi: measured })
+  const snap = statusSnapshot(service, { nextTriggerAt: () => 1 })
+  assert.deepEqual(snap.wakeApi, measured, 'the measurement must survive the allow-list')
+})
+
+test('a service that cannot measure the wake surface reports null, not a fabricated pass', () => {
+  const snap = statusSnapshot(stubService(), { nextTriggerAt: () => 1 })
+  assert.equal(snap.wakeApi, null, 'absence must be reported as absence')
+})
+
 // ---------------------------------------------------------------- the surface
 
 /** Drive the registered route handler directly, as the host web server would. */
