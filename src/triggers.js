@@ -145,6 +145,41 @@ function isValidStored(value) {
   if (typeof value.title !== 'string' || typeof value.prompt !== 'string') return false
   if (typeof value.enabled !== 'boolean') return false
   if (!Number.isSafeInteger(value.fireCount)) return false
+  return isSchedulable(value)
+}
+
+/**
+ * Whether the fields the schedule is **computed from** are present and sane.
+ *
+ * This is the half that was missing, and its absence was silent. A stored trigger with, say, no
+ * `everySeconds` satisfied the envelope check, was reported as a valid trigger, and could never
+ * produce a `nextTriggerAt` — so `dueTriggers` never returned it and a reminder the human is
+ * relying on simply never fired, with nothing anywhere calling it broken. Measured with four such
+ * records: listTriggers reported `valid=5 invalid=0` and a query ninety days out returned only the
+ * one healthy trigger. The docstring above promised they would be "reported and skipped"; they were
+ * neither, because they never failed validation in the first place.
+ *
+ * Deliberately narrow: only what `nextTriggerAt` reads. Requiring a field here retires every
+ * trigger stored before that field existed, which is the same harm pointing the other way.
+ */
+function isSchedulable(value) {
+  if (!Number.isFinite(value.createdAt)) return false
+  if (value.lastFiredAt != null && !Number.isFinite(value.lastFiredAt)) return false
+  if (value.lastAttemptAt != null && !Number.isFinite(value.lastAttemptAt)) return false
+  if (value.maxRuns !== undefined && !(Number.isSafeInteger(value.maxRuns) && value.maxRuns > 0)) {
+    return false
+  }
+
+  if (value.kind === 'once') return Number.isFinite(value.at)
+  if (value.kind === 'interval') {
+    return Number.isSafeInteger(value.everySeconds) && value.everySeconds >= MIN_INTERVAL_SECONDS
+  }
+  // `daily` and `weekly` store `atTime` as minutes since local midnight, not as the `HH:MM` the
+  // human typed, and `nextTriggerAt` feeds it straight to `setMinutes`.
+  if (!Number.isSafeInteger(value.atTime) || value.atTime < 0 || value.atTime >= 1440) return false
+  if (value.kind === 'weekly') {
+    return Number.isSafeInteger(value.weekday) && value.weekday >= 1 && value.weekday <= 7
+  }
   return true
 }
 
@@ -165,8 +200,17 @@ export function nextTriggerAt(trigger, after = Date.now()) {
   if (trigger.kind === 'interval') {
     const step = trigger.everySeconds * 1000
     const base = Number.isFinite(trigger.lastFiredAt) ? trigger.lastFiredAt : trigger.createdAt
-    // Catch up in whole steps so a host that was down for a while resumes on the
-    // original cadence instead of firing a storm of missed occurrences.
+    // This branch answers "what is the next instant on the original grid at or after `after`". It
+    // only runs when the caller asks for a moment **later** than one step past the last fire.
+    //
+    // Both callers in this repo ask the other question: `dueTriggers` and `statusSnapshot` pass
+    // `lastFiredAt ?? 0`, which is the same value `base` starts from, so `base + step > after` is
+    // always true and the arithmetic below never runs in the shipped system. That is deliberate for
+    // `dueTriggers` - asking "after now" there would make a check-in missed during downtime fall in
+    // the future and be skipped, which is the opposite of what capability 2 promises. The cost is
+    // that an interval trigger re-anchors its cadence to the moment it actually woke rather than
+    // returning to the original grid: measured at 170 minutes of phase shift after a three-hour
+    // outage on a five-minute interval. The old comment here claimed the grid was preserved.
     if (base + step > after) return base + step
     const missed = Math.ceil((after - base) / step)
     return base + missed * step

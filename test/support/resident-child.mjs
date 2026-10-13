@@ -34,6 +34,16 @@ const setup = flags.includes('--setup')
 const goFlag = flags.find((flag) => flag.startsWith('--go='))
 const goFile = goFlag ? goFlag.slice('--go='.length) : `${resultFile}.go`
 
+// A child that dies on the way up, on purpose, in any mode. A parent cannot tell a dead child from a
+// slow one by looking at the filesystem - readiness and results are files, so a file that never
+// appears is all it sees - and this is what makes the parent's failure path testable instead of
+// something that only ever shows up as a flake. It writes to stderr first, because the point is that
+// the parent has to be able to show it.
+if (flags.includes('--crash') || process.env.DEN_CHILD_CRASH === '1') {
+  process.stderr.write('deliberate startup failure: this child dies before it does anything\n')
+  process.exit(3)
+}
+
 const { apply } = await import('../../src/index.js')
 const { fakeHost } = await import('./host.mjs')
 const { writeJsonAtomic, digest, denPath } = await import('../../src/atom.js')

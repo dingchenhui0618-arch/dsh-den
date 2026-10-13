@@ -970,6 +970,58 @@ created
 
 **两个修复各有一条移除式证伪。** 把 `queueNotice` 退回一行式 `publishIfAbsent` → **只有** `an expired notice does not silence the same observation made again` 失败(22 通过 / 1 失败),而既有的 `identical notice content collapses to one record` 在旧代码下照样通过——证明新测试钉的是新契约,不是把去重又测了一遍。把清扫改成空操作 → **只有** `the sweep reclaims expired notices, and only those` 失败。两次都按 sha256 还原为修复版(`8A7ABB…D52E`)。
 
+### 2.20 触发器验了信封,没验排程真正要用的字段
+
+`isValidStored` 检查 id、sessionId、kind、title、prompt、enabled、fireCount——**全是信封**——而 `nextTriggerAt` 实际读的是 `createdAt`、`everySeconds`、`atTime`、`weekday`、`at`、`lastFiredAt`、`maxRuns`。一条缺 `everySeconds` 的记录因此**通过校验、被列为一条有效触发器、并且永远不可能到期**。
+
+量出来的:
+
+| 存储的记录 | 修前 | 修后 |
+| --- | --- | --- |
+| 4 条排不出来（缺 `everySeconds`/`atTime`/`weekday`/`at`） | `valid=5 invalid=0` | `valid=1 invalid=4` |
+| 90 天后到期 | 只有健康那条 | 只有健康那条（不变） |
+
+也就是说**人被依靠的提醒永远不响,而所有界面都报它健康**。而那条 docstring 本来就写着「Stored triggers that fail validation are reported and skipped, never trusted」——它们**既没被 report 也没被 skip,因为它们压根没 fail validation**。
+
+`invalid` 早就被 status（`triggers.invalid`）和面板（`invalidCount`）报出来了,所以判据一修好,这些记录**自动变可见**——不需要新 UI。
+
+新增的 `isSchedulable` **刻意只管 `nextTriggerAt` 读的那些字段**:在这里加一个必填项,会把该字段存在之前写下的每一条触发器一起作废,那是同一个伤害换了个方向。测试带**反向对照**（四种良构触发器必须仍然有效且可排程）,否则「一律拒绝」也能过。
+
+测试夹具自己也踩了一次本仓库记过的坑:第一版写成 `{ ...whole, kind: 'interval' }`,**展开不能删字段**,`everySeconds` 还在,于是「缺字段」那条根本没缺——夹具让被测分支不可达。删字段必须显式写 `undefined`（JSON 会丢掉它）。
+
+**同一处还纠正了一句过强的断言。** `nextTriggerAt` 里「补步进以保持原节奏」那段,只有当调用者问一个**比「最后一次触发 + 一步」更晚**的时刻才会执行;而本仓库两个调用者（`dueTriggers` 与 `statusSnapshot`）**都传 `lastFiredAt ?? 0`**,正是算术的起点,所以 `base + step > after` 恒真、那段在生产路径上**从不执行**。单测能碰到它,只是因为它直接传了 `after = now`——而且那条单测的标题也照抄了同一个错误断言。实测:按调用者的问法答 `+600000ms`,按单测的问法答 `+10800000ms`,差 **170 分钟**相位。对 `dueTriggers` 来说这是**故意**的——改成问 `now` 会让停机期间错过的检查点落到未来而被跳过,正好违背能力 2 的承诺——代价是节奏会**重锚到实际醒来的那一刻**。注释现在写的是这个,不再是那个。面板那侧还有个判断题（`nextCheckAt` 因此可能显示一个过去的时间）**本轮没动**:对 `once` 触发器,显示「它本该响的时刻」也有意义,两种读法都站得住,不在判决未定时改 UI 语义。
+
+### 2.21 一次罕见失败为什么无法诊断:唯一能解释它的东西被丢掉了
+
+全量套件跑出过一次 `verify exit: 1`,两条**真实子进程**测试失败:
+
+```
+✖ four real processes released in the same instant produce exactly one owner (30395ms)
+    Error: timed out waiting for ...round-0-racer-2.json.ready
+✖ two real processes deliver one check-in, because only one holds residency (689ms)
+    Error: child exited 2147483651
+```
+
+而几分钟前、以及之后两遍全量,都是 279/279 全绿——**罕见**（约六遍里一次）,而且**两条消息都等于没说**:`2147483651` 是 `0x80000003`,没有任何原因;超时那条只说某个文件没出现。
+
+三处原因叠在一起,**每一处单独都能成立**:
+
+1. 子进程用 `stdio: 'ignore'`,它的 stderr——唯一解释它为什么死的东西——**被丢掉了**。
+2. `waitFor` 只轮询文件,不看子进程死活;而 `.ready` 是在**自旋之前**写的,所以「`.ready` 没出现」只可能是**进程没起来**,不可能是「它很忙」。
+3. 子进程退出 promise 的拒绝被 `done.catch(() => {})` 吞掉（那行本身是必要的:没人 await 的拒绝会让 runner 当崩溃）,于是**一个快速、信息量大的失败被换成了一个 30 秒的谜**。
+
+修法:`stdio` 改成**重定向到文件**（不是管道——受限沙箱拒绝管道,而 `ignore` 丢弃证据;文件两者都不是）,`waitForReady` 把「任何一个 racer 停下来了」和「等 20ms」一起 race,失败消息带上**子进程自己的话**。
+
+**确定性钉住,不靠运气。** 真正的 flake 需要机器忙;所以 fixture 新增 `--crash`（任意模式,先写 stderr 再 `exit 3`）,让父进程的失败路径**可以被测试**:
+
+| | 修前 | 修后 |
+| --- | --- | --- |
+| `resident-race` 的 `.ready` 等待 | **30036ms** 后「timed out waiting for …」 | **147ms** 后「racer exited 3 — its log: deliberate startup failure…」 |
+| `two-process` 的等文件 | **30037ms** | **150ms** |
+| `two-process` 丢掉日志捕获后 | — | 160ms 就失败在「子进程原话」这条断言上 |
+
+三次移除式证伪各自只让对应的新钉子失败,全部按 sha256 还原。这也顺手回答了上轮那个悬案的另一半:**这一轮没有再复现**,所以不敢说并发缺陷已找到——只能说,它下次出现时会**带着原因出现**,而不是再变成一个 30 秒的谜。
+
 - `dsh-muse`、`dsh-bot` 只作**只读参考**，不 fork、不复制代码进本仓库。
 - 借鉴的是**机制与教训**（授权绑定、keeper 重新武装、TTL、多域隔离），实现代码自己写。
 - 两者均为 MIT；本项目同样 MIT，若未来复制其代码片段须保留原始版权声明。

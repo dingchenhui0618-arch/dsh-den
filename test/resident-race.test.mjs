@@ -19,7 +19,17 @@
  * claim the source already makes.
  */
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -59,29 +69,77 @@ test.after(() => rmSync(sandboxHome, { recursive: true, force: true }))
  *
  * The no-op catch is for the same reason: a promise that rejects before anyone awaits it is an
  * unhandled rejection, and the runner treats that as a crash. The assertion still sees it.
+ *
+ * The child's own output goes to a **file**, not to a pipe and no longer to the void. `stdio:
+ * 'ignore'` was discarding the only evidence there is when a racer dies on the way up, and a piped
+ * stdio is what the confined sandbox refuses; a file redirect is neither.
  */
-function spawnRacer(resultFile, goFile) {
+function spawnRacer(resultFile, goFile, extraEnv = {}) {
+  const logPath = `${resultFile}.log`
+  const logFd = openSync(logPath, 'a')
   const child = spawn(process.execPath, [childScript, 'race', resultFile, `--go=${goFile}`], {
-    env: { ...process.env, DSH_HOME: sandboxHome },
-    stdio: 'ignore',
+    env: { ...process.env, DSH_HOME: sandboxHome, ...extraEnv },
+    stdio: ['ignore', logFd, logFd],
   })
+  closeSync(logFd)
   children.push(child)
 
   const done = new Promise((resolve, reject) => {
-    child.on('exit', (code) => (code === 0 ? resolve(code) : reject(new Error(`racer exited ${code}`))))
+    child.on('exit', (code) =>
+      code === 0 ? resolve(code) : reject(new Error(`racer exited ${code}${tailOf(logPath)}`)),
+    )
     child.on('error', reject)
   })
   done.catch(() => {})
   return { child, done }
 }
 
-async function waitFor(path, timeoutMs = 30_000) {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (existsSync(path)) return
-    await new Promise((resolve) => setTimeout(resolve, 20))
+/** A child's last words, so a failure can say more than "exited 3". */
+function tailOf(logPath) {
+  try {
+    const text = readFileSync(logPath, 'utf8').trim()
+    if (!text) return ' (the racer wrote nothing to its log)'
+    return ` — its log: ${text.split('\n').slice(-4).join(' | ')}`
+  } catch {
+    return ''
   }
-  throw new Error(`timed out waiting for ${path}`)
+}
+
+/**
+ * Wait until every racer has announced readiness — and stop the instant one of them stops.
+ *
+ * Readiness is announced *before* the racer enters its spin, so a `.ready` file that never appears
+ * means the process died on the way up, not that it is busy. Waiting out thirty seconds on a
+ * process that is already gone reports a missing file and hides the exit code that explains it.
+ * A `.ready` file that exists but never becomes readable, or a racer that exits 0 without
+ * announcing, are both failures too — this waits for readiness, not for the clock.
+ */
+async function waitForReady(files, racers, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs
+  const stopped = Promise.race(
+    racers.map((racer, index) =>
+      racer.done.then(
+        () => {
+          throw new Error(`racer ${index} exited cleanly without ever announcing readiness`)
+        },
+        (error) => {
+          throw error
+        },
+      ),
+    ),
+  )
+  stopped.catch(() => {})
+
+  while (files.some((file) => !existsSync(`${file}.ready`))) {
+    await Promise.race([stopped, new Promise((resolve) => setTimeout(resolve, 20))])
+    if (Date.now() > deadline) {
+      const missing = files.filter((file) => !existsSync(`${file}.ready`))
+      throw new Error(
+        `timed out waiting for ${missing.length} of ${files.length} racer(s): ` +
+          `${missing.map((file) => `${file}.ready`).join(', ')}${tailOf(`${missing[0]}.log`)}`,
+      )
+    }
+  }
 }
 
 test('four real processes released in the same instant produce exactly one owner', async () => {
@@ -108,7 +166,7 @@ test('four real processes released in the same instant produce exactly one owner
     // Wait for every racer to be built and idle before releasing them. Starting the round while
     // one is still importing would stagger the attempts and quietly turn this into the
     // sequential test that already exists.
-    for (const resultFile of files) await waitFor(`${resultFile}.ready`)
+    await waitForReady(files, racers)
     writeFileSync(goFile, 'go')
 
     await Promise.all(racers.map((racer) => racer.done))
@@ -185,7 +243,7 @@ test('four real processes reclaiming one expired lease produce exactly one owner
       racers.push(spawnRacer(resultFile, goFile))
     }
 
-    for (const resultFile of files) await waitFor(`${resultFile}.ready`)
+    await waitForReady(files, racers)
     writeFileSync(goFile, 'go')
     await Promise.all(racers.map((racer) => racer.done))
 
@@ -201,4 +259,33 @@ test('four real processes reclaiming one expired lease produce exactly one owner
     const onDisk = JSON.parse(readFileSync(LEASE, 'utf8'))
     assert.equal(onDisk.pid, owners[0].pid, `round ${round}: the lease on disk names the taker`)
   }
+})
+
+test('a racer that dies before announcing readiness is reported at once, with its own words', async () => {
+  // What this pins is a *diagnosis* failure, and it is one that was measured: a full-suite run failed
+  // with "timed out waiting for ...round-0-racer-2.json.ready" after thirty seconds, while the child's
+  // stderr - discarded by `stdio: 'ignore'` - held the reason. A suite whose rare failure says only
+  // "something did not appear" cannot be debugged, and a race test whose failure mode is a mystery
+  // gets deleted rather than fixed.
+  //
+  // Deterministic on purpose. The real flake needs a busy machine and shows up in roughly one full
+  // run in six; this pins the same code path with a racer that dies on demand.
+  const resultFile = join(sandboxHome, 'crash-racer.json')
+  const goFile = join(sandboxHome, 'crash-go')
+  rmSync(resultFile, { force: true })
+  rmSync(`${resultFile}.ready`, { force: true })
+  rmSync(`${resultFile}.log`, { force: true })
+
+  const racer = spawnRacer(resultFile, goFile, { DEN_CHILD_CRASH: '1' })
+  const startedAt = Date.now()
+  const error = await waitForReady([resultFile], [racer]).then(
+    () => null,
+    (rejection) => rejection,
+  )
+  const elapsed = Date.now() - startedAt
+
+  assert.ok(error, 'a racer that died must fail the wait rather than let it run out the clock')
+  assert.match(error.message, /racer exited 3/, 'the exit code must be in the message')
+  assert.match(error.message, /deliberate startup failure/, "and so must the child's own output")
+  assert.ok(elapsed < 10_000, `it must fail on the exit, not on the clock (took ${elapsed}ms)`)
 })

@@ -122,21 +122,104 @@ test('a malformed clock is rejected for daily triggers', () => {
   assert.throws(() => normalizeTrigger(baseTrigger({ kind: 'daily', atTime: '7:5' })), { message: /HH:MM/ })
 })
 
-test('an interval resumes on its original cadence after the host was down', () => {
+test('an interval asked for a moment after the outage lands back on its original grid', () => {
+  // What this does NOT show is that the system keeps its cadence across an outage. It shows the
+  // arithmetic of `nextTriggerAt` when the caller asks for an instant later than one step past the
+  // last fire - and no caller in this repo asks that way: `dueTriggers` and `statusSnapshot` both
+  // pass `lastFiredAt ?? 0`, which is the same value the arithmetic starts from, so the branch below
+  // never runs in the shipped system. That is deliberate for `dueTriggers` (asking "after now" would
+  // push a check-in missed during downtime into the future and skip it), and its cost is that a
+  // wake re-anchors the cadence to when it actually ran.
   const createdAt = Date.UTC(2026, 0, 1, 0, 0, 0)
   const trigger = normalizeTrigger(baseTrigger({ kind: 'interval', everySeconds: 600 }))
   const stored = { ...trigger, createdAt, lastFiredAt: createdAt }
 
-  // Querying at the last fire instant yields the very next step: the instant is
-  // included as a starting point, so the cadence stays on its original grid.
+  // Querying at the last fire instant yields the very next step.
   assert.equal(nextTriggerAt(stored, createdAt), createdAt + 600_000)
 
-  // The host was down for an hour. The next instant stays on the original 600s
-  // grid and is at most one step away — not an hour of backlog to replay.
+  // Asked for a moment after an hour of downtime, the answer stays on the 600s grid and is at most
+  // one step away — not an hour of backlog to replay.
   const afterOutage = createdAt + 3_600_000 + 1
   const next = nextTriggerAt(stored, afterOutage)
   assert.equal((next - createdAt) % 600_000, 0)
   assert.ok(next > afterOutage && next - afterOutage <= 600_000)
+
+  // The same outage asked the way the callers ask: one step past the last fire, phase shifted.
+  assert.equal(nextTriggerAt(stored, stored.lastFiredAt), createdAt + 600_000)
+})
+
+test('a stored trigger missing the fields its schedule needs is reported invalid, not silently dead', () => {
+  // `isValidStored` checked the envelope — id, sessionId, kind, title, prompt, enabled, fireCount —
+  // and none of the fields `nextTriggerAt` reads. A record with no `everySeconds` therefore passed
+  // validation, was listed as a *valid* trigger, and could never be due: a reminder the human relies
+  // on that never fires while everything reports it as healthy.
+  const prefix = `broken-${Date.now()}`
+  const whole = normalizeTrigger(baseTrigger({ kind: 'interval', everySeconds: 600 }))
+  // Spreading over `whole` cannot *remove* a field, only replace it: `{ kind: 'interval' }` leaves
+  // the everySeconds that `whole` already had, so the fixture would quietly keep the field the test
+  // is about. Every removal below is written as an explicit `undefined`, which JSON drops on write.
+  const broken = [
+    ['interval with no everySeconds', { kind: 'interval', everySeconds: undefined }],
+    ['daily with no atTime', { kind: 'daily', atTime: undefined }],
+    ['weekly with no weekday', { kind: 'weekly', atTime: 540, weekday: undefined }],
+    ['once with no at', { kind: 'once', at: undefined }],
+    ['interval below the floor', { kind: 'interval', everySeconds: 5 }],
+    ['daily with an out-of-range atTime', { kind: 'daily', atTime: 1440 }],
+    ['no createdAt', { kind: 'interval', everySeconds: 600, createdAt: undefined }],
+  ]
+  const brokenIds = []
+  broken.forEach(([, shape], index) => {
+    const id = `${prefix}-${index}`
+    brokenIds.push(id)
+    saveTrigger({ ...whole, ...shape, id })
+  })
+
+  // A wholly valid trigger in the same store, so "reject everything" cannot pass this test.
+  const healthyId = `${prefix}-ok`
+  saveTrigger({ ...whole, id: healthyId })
+
+  const listed = listTriggers()
+  const invalidNames = listed.invalid.map((path) => String(path).split(/[\\/]/).pop())
+  for (const id of brokenIds) {
+    assert.ok(invalidNames.includes(`${id}.json`), `${id} must be reported invalid, not silently dead`)
+  }
+  assert.ok(
+    listed.valid.some((trigger) => trigger.id === healthyId),
+    'the healthy trigger in the same store must stay valid',
+  )
+  assert.equal(
+    listed.valid.filter((trigger) => brokenIds.includes(trigger.id)).length,
+    0,
+    'no unschedulable trigger may be reported as valid',
+  )
+
+  const far = Date.now() + 90 * 24 * 3600 * 1000
+  const dueIds = dueTriggers(far).map((entry) => entry.trigger.id)
+  assert.ok(dueIds.includes(healthyId), 'the healthy trigger is due ninety days out')
+  for (const id of brokenIds) assert.ok(!dueIds.includes(id), `${id} must never be due`)
+})
+
+test('a well-formed stored trigger of every kind stays valid and schedulable', () => {
+  // The control for the test above: a validator that rejected everything would satisfy it.
+  const prefix = `shape-${Date.now()}`
+  const shapes = [
+    baseTrigger({ kind: 'once', at: Date.now() + 3_600_000 }),
+    baseTrigger({ kind: 'interval', everySeconds: MIN_INTERVAL_SECONDS }),
+    baseTrigger({ kind: 'daily', atTime: '09:30' }),
+    baseTrigger({ kind: 'weekly', atTime: '09:30', weekday: 3 }),
+  ]
+  const ids = shapes.map((shape, index) => {
+    const id = `${prefix}-${index}`
+    saveTrigger({ ...normalizeTrigger(shape), id })
+    return id
+  })
+
+  const { valid } = listTriggers()
+  for (const id of ids) {
+    const stored = valid.find((trigger) => trigger.id === id)
+    assert.ok(stored, `${id} must stay valid`)
+    assert.notEqual(nextTriggerAt(stored, Date.now()), undefined, `${id} must be schedulable`)
+  }
 })
 
 test('a one-shot trigger in the past is spent', () => {

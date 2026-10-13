@@ -10,11 +10,12 @@
  * test runs two of them over one `DSH_HOME`, which is two profiles sharing one state tree — the
  * accident `~/.dsh/den` being keyed on `DSH_HOME` makes possible.
  *
- * Children are spawned with `stdio: 'ignore'` and report to a file, so nothing here depends on
- * capturing a child's output.
+ * Children report to a file rather than to a pipe, so nothing here depends on capturing a child's
+ * output. They also *log* to a file, which is the same trick for the other direction: when a child
+ * dies on the way up, the exit code alone says nothing and the reason was being discarded.
  */
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -73,10 +74,17 @@ function alive(pid) {
 }
 
 function spawnChild(mode, resultFile, flags = []) {
+  // The child's own words go to a file, not to a pipe and no longer to the void: a piped stdio is
+  // what the confined sandbox refuses, and `stdio: 'ignore'` threw away the explanation for exactly
+  // the failure this fixture is prone to. Measured once as `child exited 2147483651` and nothing else.
+  const logPath = `${resultFile}.log`
+  const logFd = openSync(logPath, 'a')
   const child = spawn(process.execPath, [childScript, mode, resultFile, ...flags], {
     env: { ...process.env, DSH_HOME: sandboxHome, DEN_CHILD_SESSION: SESSION_ID },
-    stdio: 'ignore',
+    stdio: ['ignore', logFd, logFd],
   })
+  closeSync(logFd)
+  child.logPath = logPath
   children.push(child)
   // The listener goes on now, not when a test gets around to waiting. `exit` is emitted once, and
   // a listener attached after that never fires — so a test that asks late would hang instead of
@@ -92,26 +100,90 @@ function spawnChild(mode, resultFile, flags = []) {
   return child
 }
 
+/** A child's last words, so a failure can say more than "exited 2147483651". */
+function tailOf(logPath) {
+  try {
+    const text = readFileSync(logPath, 'utf8').trim()
+    if (!text) return ' (the child wrote nothing to its log)'
+    return ` — its log: ${text.split('\n').slice(-4).join(' | ')}`
+  } catch {
+    return ''
+  }
+}
+
 const exited = (child) =>
-  child.exit.then(({ code }) => {
-    if (code !== 0) throw new Error(`child exited ${code}`)
+  child.exit.then(({ code, signal }) => {
+    if (code !== 0) throw new Error(`child exited ${code ?? signal}${tailOf(child.logPath)}`)
     return code
   })
 
 /** Wait for a child that was killed rather than one that finished, so any exit code is fine. */
 const stopped = (child) => child.exit.then(() => undefined)
 
-async function waitForFile(path, timeoutMs = 30_000) {
+/**
+ * Wait for a file a child will write — and stop the instant that child stops.
+ *
+ * A child that died on the way up never writes its file, so polling to the deadline reports a missing
+ * path and hides the exit code and output that explain it. That is not hypothetical: a full-suite run
+ * failed with `timed out waiting for ...round-0-racer-2.json.ready` after thirty seconds while the
+ * child's stderr held the reason. The race test pins this contract deterministically; this is the
+ * same wait, so a failure here carries the same information.
+ */
+async function waitForChildFile(child, path, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (existsSync(path)) return
-    await new Promise((resolve) => setTimeout(resolve, 25))
+  const stoppedEarly = child.exit.then(
+    ({ code, signal }) => {
+      throw new Error(`child exited ${code ?? signal} before writing ${path}${tailOf(child.logPath)}`)
+    },
+    (error) => {
+      throw error
+    },
+  )
+  stoppedEarly.catch(() => {})
+  while (!existsSync(path)) {
+    await Promise.race([stoppedEarly, new Promise((resolve) => setTimeout(resolve, 25))])
+    if (Date.now() > deadline) {
+      throw new Error(`timed out waiting for ${path}${tailOf(child.logPath)}`)
+    }
   }
-  throw new Error(`timed out waiting for ${path}`)
 }
 
 const at = (dir, name) => join(dir, name)
 const readResult = (path) => JSON.parse(readFileSync(path, 'utf8'))
+
+test('a child that dies on the way up is reported with its exit code and its own output', async () => {
+  // The other half of this fixture's honesty. These tests need real processes, so a real process can
+  // fail to start - and `child exited 2147483651` on its own is not a diagnosis. Measured once in a
+  // full-suite run, with the child's stderr discarded, and nothing anywhere said why.
+  const file = at(sandboxHome, 'crash-report.json')
+  const child = spawnChild('report', file, ['--crash'])
+  const error = await exited(child).then(
+    () => null,
+    (rejection) => rejection,
+  )
+  assert.ok(error, 'a dead child must reject')
+  assert.match(error.message, /child exited 3/, 'the exit code must be in the message')
+  assert.match(error.message, /deliberate startup failure/, "and so must the child's own output")
+  assert.equal(existsSync(file), false, 'and it really did die before writing anything')
+})
+
+test('waiting on a file a dead child will never write fails on the exit, not on the clock', async () => {
+  // The same defect from the other side: this wait used to poll for thirty seconds and then report a
+  // missing path, which is the least useful thing it could say.
+  const file = at(sandboxHome, 'crash-hold.json')
+  const child = spawnChild('hold', file, ['--crash'])
+  const startedAt = Date.now()
+  const error = await waitForChildFile(child, file).then(
+    () => null,
+    (rejection) => rejection,
+  )
+  const elapsed = Date.now() - startedAt
+
+  assert.ok(error, 'a dead child must fail the wait')
+  assert.match(error.message, /child exited 3/, 'the exit code must be in the message')
+  assert.match(error.message, /deliberate startup failure/, "and so must the child's own output")
+  assert.ok(elapsed < 10_000, `it must fail on the exit, not on the clock (took ${elapsed}ms)`)
+})
 
 test('a second real process takes residency once the first one has exited', async () => {
   const firstFile = at(sandboxHome, 'first.json')
@@ -137,7 +209,7 @@ test('a second real process takes residency once the first one has exited', asyn
 test('a real process stands down while another real process holds residency', async () => {
   const holderFile = at(sandboxHome, 'holder.json')
   const holder = spawnChild('hold', holderFile)
-  await waitForFile(holderFile)
+  await waitForChildFile(holder, holderFile)
   const holderReport = readResult(holderFile)
   assert.equal(holderReport.residency.held, true)
   assert.equal(alive(holderReport.pid), true, 'the holder has to still exist for this to mean anything')
@@ -160,7 +232,7 @@ test('two real processes deliver one check-in, because only one holds residency'
   // with two operating-system processes instead of two objects, and with the lease in place.
   const firstFile = at(sandboxHome, 'parked.json')
   const first = spawnChild('tick', firstFile, ['--setup', '--park'])
-  await waitForFile(`${firstFile}.parked`)
+  await waitForChildFile(first, `${firstFile}.parked`)
   // The holder's result is not written yet — it is parked inside the delivery, which is the
   // point — so the pid comes from the marker it dropped on the way in.
   const parkedPid = Number(readFileSync(`${firstFile}.parked`, 'utf8'))
@@ -197,7 +269,7 @@ test('a killed process leaves residency behind and the next one recovers it with
   // take it over on its own, and then actually deliver.
   const holderFile = at(sandboxHome, 'killed.json')
   const holder = spawnChild('hold', holderFile)
-  await waitForFile(holderFile)
+  await waitForChildFile(holder, holderFile)
   const holderPid = readResult(holderFile).pid
   assert.equal(alive(holderPid), true, 'the holder was alive when it claimed residency')
   await pastTakeoverGrace()
