@@ -1156,6 +1156,49 @@ README 开头写着「Verified against the *running* system」,但**没有说那
 
 之后 kernel 的下一次 tick 会引入一次被准入的唤醒，ledger 的 `turns`/`spoken` 从 0 变成 1 —— **那才是能力 1 的正向半边**，也是整个目标里唯一还没有被观测过的事件。
 
+### 2.29 有意为之的 fail-closed，在 profile 的默认预设下把插件自己的三样能力一起关掉了
+
+**实测（2026-10-13，宿主 `09:50:07.589Z` 那个实例）**：
+
+```
+gate-audit.json:
+  { tool: 'den_remember',     rule: 'unknown-tool', risk: 1, decision: 'ask' }
+  { tool: 'den_set_autonomy', rule: 'unknown-tool', risk: 1, decision: 'ask' }
+
+调用结果：
+  den_remember    -> Error: the user rejected tool "den_remember"
+  den_set_autonomy -> Error: the user rejected tool "den_set_autonomy"
+```
+
+**这不是新缺陷，而是有意为之的设计。** `src/gate.js` 里写得很清楚：
+
+> Only tools that cannot change anything outside the conversation belong here. Everything with a durable or outbound effect stays on the default `ask`: `den_remember`/`den_forget`/`den_schedule_check`/`den_schedule_delete`/`den_configure` write state, and `den_set_autonomy` is a privilege change.
+
+理由在通常情况下是对的：有持久效果的动作，值得让人看一眼。
+
+**但审视的前提是「有人能看」。** 这个 profile 的 `defaultPreset` 是 `danger-full-access`，而 DSH 的预设把 `approval` 绑成 `never`（见 §2.28）。在 `never` 下，`ask` 的确定后果**不是**「稍后有人决定」，而是「永不发生」——并被渲染成 `user rejected`。于是：
+
+| 能力 | 依赖的 den 工具 | 在默认配置下 |
+|---|---|---|
+| 5 按场景隔离的长期记忆 | `den_remember` / `den_forget` | **不可达**（连记住一件事都做不到） |
+| 3 带保质期的通知 + 自检 | `den_schedule_check` / `den_schedule_delete` | **不可达** |
+| 1 人类授权绑定的持久自治 | `den_set_autonomy` | **不可达**（演练的最后一跳就卡在这） |
+
+一个只有只读那一半能用的常驻助理，不是「更安全的版本」，是**坏的版本**。而同一份 `gate.js` 里已经把这条原则写下来过，并且**两次**照着它改过：文件三件套（`read`/`write`/`edit`）和 den 的只读面，都是因为
+
+> being unusable is its own security failure: it is exactly the pressure that makes a human switch the gate off wholesale instead of reviewing it.
+
+——原文还写着那句自我诊断：*the gate was treating its own tools as unknown foreign capabilities*。**`den_remember` 是同一个错误的下一批：它仍然是「自己的工具被当成不认识的工具」。**
+
+**顺带记一条措辞强于测量的地方。** `check:tools` 打印 `VERDICT: PROVEN for den_explain_gate, den_remember, den_schedule_check, den_set_autonomy, den_status`，判据是「返回了结果且不是 unknown-tool 错误，这只可能是工具已被注册」。这句话本身为真，但**一次「用户拒绝」也满足它**——读者会把 PROVEN 读成「这些工具能用」。工具该报的是它测到的东西（被注册、被调用过），而不是它测不到的东西（调用成功）。
+
+**两条出路（尚未决定，需要人拍板，因为它改变的是「什么时候会弹审批」）**：
+
+- **A：把 den 自己的持久工具由 den 自己放行**，逐条写明理由；**出站闸门一个字不动**。安全性来自每个工具自带的人类绑定：`den_set_autonomy` 要求面板令牌 + 人类消息里出现该令牌（对着不可变的会话日志校验）；`den_schedule_check` 只存触发器，而触发器在没有人授予自治前**无法行动**；`den_remember`/`den_forget` 只碰场景隔离的本地库，且面板可读。shell / 网络 / 密钥那条 fail-closed **保持原样**，那才是能力 4 的射程。
+- **B：保持 fail-closed**，改为要求这个部署必须存在审批路径（把会话或 `defaultPreset` 换成带 `approval: ask` 的预设）。代价：之后每一次写入/出站都会弹审批——同一个文件把它称作 *approval fatigue*，并且明确说那是安全失败。
+
+**建议 A**，因为 A 把闸门收回它自己声明的射程（出站与凭据），而 B 让一个「值得看一眼」的设计在没人能看的配置下变成静默失效。
+
 - `dsh-muse`、`dsh-bot` 只作**只读参考**，不 fork、不复制代码进本仓库。
 - 借鉴的是**机制与教训**（授权绑定、keeper 重新武装、TTL、多域隔离），实现代码自己写。
 - 两者均为 MIT；本项目同样 MIT，若未来复制其代码片段须保留原始版权声明。
