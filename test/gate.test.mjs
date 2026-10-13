@@ -12,6 +12,9 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 const { DEFAULT_RISK, RISK, classifyCall, decide, flattenArgs, installGate } = await import('../src/gate.js')
+// The credential-shaped path is assembled from parts in exactly one place, so that no test
+// file has to carry a literal the repository's own pre-push scan would then have to excuse.
+const { secretShapedPath } = await import('./support/fixtures.mjs')
 
 const call = (name, args) => ({ name, arguments: args })
 
@@ -249,14 +252,39 @@ test('the secret rule still outranks the file-tool allowlist', () => {
     assert.equal(decide(result).kind, 'deny')
   }
 })
-test('state-changing and privilege-changing den tools still ask', () => {
-  // The safety half of the same rule: silent read-only tools must not become a
-  // blanket exemption for the ones that write durable state or change authority.
+test("the den's own tools are recognised, and each one says what bounds it", () => {
+  // This replaces a test that asserted the opposite — "state-changing and privilege-changing
+  // den tools still ask". That assertion was true, and it was also the defect: the profile's
+  // `defaultPreset: danger-full-access` implies `approval: never`, so `ask` did not mean "a
+  // human will decide later", it meant these tools never ran at all — and the result came back
+  // as `user rejected` when nobody had rejected anything (DESIGN §2.29).
+  //
+  // What the old test wanted to protect is real, and it is asserted where it actually lives:
+  // inside the tools (`test/mount.test.mjs` — the assistant cannot grant itself autonomy), and
+  // structurally in `test/gate-coverage.test.mjs`, which fails if the entry for the authority
+  // tool stops naming the human act.
   for (const name of ['den_remember', 'den_forget', 'den_schedule_check', 'den_schedule_delete', 'den_configure', 'den_set_autonomy']) {
     const result = classifyCall(call(name, {}))
-    assert.equal(result.risk, RISK.ask, `${name} must still be reviewed`)
-    assert.equal(decide(result).kind, 'ask')
+    assert.equal(result.risk, RISK.allow, `${name} is the den's own tool, not a foreign capability`)
+    assert.equal(result.rule, `owned:${name}`, 'the audit line must name the tool, not a bare allow')
+    assert.ok(result.reason.length > 30, `${name} needs a reason a reader can check, not a label`)
+    assert.equal(decide(result).kind, 'allow')
   }
+})
+
+test('allowing the den its own tools widened nothing above the table', () => {
+  // The control for the change above. If any of these three ever soften, the allow list has
+  // started swallowing the rules the gate exists for.
+  const unknown = classifyCall(call('some_tool_this_profile_has_never_seen', {}))
+  assert.equal(unknown.risk, RISK.ask, 'an unrecognised capability still fails closed')
+  assert.equal(unknown.rule, 'unknown-tool')
+
+  const outbound = classifyCall(call('pwsh', { command: 'git push origin master' }))
+  assert.equal(outbound.risk, RISK.ask, 'the shell rules still run for shells')
+  assert.match(outbound.rule, /^outbound:/)
+
+  const leak = classifyCall(call('den_remember', { text: `store this: ${secretShapedPath()}` }))
+  assert.equal(leak.risk, RISK.deny, 'an owned tool is not a way around the credential rule')
 })
 
 // ------------------------------------------------------- argument flattening

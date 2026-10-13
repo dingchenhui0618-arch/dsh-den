@@ -257,24 +257,26 @@ const TOOL_RISK = {
   write: RISK.allow,
   edit: RISK.allow,
 
-  // The den's own read-only surface.
+  // The den's own tools are not in this table at all: they are declared in
+  // `OWNED_TOOLS`, one reason each, because "allowed" and "read-only" stopped being
+  // the same claim. The read-only ones were listed here first, and the reason they
+  // were listed is the reason the rest followed —
   //
-  // These were previously falling through to `defaultRisk: ask`, which produced a
-  // real defect rather than a harmless extra prompt: an assistant whose *every*
-  // attempt to look at its own status raises an approval dialog trains the human
-  // to click approve without reading. Approval fatigue is a security failure, and
-  // it was self-inflicted — the gate was treating its own tools as unknown
-  // foreign capabilities.
+  //   an assistant whose *every* attempt to look at its own status raises an approval
+  //   dialog trains the human to click approve without reading. Approval fatigue is a
+  //   security failure, and it was self-inflicted — the gate was treating its own
+  //   tools as unknown foreign capabilities.
   //
-  // Only tools that cannot change anything outside the conversation belong here.
-  // Everything with a durable or outbound effect stays on the default `ask`:
-  // `den_remember`/`den_forget`/`den_schedule_check`/`den_schedule_delete`/
-  // `den_configure` write state, and `den_set_autonomy` is a privilege change.
-  den_status: RISK.allow,
-  den_explain_gate: RISK.allow,
-  den_scenarios: RISK.allow,
-  den_recall: RISK.allow,
-  den_schedule_list: RISK.allow,
+  // Measured on 2026-10-13, that treatment applied to the den's *durable* tools meant
+  // they never happened at all. The profile's `defaultPreset: danger-full-access`
+  // implies `approval: never` (DESIGN §2.28), so `ask` is not "a human will decide
+  // later" but "this never runs", and it is rendered as a refusal by nobody:
+  //
+  //   den_remember     -> Error: the user rejected tool "den_remember"
+  //   den_set_autonomy -> Error: the user rejected tool "den_set_autonomy"
+  //
+  // The plugin's memory, its self-checks and its authority were all unreachable on
+  // the configuration it ships to. See DESIGN §2.29.
 
   // The rest of this profile's tool surface, classified by the same rule the block
   // above states: reading and local bookkeeping are allowed, and anything with a
@@ -330,6 +332,51 @@ const TOOL_RISK = {
 
 /** The fallback for a tool this gate has never seen. */
 export const DEFAULT_RISK = RISK.ask
+
+/**
+ * The tools this plugin owns, and what bounds each one.
+ *
+ * A gate that exists to watch *outbound* effects has no business asking a human to approve
+ * the assistant remembering a fact — but that is not why these are here. The reason is that
+ * they were being treated as unrecognised: `den_remember` reached the fail-closed default,
+ * which under `approval: never` is not a prompt but a silent, permanent refusal that names
+ * a rejecting human who never existed. An assistant that cannot remember, cannot schedule,
+ * and cannot be authorized is not a safer assistant; it is a broken one, and being unusable
+ * is the pressure that gets a gate switched off wholesale rather than reviewed.
+ *
+ * What makes each entry safe is not that den wrote it. It is that the effect is bounded
+ * inside the tool, and the bound is stated here so a reader can check it rather than trust
+ * the name:
+ *
+ *   - the authority tool refuses unless the panel minted a request *and* a human message
+ *     quotes its token, verified against the immutable session log (`setGrant`), so this
+ *     entry grants the model nothing it could not already do alone;
+ *   - a stored self-check cannot act until a human has granted standing autonomy, so
+ *     scheduling is not doing;
+ *   - memory is scenario-scoped and local, readable back through the panel;
+ *   - pacing changes the den's own cadence and nothing else.
+ *
+ * The rules above this table still run first and do not care about the tool's name: a
+ * credential-shaped path or a secret-shaped value inside a den tool's arguments is still
+ * denied, and the shell and network rules are untouched. `test/gate-coverage.test.mjs`
+ * asserts that, and asserts this map covers every tool the plugin registers, so a new tool
+ * cannot join the surface by falling through.
+ */
+export const OWNED_TOOLS = {
+  den_status: "reports the den's own state and changes nothing",
+  den_explain_gate: 'reports what the gate would decide and changes nothing',
+  den_scenarios: "lists the den's own memory scenarios and changes nothing",
+  den_recall: "reads the den's own scenario-scoped memory and changes nothing",
+  den_schedule_list: "lists the den's own self-checks and changes nothing",
+  den_schedule_delete: 'removes one self-check, which can only reduce what the den would do',
+  den_remember: "writes one entry into the den's own scenario-scoped memory, which the panel reads back",
+  den_forget: 'deletes one entry the den itself stored, in one scenario',
+  den_schedule_check:
+    'stores a self-check that cannot act until a human grants standing autonomy, so scheduling is not doing',
+  den_configure: "changes the den's own pacing — daily budget, quiet hours, cadence — and nothing else",
+  den_set_autonomy:
+    'changes authority, and refuses unless the panel minted a request and a human message quotes its token',
+}
 
 /**
  * Classify one tool call.
@@ -388,6 +435,10 @@ export function classifyCall(exec) {
         }
       }
     }
+  }
+
+  if (Object.hasOwn(OWNED_TOOLS, name)) {
+    return { risk: RISK.allow, rule: `owned:${name}`, reason: OWNED_TOOLS[name] }
   }
 
   if (Object.hasOwn(TOOL_RISK, name)) {

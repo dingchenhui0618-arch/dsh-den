@@ -20,7 +20,10 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 const root = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
-const { classifyCall, flattenArgs, RISK } = await import('../src/gate.js')
+const { classifyCall, flattenArgs, OWNED_TOOLS, RISK } = await import('../src/gate.js')
+// The registered tool names, so the owned table can be compared against the real surface
+// rather than against a list someone has to remember to update.
+const { registerTools } = await import('../src/index.js')
 // The credential-shaped path is shared with `gate-installed.test.mjs` so the name is
 // assembled from parts in exactly one place. See `support/fixtures.mjs`.
 const { secretShapedPath } = await import('./support/fixtures.mjs')
@@ -90,8 +93,16 @@ const HOST_TOOLS = [
 
 /**
  * Tools deliberately left on the fail-closed default. Every entry is a recorded
- * decision: these either change the den's own state, change a permission, or reach
- * outside the machine.
+ * decision: these either reach outside the machine or are another plugin's surface.
+ *
+ * The den's own tools are no longer here. They used to be, on the reasoning that a
+ * durable write deserves a human look. That reasoning holds only where a human can be
+ * asked: this profile's `defaultPreset: danger-full-access` implies `approval: never`,
+ * and under `never` the default is not a question but a permanent refusal rendered as
+ * `user rejected` (DESIGN §2.29). They are now in `OWNED_TOOLS`, each with a stated
+ * bound, and the tests below keep the two properties that made the old entry look safe:
+ * the authority tool still refuses without a human act, and nothing above the table
+ * became permissive.
  *
  * Note what is NOT here: `pwsh`, `workflow` and `ship_receipt`. They can run
  * commands, but the deny and ask rules above them are pattern-based rather than
@@ -99,15 +110,7 @@ const HOST_TOOLS = [
  * carries it. Blocking the tool instead would only push the work through a
  * different one while making the gate unusable.
  */
-const DELIBERATELY_ASK = new Set([
-  'den_set_autonomy',
-  'den_configure',
-  'den_schedule_check',
-  'den_schedule_delete',
-  'den_remember',
-  'den_forget',
-  'web_fetch',
-])
+const DELIBERATELY_ASK = new Set(['web_fetch'])
 
 /** The execution shape `classifyCall` consumes, and the decision its risk implies. */
 function classify(name, args = {}) {
@@ -197,11 +200,39 @@ test('the value rule is scoped to network payloads, so it never fires on the sca
   assert.equal(documenting.decision, 'allow', 'and documenting a rule is not performing it')
 })
 
-test('changing the den\'s own authority is never a plain allow', () => {
-  // The whole design rests on this: the assistant cannot grant itself standing
-  // autonomy, and a timer or a subagent cannot either.
-  for (const name of ['den_set_autonomy', 'den_configure', 'den_schedule_check', 'den_schedule_delete']) {
-    assert.notEqual(riskOf(name).risk, RISK.allow, `${name} must not be silently allowed`)
+test("allowing the den's authority tool is safe because the check is inside it", () => {
+  // The design rests on the assistant never granting itself standing autonomy, and a timer or
+  // a subagent never doing it either. That property is not enforced by this table — it is
+  // enforced by `setGrant`, which refuses unless the panel minted a request *and* a human
+  // message quotes its token, checked against the immutable session log
+  // (`test/mount.test.mjs` asserts it end to end). This test keeps the link from rotting into
+  // an unexplained allow: the entry has to still say, in its own reason, what the human act is.
+  const classification = riskOf('den_set_autonomy')
+  assert.equal(classification.risk, RISK.allow)
+  assert.equal(classification.rule, 'owned:den_set_autonomy')
+  assert.match(OWNED_TOOLS.den_set_autonomy, /human message/)
+  assert.match(OWNED_TOOLS.den_set_autonomy, /token/)
+})
+
+test("every tool the plugin registers has a stated bound in the owned table", () => {
+  // A new den tool must not join the surface by falling through to the fail-closed default,
+  // which on this profile means never running. Nothing here reads the gate's opinion of the
+  // tool — it compares the two lists, so adding a tool to `registerTools` without a bound
+  // fails here rather than in production.
+  const registered = []
+  registerTools({ register: (definition) => registered.push(definition.name) }, {})
+  assert.deepEqual(
+    registered.filter((name) => !Object.hasOwn(OWNED_TOOLS, name)).sort(),
+    [],
+    'these registered den tools have no entry in OWNED_TOOLS',
+  )
+  assert.deepEqual(
+    Object.keys(OWNED_TOOLS).filter((name) => !registered.includes(name)).sort(),
+    [],
+    'and the owned table names nothing the plugin does not register',
+  )
+  for (const [name, reason] of Object.entries(OWNED_TOOLS)) {
+    assert.ok(reason.length > 30, `${name} needs a reason, not a label`)
   }
 })
 
@@ -221,15 +252,18 @@ test('the gate never returns a decision the host layer cannot act on', () => {
   }
 })
 
-test('every allowed tool is declared as an allow literal in the gate source', () => {
-  // A cheap guard against this audit drifting away from the table it audits.
+test('every allowed tool is declared as a literal in the gate source', () => {
+  // A cheap guard against this audit drifting away from the table it audits — and, more to the
+  // point, against an allow being *computed* rather than written down. Two shapes count now:
+  // a `name: RISK.allow` line in the tool table, or a named entry with a written reason in
+  // `OWNED_TOOLS`. Both are greppable, which is what makes the gate reviewable by reading it.
   const source = readFileSync(join(root, 'src', 'gate.js'), 'utf8')
   const allowed = HOST_TOOLS.filter((name) => riskOf(name).risk === RISK.allow)
   assert.ok(allowed.length > 10, 'the allowlist should be more than a handful of tools')
   for (const name of allowed) {
     assert.ok(
-      new RegExp(`\\b${name}:\\s*RISK\\.allow`).test(source),
-      `${name} is allowed but is not declared as an allow literal in gate.js`,
+      new RegExp('\\b' + name + ':\\s*(?:RISK\\.allow|[\'"])').test(source),
+      `${name} is allowed but has no literal entry in gate.js — an allow must be written out, never computed`,
     )
   }
 })
