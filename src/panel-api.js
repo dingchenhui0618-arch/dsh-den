@@ -105,6 +105,17 @@ export function statusSnapshot(service, { sessionId, nextTriggerAt } = {}) {
        * reached it", which is the distinction that cost two rounds here.
        */
       browserReachable: status.statusRoute?.firstReachedAt ?? null,
+      /**
+       * The most recent request in full, and how many have arrived.
+       *
+       * `browserReachable` cannot tell a probe from a panel: both are one timestamp.
+       * The panel polls every fifteen seconds, so a count that keeps climbing plus a
+       * browser user-agent is the difference between "reachable" and "in use". The
+       * header is reported as sent rather than as a verdict, because the verdict is the
+       * reader's to reach.
+       */
+      lastRequest: status.statusRoute?.lastRequest ?? null,
+      requestCount: status.statusRoute?.requestCount ?? 0,
       note:
         status.statusRoute?.firstReachedAt != null
           ? 'a request has reached this route'

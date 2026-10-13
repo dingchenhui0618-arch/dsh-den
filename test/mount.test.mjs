@@ -45,6 +45,33 @@ test('activation mounts the gate before anything else can run', () => {
   assert.equal(state.guards.length, 1, 'exactly one monotonic guard must be mounted')
 })
 
+test('the route counts every caller and keeps the newest one, while first contact stays put', () => {
+  // The whole reason the counter exists: `firstReachedAt` is one timestamp, and a deployment
+  // probe and a panel polling every fifteen seconds produce the same one. A count that keeps
+  // climbing says someone is still asking; the user-agent says who. Collapsing the first
+  // arrival into the latest would destroy the only field that distinguishes the two.
+  const { ctx, state } = fakeHost()
+  const dispose = apply(ctx)
+  const service = state.provided.get('den')
+
+  assert.equal(service.status().statusRoute.requestCount, 0, 'a mount is not traffic')
+
+  service.markRouteReached({ method: 'GET', userAgent: 'curl/8.9.1' })
+  const first = service.status().statusRoute.firstReachedAt
+  assert.ok(Number.isFinite(first), 'the first request stamps the first contact')
+
+  service.markRouteReached({ method: 'GET', userAgent: 'Mozilla/5.0 (Windows NT 10.0) Chrome/141' })
+  const route = service.status().statusRoute
+
+  assert.equal(route.requestCount, 2, 'the count is requests seen, not requests that mattered')
+  assert.equal(route.firstReachedAt, first, 'first contact must not move')
+  assert.equal(route.lastRequest.userAgent, 'Mozilla/5.0 (Windows NT 10.0) Chrome/141', 'the newest caller is the one kept')
+  assert.equal(route.lastRequest.method, 'GET')
+  assert.ok(Number.isFinite(route.lastRequest.at), 'and it is stamped when it arrived')
+
+  dispose()
+})
+
 test('activation mounts the status route when the desktop web server is present', () => {
   const { ctx, state } = fakeHost()
   const dispose = apply(ctx)
@@ -61,6 +88,10 @@ test('activation mounts the status route when the desktop web server is present'
     // recorded only when a request arrives, so it must be null here — a mount must
     // never be allowed to imply a reach.
     firstReachedAt: null,
+    // Nothing has arrived, so there is no last request and the counter is zero. Both are
+    // recorded by the request, never by the mount.
+    lastRequest: null,
+    requestCount: 0,
   })
   dispose()
   assert.equal(state.routes.length, 0)

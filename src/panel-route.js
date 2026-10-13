@@ -109,9 +109,33 @@ function writeJson(res, status, body) {
   return new Response(text, { status, headers: { 'content-type': 'application/json; charset=utf-8' } })
 }
 
+/**
+ * What a request says about itself, kept verbatim and bounded.
+ *
+ * Verbatim, because a label would be this plugin's opinion about who called, and the
+ * whole point of keeping this is to let a reader decide for themselves. Bounded, because
+ * a client may send an arbitrarily long header and this value is stored in the status
+ * snapshot and read by a model.
+ *
+ * @returns {{method: string|null, userAgent: string|null, origin: string|null,
+ *   referer: string|null}}
+ */
+export function observationOf(req, { maxHeader = 200 } = {}) {
+  const headers = req?.headers && typeof req.headers === 'object' ? req.headers : {}
+  const clip = (value) => {
+    if (typeof value !== 'string' || value === '') return null
+    return value.length > maxHeader ? `${value.slice(0, maxHeader)}…` : value
+  }
+  return {
+    method: String(req?.method || '').toUpperCase() || null,
+    userAgent: clip(headers['user-agent']),
+    origin: clip(headers.origin),
+    referer: clip(headers.referer),
+  }
+}
+
 /** Run one action, turning a thrown error into an in-band refusal. */
-async function runAction(service, action, payload, options) {
-  // `invokeAction` guards most branches, but `status` is a straight pass-through to
+async function runAction(service, action, payload, options) {  // `invokeAction` guards most branches, but `status` is a straight pass-through to
   // `service.status()`. A throwing service must still read as a refusal the panel can
   // render, not as an HTTP 500 the panel cannot distinguish from a dead route.
   try {
@@ -157,13 +181,20 @@ export function mountPanelRoute(ctx, { service, nextTriggerAt, route = ROUTE } =
       path: route,
       handler: async function (req, res) {
         try {
-          // Record first contact. `statusRoute.mounted` is the host describing
-          // itself; this is the only signal that something actually reached the
-          // route, and it is what lets the panel stop treating reachability as an
-          // assumption. A previous transport here reported `mounted: true` while
-          // answering 401 to every request, so the distinction is not academic.
+          // Record contact. `statusRoute.mounted` is the host describing itself; this is
+          // the only signal that something actually reached the route. A previous
+          // transport here reported `mounted: true` while answering 401 to every request,
+          // so the distinction is not academic.
+          //
+          // What is handed over is what the request said about itself, verbatim. The
+          // earlier version recorded only the first arrival, which cannot tell a
+          // deployment probe from the panel: "some request reached this route once" and
+          // "the panel is polling it every fifteen seconds" are different claims, and
+          // only the second one says the UI works. Classifying the caller is left to
+          // whoever reads this, because a bare user-agent is evidence while a label is
+          // this plugin's opinion about who called.
           try {
-            service?.markRouteReached?.()
+            service?.markRouteReached?.(observationOf(req))
           } catch {
             /* observability must never fail the request it is observing */
           }

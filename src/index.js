@@ -1178,17 +1178,32 @@ export function apply(ctx) {
        * yet reached" without borrowing credit from the mount.
        */
       firstReachedAt: null,
+      /**
+       * The most recent request, as it described itself, plus how many have arrived.
+       *
+       * `firstReachedAt` answers "did anything ever reach this route". This answers the
+       * question that actually matters for the panel — *is a browser talking to it now* —
+       * by keeping the user-agent instead of a verdict about it. A deployment probe and a
+       * panel that polls every fifteen seconds both bump the counter; only the header
+       * tells them apart, so the header is what is kept.
+       */
+      lastRequest: null,
+      requestCount: 0,
     }
     /**
-     * Called by the route handler on the first request it serves.
+     * Called by the route handler on every request it serves.
      *
-     * This is the only place browser reachability is recorded, and it is recorded by
-     * the request rather than inferred by the plugin.
+     * Browser reachability is recorded here and nowhere else: by the request, never
+     * inferred by the plugin.
      */
-    service.markRouteReached = () => {
-      if (service.statusRoute && service.statusRoute.firstReachedAt == null) {
-        service.statusRoute.firstReachedAt = Date.now()
+    service.markRouteReached = (observation) => {
+      if (!service.statusRoute) return
+      const at = Date.now()
+      if (service.statusRoute.firstReachedAt == null) {
+        service.statusRoute.firstReachedAt = at
       }
+      service.statusRoute.lastRequest = { at, ...(observation ?? {}) }
+      service.statusRoute.requestCount = (service.statusRoute.requestCount ?? 0) + 1
     }
     disposers.push(route.dispose)
     if (!route.mounted) {

@@ -28,7 +28,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 const { statusSnapshot } = await import('../src/panel-api.js')
-const { mountPanelRoute, ROUTE } = await import('../src/panel-route.js')
+const { mountPanelRoute, ROUTE, observationOf } = await import('../src/panel-route.js')
 
 // ------------------------------------------------------- transport placement
 
@@ -137,6 +137,46 @@ test('a service that cannot measure the wake surface reports null, not a fabrica
   assert.equal(snap.wakeApi, null, 'absence must be reported as absence')
 })
 
+test('the route hands over what the request said about itself, not a verdict about it', async () => {
+  // `firstReachedAt` answers "did anything ever arrive". It cannot answer "is the panel in a
+  // browser talking to this route now", because a deployment probe and a polling panel are
+  // both one timestamp. Keeping the user-agent verbatim is what makes those two separable by
+  // whoever reads the status — so this asserts the header survives the trip, unclassified.
+  const seen = []
+  const service = stubService({ markRouteReached: (observation) => seen.push(observation) })
+  const { route } = mountRoute({ service })
+  await callRoute(
+    route,
+    makeReq({
+      method: 'GET',
+      headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/141.0.0.0', origin: 'http://127.0.0.1:19387' },
+    }),
+    makeRes(),
+  )
+
+  assert.equal(seen.length, 1, 'every request is recorded, not only the first')
+  assert.deepEqual(seen[0], {
+    method: 'GET',
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/141.0.0.0',
+    origin: 'http://127.0.0.1:19387',
+    referer: null,
+  })
+})
+
+test('a header a client could make enormous is clipped, and an absent one stays absent', () => {
+  // This value is stored in the status snapshot and read by a model, and a client may send
+  // an arbitrarily long header. Clipping is the bound; returning null rather than an empty
+  // string is the difference between "sent nothing" and "sent an empty value".
+  const long = `Mozilla/5.0 ${'x'.repeat(500)}`
+  const observed = observationOf({ method: 'get', headers: { 'user-agent': long } })
+  assert.equal(observed.method, 'GET')
+  assert.ok(observed.userAgent.length < long.length, 'the header is bounded')
+  assert.ok(observed.userAgent.endsWith('…'), 'and says so rather than looking truncated by accident')
+  assert.equal(observed.origin, null, 'an absent header is absent, not an empty string')
+  assert.equal(observationOf({ headers: { 'user-agent': '' } }).userAgent, null, 'and an empty one is too')
+  assert.equal(observationOf(undefined).userAgent, null, 'a request with no headers cannot throw')
+})
+
 // ---------------------------------------------------------------- the surface
 
 /** Drive the registered route handler directly, as the host web server would. */
@@ -162,12 +202,16 @@ function mountRoute({ service = stubService(), ctxOverride } = {}) {
  * fake offering only `.text()` would let a handler that cannot work in the real host
  * pass every test — which is the failure mode this whole file exists to avoid.
  */
-function makeReq({ method = 'POST', url = ROUTE, rawBody = '' } = {}) {
+function makeReq({ method = 'POST', url = ROUTE, rawBody = '', headers = {} } = {}) {
   const handlers = new Map()
   const chunks = rawBody === '' ? [] : [Buffer.from(rawBody, 'utf8')]
   return {
     method,
     url,
+    // A real IncomingMessage always carries headers, and the route now reads them to record
+    // who called. A double without them would let the attribution path pass every test while
+    // reporting `null` for every caller in the field.
+    headers,
     on(event, handler) {
       handlers.set(event, handler)
       return this

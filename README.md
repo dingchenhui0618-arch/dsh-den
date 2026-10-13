@@ -3,7 +3,7 @@
 > A **7×24 resident personal assistant** for [DeepSeek Harness](https://github.com/deepseek-ai/dsh).
 > Not another chat window — an assistant that stays on, keeps its own memory, works while you are away, and stops to ask before it acts outside your trust boundary.
 
-Status: **the core is implemented, tested (256/256), and active in a real profile.** The plugin is loaded inside a real DSH 0.2.0-rc.2 desktop profile — it is in that profile's `dsh.profile.bundles`, and the running host reports it as `fiberPhase: active` — registering 11 model-facing tools, the approval guard, the heartbeat, and an interactive status panel. Verified against the *running* system rather than only in tests: the heartbeat ticks on its 60-second cadence, and the panel is an **active occupant** of both `sidebar.panellist` (`id: dsh-den.status`, order 245) and the `main` panel (`key: dsh-den.status`).
+Status: **the core is implemented, tested (259/259), and active in a real profile.** The plugin is loaded inside a real DSH 0.2.0-rc.2 desktop profile — it is in that profile's `dsh.profile.bundles`, and the running host reports it as `fiberPhase: active` — registering 11 model-facing tools, the approval guard, the heartbeat, and an interactive status panel. Verified against the *running* system rather than only in tests: the heartbeat ticks on its 60-second cadence, and the panel is an **active occupant** of both `sidebar.panellist` (`id: dsh-den.status`, order 245) and the `main` panel (`key: dsh-den.status`) — read from the live browser page through the host's read-only Slot inspector, not from the plugin's own registration call.
 
 **And it reproduces from this repository alone.** A fresh `git clone` of the published repo — no `node_modules`, because the package declares **no dependencies at all** — runs the whole suite green:
 
@@ -155,7 +155,16 @@ Step 2's message is specific rather than generic because `autonomy/confirm` reso
 
 **That the plugin is live is proven from disk, not asserted.** `npm run check:tools` reads the persisted session logs and pairs every `tool/call` record with its result — a call *attempt* is not evidence, because a model can name a tool that was never registered and the attempt is still logged; only a result that is not an `unknown tool` error proves the tool existed in that session's set. Verdict on the live profile: **proven for `den_remember`, `den_schedule_check` and `den_status`**.
 
-**What is *not* yet observed, stated precisely.** The panel's `call()` and the host's route handler are verified against each other end to end, in one process, by `test/roundtrip.test.mjs` — the request bytes, the response bytes, and the payload the panel receives. What has never run is that pair underneath the real Cordis client loader, over a real socket, in a real browser. The host process currently running still executes pre-fix code — the panel's new route is absent from it (`GET /dsh-den` answers 404 while its siblings `GET /dsh-warden` and `GET /dsh-vision-diff` answer 200 with full JSON) — and plugin changes are not hot-reloaded into a running host. So the remaining unknown is the loader and the socket, not the contract. `den_status` reports `transport.browserReachable` once a real request lands, which is how that last step reports itself. See [DESIGN.md](DESIGN.md) for the measurements.
+**What is observed, and what is not.** For several rounds this section said the panel had *never* been verified in a real browser, and that was wrong — not the verification, the claim. The host exposes a read-only Inspect provider that queries the **page the user actually has open**, and it answers:
+
+```
+sidebar.panellist occupants  ->  { registrant: "dsh-den", id: "dsh-den.status", order: 245, active: true }
+main occupants (keyed)       ->  { registrant: "dsh-den", key: "dsh-den.status", active: true }
+```
+
+That is the panel mounted in a real browser, on both slots this README claims, read from the live page rather than from the plugin's own registration call. The remaining unknown is narrower than "does it work": it is the rendered text and the click path — `Slots` reports topology, not pixels, and no browser automation is reachable from inside this profile (the GUI's shell requires the token `dsh web` printed, and the WebBridge route needs a body upload that this plugin's own outbound rule escalates). `test/roundtrip.test.mjs` still carries the request bytes, the response bytes, and the payload the panel receives, in one process.
+
+**Reachability is now attributable, not just stamped.** `transport.browserReachable` is one timestamp, and a deployment probe and a panel that polls every fifteen seconds produce the same one. The route therefore records every request and keeps what the newest caller *said about itself* — `transport.lastRequest` carries the user-agent, origin, and referer verbatim, plus `requestCount`. Verbatim rather than classified, because a label would be the plugin's opinion about who called, and the point of keeping it is to let the reader decide. First contact still never moves: `firstReachedAt` is stamped once and stays.
 
 ---
 
