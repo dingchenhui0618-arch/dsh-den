@@ -55,6 +55,16 @@ Two more entries in that stream corrected a misattribution of my own: `outbound:
 
 The same evidence exposed a defect worth naming, because it is a whole class rather than a slip: `onDecision` announced decisions through `noteEvent` (the in-memory ring the panel shows) and **never called `recordAudit`**, while `gateAudit()` read `gate-audit.json` — a file no code wrote. So the panel's gate surface reported *"no decisions"* permanently, including while three real ones had just been made. `recordAudit` was dead code and the durable-audit design had never run once. **Reading a file that is never written looks exactly like a gate that has never fired.** The seam is now fixed and pinned from both ends — the service reader *and* the file on disk — because asserting only through `gateAudit()` would pass if reader and writer were the same piece of memory.
 
+**And the fix is now observable in the live profile, from a later process than the one that wrote it.** After the restart the file exists and holds exactly the refusals this session provoked:
+
+```json
+{"at":1791868057296,"tool":"den_set_autonomy","rule":"unknown-tool","risk":1,"decision":"ask","sessionId":"session-95cc8a8d-…"}
+{"at":1791868277929,"tool":"plugin_manager","rule":"unknown-tool","risk":1,"decision":"ask","sessionId":"session-95cc8a8d-…"}
+```
+
+Three things are true of that file and all three were only design intentions before: the reader has a writer, the record **outlives the process that made it** — so *"why did it refuse?"* is answerable after the fact and not only while the ring happens to still hold it — and the entry carries the tool, rule, risk, decision and session but **not the arguments**, so the audit does not become a second copy of whatever the gate was protecting. `plugin_manager` is in there as well as the den tool: the gate intercepts every tool call in the profile, not only the ones belonging to the plugin that installed it.
+
+
 **And the state really did cross a restart, measured on the running host rather than argued.** The plugin's own status payload carries when *this* instance last loaded the plugin; the state file carries when it was first written. On the live host those two disagree by roughly an hour, in the direction that proves the point:
 
 ```
@@ -65,6 +75,9 @@ plugin startedAt  : 2026-10-13T02:56:33.794Z    ← this instance (pid 36704)
 So a previous life wrote that file and this one read it back: the assistant came back up **on its own**, with its configuration intact and no human involved. That is the persistence half of capability 2, and it is the half that does not need anybody's permission.
 
 Getting there required fixing the field that was supposed to say so. `stateSurvivesRestart` was computed *inside* `status()` as `readJson(statePath) !== undefined` — evaluated long after the boot had written that very file — so it was `true` on a first-ever boot of a machine that had never been restarted, while the comment above it claimed it *"cannot overstate what survived a restart"*. It had already been cited as proof: `tools/check-acceptance.mjs` asserted `true` on a first boot into an empty home, under a check named *"boot persists state"*. It is now sampled **before** the boot claims the tree, where the answer could still be no, and `stateCreatedAt` ships alongside it so a reader can confirm the claim instead of trusting it. The acceptance block already boots twice, so the fix made that check strictly stronger: it now observes a real `false → true` transition. The reusable rule, at three instances of this class: **a field named for a past event — survived, recovered, delivered, refused — must be sampled at a moment when the event could still not have happened. Sampled later it degrades from measurement to constant, silently, and reports `false` with a straight face.**
+
+**The live profile now shows the difference between the two versions in one payload.** On the instance that started at `05:06:55.290Z`, `stateCreatedAt` is `1791856151717` — about 3.3 hours *earlier*. So `stateSurvivesRestart: true` is a comparison against this instance's own boot rather than a constant that happened to be right, and the field that used to be absent is the one that makes the claim checkable. That absence is also how the previous build was identified as stale while the host was still serving it.
+
 
 
 **The running host was serving an older build; it has since been restarted, and the same check that said so now says otherwise.** Before the restart, the `Tool` inspect provider reported a different tool count from this tree's source and `GET /dsh-den` answered 404. Afterwards, `npm run verify:live` reports:
