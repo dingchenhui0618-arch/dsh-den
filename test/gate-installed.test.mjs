@@ -34,7 +34,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -108,6 +108,50 @@ test('a deny risk does not depend on the pre-execute listener being installed', 
   const guard = installedGuard(state)
   const verdict = guard(execution('read', { file_path: secretShapedPath() }))
   assert.match(String(verdict), /^refused:/, 'the hard rules must survive a missing event bus')
+})
+
+test('a refusal reaches the durable audit trail, not only the in-memory ring', () => {
+  // Two surfaces record the same decision and only one of them survives the process, so
+  // wiring one and not the other fails silently. It did: `onDecision` announced the
+  // decision through `noteEvent` and never called `recordAudit`, while `gateAudit()` reads
+  // `gate-audit.json` — a file nothing wrote. The panel's gate surface therefore reported
+  // "no decisions" forever, including while three real ones had just been made on the live
+  // Host, and it looked exactly like a gate that had never fired.
+  //
+  // This is the same shape as the `statusSnapshot` allow-list: one `status()` field plus
+  // one plumbing site, where forgetting the second produces an empty result rather than an
+  // error. So the seam is pinned from both ends — the service reader and the file itself.
+  const { ctx, state } = fakeHost()
+  apply(ctx)
+  const guard = installedGuard(state)
+  const service = state.provided.get('den')
+
+  // The sandbox home is shared by every test in this file, and the tests above each make a
+  // refusal, so the trail is not empty here. Assert the *growth* rather than a clean slate;
+  // it would be a weaker test to reset state and then claim the reader works.
+  const before = service.gateAudit().length
+
+  const verdict = guard(execution('read', { file_path: secretShapedPath() }))
+  assert.match(String(verdict), /^refused:/)
+
+  const trail = service.gateAudit()
+  assert.equal(trail.length, before + 1, 'a refusal must reach the durable audit, not only the ring')
+  const entry = trail.at(-1)
+  assert.equal(entry.tool, 'read')
+  assert.equal(entry.rule, 'secret:credentials-yaml')
+  assert.equal(entry.risk, 2)
+  assert.equal(entry.decision, 'deny')
+
+  // Read the file directly as well: `gateAudit()` is the reader, so asserting only through
+  // it would pass even if reader and writer were the same piece of memory.
+  const onDisk = JSON.parse(readFileSync(join(sandboxHome, 'den', 'gate-audit.json'), 'utf8'))
+  assert.equal(onDisk.entries.length, before + 1, 'the audit must be on disk, where a restart can find it')
+  assert.equal(onDisk.entries.at(-1).rule, 'secret:credentials-yaml')
+
+  // The audit deliberately records the verdict and never the arguments: an audit log that
+  // copies tool arguments is a second place a secret can leak from.
+  const serialised = JSON.stringify(onDisk)
+  assert.equal(/credentials\.ya?ml/.test(serialised), false, 'the audit must not quote the path it refused')
 })
 
 test('disposing the plugin withdraws the guard, so it cannot outlive its effect', () => {

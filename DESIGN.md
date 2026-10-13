@@ -511,6 +511,44 @@ ok   no authority exists after the attack — autonomy=null grantFiles=0
 
 这是同一个坑的第四次，也是最贵的一次——前三次在投递路径上，这次在**授权**路径上。纪律不变：**只建模拒绝，不建模接受**；而这一次还多一条：**替身要建模调用的形状，不只是服务的形状**。「一次 HTTP 路由调用没有 initiator」和「一次工具调用有 initiator」，正是安全模型本身的分界线。
 
+### 2.10 能力 4 的端到端活体证据，以及一个「永远报告没有判定」的审计面
+
+**先说结论：能力 4 的强制面在真实宿主上跑通了，而且是在我没有刻意安排的情况下。**
+
+闸门的规则是**按路径匹配**的（`/\.dsh[/\\]\.?credentials\.ya?ml/i` → `deny`），并且装成 `ctx.tools.guard`，拦截本 profile 里**所有**工具调用——包括我自己的。于是有一个零风险的测试：读一个**按规则该被拒、但根本不存在**的凭证形状路径。闸门若生效，调用在碰文件系统之前就被拒；若不生效，只会得到 ENOENT，不会泄露任何东西。
+
+结果：
+
+```
+Error: refused: this would pull a stored credential into the conversation (credentials-yaml)
+```
+
+逐字来自 `src/gate.js`。而宿主的服务事件流里同时记下了这次判定：
+
+```json
+{"type":"gate","tool":"read","rule":"secret:credentials-yaml","risk":2,"decision":"deny",
+ "sessionId":"session-95cc8a8d-a3e9-4e2a-a67d-12292d17ba24"}
+```
+
+同一条流里还有两条我原先归因错误的记录：
+
+```json
+{"tool":"pwsh","rule":"outbound:curl-upload","risk":1,"decision":"ask"}
+{"tool":"pwsh","rule":"outbound:recursive-delete","risk":1,"decision":"ask"}
+```
+
+**那两个我以为是「用户手动拒绝」的调用，其实是 den 自己的闸门判成 `ask`、再因本机审批设施缺失而拒绝的。** 闸门一直在运行，而且一直在影响这个会话——只是我没有把它与那两次拒绝联系起来。
+
+**但同一批证据翻出一个缺陷：审计面永远报告「没有判定」。**
+
+`onDecision` 只调用 `noteEvent`（内存环形缓冲，`status.recentEvents`），**从不调用 `recordAudit`**；而 `gateAudit()` 读的是 `gate-audit.json`——**一个没有任何代码写入的文件**。所以 `status.gate.recent` 恒为 `[]`，即使刚刚发生了三次真实判定。`recordAudit` 是死代码，`MAX_AUDIT` 与整个持久审计设计因此从未生效。
+
+失败方式值得记下来：**读一个从不被写的文件，看起来与一个从未触发过的闸门完全一样。** 没有报错、没有异常、面板显示「一切正常，没有判定」。
+
+已修：`onDecision` 现在同时写内存环与审计文件；`test/gate-installed.test.mjs` 新增一条测试，从**服务读取端**与**磁盘文件**两端各断言一次（只走 `gateAudit()` 的话，读写共用一块内存也能通过），并断言审计**不记录参数**——只记 verdict，因为把参数抄进审计日志就是把秘密泄到第二个地方。
+
+**这个修复需要一次重启才在活体上生效**，与投递修复一样：插件模块在宿主启动时载入。
+
 
 
 - `dsh-muse`、`dsh-bot` 只作**只读参考**，不 fork、不复制代码进本仓库。

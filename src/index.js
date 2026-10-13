@@ -40,7 +40,7 @@ import { join } from 'node:path'
 import { denHome, listJsonFiles, reapStaleTempFiles, readJson, toLosslessJson, writeJsonAtomic } from './atom.js'
 import { currentGrant, recordGrant, sessionEvents } from './grant.js'
 import { allNotices, isExpired, pendingNotices, queueNotice } from './notices.js'
-import { installGate, RISK, classifyCall } from './gate.js'
+import { installGate, RISK, classifyCall, recordAudit } from './gate.js'
 import { DenKernel, evaluateGates, readLedger, ledgerPath } from './kernel.js'
 import { deleteTrigger, dueTriggers, listTriggers, nextTriggerAt, normalizeTrigger, saveTrigger } from './triggers.js'
 import { ENTRY_KINDS, forget, recall, remember, scenarios } from './memory.js'
@@ -50,6 +50,15 @@ export const name = 'dsh-den'
 export const inject = ['agents', 'tools', 'webServer']
 
 const STATE_VERSION = 1
+
+/**
+ * How far back to read the audit file before appending one entry.
+ *
+ * `recordAudit` rewrites the file from the entries it is handed and trims to its own
+ * `MAX_AUDIT`, so this only has to be larger than that cap — the point is to append to the
+ * existing trail rather than replace it with a single line.
+ */
+const AUDIT_READ_LIMIT = 5000
 
 /** Mutable assistant state that must survive a restart. */
 function defaultState() {
@@ -925,7 +934,25 @@ export function apply(ctx) {
     service.gateDisposer = installGate(ctx, {
       tools,
       onDecision: ({ classification, decision, tool, sessionId }) => {
-        service.noteEvent({ type: 'gate', tool, rule: classification.rule, risk: classification.risk, decision: decision.kind, sessionId })
+        const entry = {
+          tool,
+          rule: classification.rule,
+          risk: classification.risk,
+          decision: decision.kind,
+          sessionId,
+        }
+        service.noteEvent({ type: 'gate', ...entry })
+        // Persisted as well as announced, because these are two different surfaces and
+        // only one of them survives the process. `recentEvents` is a bounded in-memory
+        // ring the panel shows; the audit file is what an operator can read after the
+        // fact, and capability 4 is a security claim about what the gate *refused*.
+        //
+        // This call was missing, and the way it failed is worth recording: `gateAudit()`
+        // reads `gate-audit.json`, so the panel's gate surface was permanently empty and
+        // cheerfully reported "no decisions" while three real ones had just been made.
+        // Nothing failed loudly, because a read of a file that is never written looks
+        // exactly like a gate that has never fired.
+        recordAudit(entry, service.gateAudit(AUDIT_READ_LIMIT))
       },
     })
     disposers.push(service.gateDisposer)
