@@ -110,6 +110,17 @@ That `sessionId` is the session the attempt was made *in* — not a probe standi
 
 It also settles a question the docs had been vague about: **the `den_*` tools are callable by the assistant's own turns** — `den_status` works from the conversation — so this was not a hypothetical attempt from outside the trust boundary but the assistant reaching for its own authority with every capability it actually has.
 
+### Granting authority to a running instance, step by step
+
+The negative half of capability 1 is demonstrated above. The positive half needs a person, and there is no way around that: the agent can mint a token, can cite any message id, and can write to the whole tree, but **it cannot author a `user/message`**, and that is what the grant is bound to. To reproduce it:
+
+1. Enable approval prompts for the session. With them off, `ask` resolves to a denial and `den_set_autonomy` is refused automatically — which is the correct fail-closed behaviour, and also why an approval-disabled session can never complete this flow.
+2. Open the den panel and use its grant control. It mints a single-use, 10-minute token and shows the instruction: *paste this token to the assistant in the conversation*.
+3. Paste that token into a message. The token is the whole point of the step — anything the agent could produce on its own would prove nothing.
+4. In **the same turn**, the assistant calls `den_set_autonomy` with `autonomy: true`. It does not need the message id: the den finds the human message in the current turn that quotes the token, and that lookup is stricter than the id path because it requires the token.
+5. Approve the tool call rather than letting it be denied. The grant is written and bound to that message.
+
+**Telling a person apart from a probe in the event log.** A panel grant carries the conversation id, because the panel scopes its request to the active conversation; a route probe carries a synthetic id, or none at all if it did not bother. That distinction had to be made explicit rather than left to the reader: `check-live-grant-bypass.mjs` used to mint with no session, leaving `{"type":"panel-autonomy-requested","sessionId":null}` — an entry a person clicking Grant could equally have left. It now signs its own requests with a synthetic id and asserts that it did, because **a probe whose footprint a human could have left makes the log lie about who acted.**
 
 So authority needs a human in the loop twice: the token must be cited in a real human message, and the resulting tool call must be approved rather than auto-denied. That is capability 1 in its strongest form — the agent cannot manufacture its own standing autonomy even with write access to the whole tree.
 

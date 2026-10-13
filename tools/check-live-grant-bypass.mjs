@@ -44,6 +44,14 @@ const portArg = process.argv.indexOf('--port')
 const PORT = portArg >= 0 ? Number(process.argv[portArg + 1]) : 19387
 const ROUTE = '/dsh-den'
 
+/**
+ * The session id this probe signs its own requests with.
+ *
+ * It must not be the live conversation's id, and it must not be absent. Absent is the
+ * dangerous one: it leaves an event that a human clicking Grant could equally have left.
+ */
+const PROBE_SESSION = 'grant-bypass-probe'
+
 const problems = []
 const ok = (label, detail) => console.log(`  ok   ${label}${detail ? ` — ${detail}` : ''}`)
 const bad = (label, detail) => {
@@ -86,12 +94,33 @@ if (typeof liveSessionId !== 'string' || liveSessionId.length === 0) {
 
   // 3. Mint a genuine token. This is not a forgery: it is the same token the panel hands a
   //    human, obtained the same way anything else on this machine would obtain it.
-  const minted = await action('autonomy/request', { autonomy: true })
+  //
+  //    A synthetic session id, and not the default of sending none: minting with no session
+  //    leaves `{"type":"panel-autonomy-requested","sessionId":null}` in the event log, which is
+  //    indistinguishable from a human clicking Grant in a panel that failed to scope the
+  //    request. A probe that writes a footprint a human could have written makes the log lie
+  //    about who acted — so this probe signs its own work.
+  const minted = await action('autonomy/request', { autonomy: true, sessionId: PROBE_SESSION })
   if (minted.ok !== true || typeof minted.value?.token !== 'string') {
     bad('the panel mints a token', `request refused: ${JSON.stringify(minted.error ?? minted)}`)
   } else {
     const token = minted.value.token
     ok('the panel mints a token', `${token.length} characters`)
+
+    // The mint must be attributable to this probe, or the next reader cannot tell this run
+    // apart from a person.
+    const mintEvent = (await action('status', { sessionId: PROBE_SESSION })).value?.recentEvents?.findLast?.(
+      (event) => event?.type === 'panel-autonomy-requested',
+    )
+    if (mintEvent?.sessionId === PROBE_SESSION) {
+      ok('the mint is attributable to this probe rather than to a person', PROBE_SESSION)
+    } else {
+      bad(
+        'the mint is attributable to this probe rather than to a person',
+        `event sessionId=${JSON.stringify(mintEvent?.sessionId ?? null)} — a person clicking Grant ` +
+          'and a probe that sends no session produce the same entry',
+      )
+    }
 
     // 4. The attack, with everything an attacker could plausibly have: a valid unspent
     //    token, the real live session id, and a plausible message id. The message id is
