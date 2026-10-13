@@ -18,7 +18,7 @@
  *   - the cadence could be committed before delivery, so a crash mid-wake eats the
  *     check-in instead of retrying it
  *
- * Nothing here is simulated in-process. Two separate `apply()` calls over one
+ * Nothing here is simulated in-process. Two separate `mountHost()` calls over one
  * `DSH_HOME`, with the clock moved by hand, is what a restart is from the filesystem's
  * point of view — which is the only point of view a restarted process has.
  */
@@ -39,9 +39,50 @@ process.env.DSH_HOME = sandboxHome
 process.env.DSH_DEN_WAKE_REPLY_TIMEOUT_MS = '1500'
 test.after(() => rmSync(sandboxHome, { recursive: true, force: true }))
 
+/**
+ * The residency lease is durable state, exactly like the ledger and the triggers, and it has to
+ * be reset between tests for the same reason: the sandbox home is shared by every test in this
+ * file, and a lease left behind by one of them makes the next mount stand down.
+ *
+ * That is the product behaving correctly, not a leak to work around. One state tree admits one
+ * delivering heartbeat, so this file's habit of mounting the plugin repeatedly over one home —
+ * which models a restart — only reproduces a restart once the previous holder is gone. In
+ * production the previous holder is a dead process and its lease is reclaimed on the first
+ * claim; here it is still alive in this process, so the lease is reset instead. The dead-owner
+ * takeover is covered where a dead pid can be faked, in kernel.test.mjs.
+ */
+test.beforeEach(() => {
+  rmSync(leasePath(), { force: true })
+})
+
 const { apply } = await import('../src/index.js')
 const { invokeAction } = await import('../src/panel-api.js')
+const { leasePath } = await import('../src/resident.js')
 const { denHome, denPath, listJsonFiles, readJson, writeJsonAtomic } = await import('../src/atom.js')
+
+/**
+ * Boot the plugin the way a host does, and remember how to undo it.
+ *
+ * This exists because `coldHost` never defined `state.dispose`, so all eleven
+ * `first.state.dispose?.()` calls in this file — every "process one exits" in it — were
+ * **no-ops**. Nothing depended on them, so it stayed invisible decoration. Residency does
+ * depend on them: a host that is still alive still holds the lease, so a simulated restart that
+ * never actually released it left the second host standing down. The product was right and the
+ * fixture was lying about a restart — the same shape this repository keeps finding, a line named
+ * for an event that never happens.
+ *
+ * Deleting the lease file is part of exiting, not a workaround: a process that shuts down
+ * releases it, and a process that is killed leaves it behind to age out. Both are modelled, here
+ * and in kernel.test.mjs.
+ */
+function mountHost(host) {
+  const dispose = apply(host.ctx)
+  host.state.dispose = () => {
+    dispose?.()
+    rmSync(leasePath(), { force: true })
+  }
+  return dispose
+}
 
 /**
  * Back-date every stored schedule so it is due, the way downtime would leave it.
@@ -374,7 +415,7 @@ async function grantAutonomyWithoutTokenInMessage(state) {
 test('a trigger created before the restart is found and fired after it', async () => {
   // --- process one: the human is present, sets up a check, and authorizes it.
   const first = coldHost()
-  apply(first.ctx)
+  mountHost(first)
   const created = await callTool(first.state, 'den_schedule_check', {
     kind: 'interval',
     title: 'CI watch',
@@ -394,7 +435,7 @@ test('a trigger created before the restart is found and fired after it', async (
 
   // --- process two: a fresh activation over the same home, no human, nothing live.
   const second = coldHost()
-  apply(second.ctx)
+  mountHost(second)
   const service = second.state.provided.get('den')
 
   const due = service.dueTriggers(now)
@@ -437,9 +478,9 @@ test('two hosts on one home are both told the same trigger is due, because nothi
   // comment at kernel.js rejects, which is why the right answer is exclusivity rather than a
   // reordering. This test pins the absence of a claim; it does not claim the duplicate.
   const a = coldHost()
-  apply(a.ctx)
+  mountHost(a)
   const b = coldHost()
-  apply(b.ctx)
+  mountHost(b)
 
   const title = 'Two-host probe'
   const created = await callTool(a.state, 'den_schedule_check', {
@@ -471,7 +512,7 @@ test('two hosts on one home are both told the same trigger is due, because nothi
 
 test('authority survives the restart because it is re-attested, not re-granted', async () => {
   const first = coldHost()
-  apply(first.ctx)
+  mountHost(first)
   await callTool(first.state, 'den_schedule_check', {
     kind: 'interval',
     title: 'second check',
@@ -484,7 +525,7 @@ test('authority survives the restart because it is re-attested, not re-granted',
 
   const now = Date.now() + 60 * 60 * 1000
   const second = coldHost()
-  apply(second.ctx)
+  mountHost(second)
   const service = second.state.provided.get('den')
 
   // The grant record is on disk; the proof is in the transcript. If either fails to
@@ -497,7 +538,7 @@ test('authority survives the restart because it is re-attested, not re-granted',
 
 test('a restart without a grant wakes nothing and says which gate stopped it', async () => {
   const first = coldHost()
-  apply(first.ctx)
+  mountHost(first)
   await callTool(first.state, 'den_schedule_check', {
     kind: 'interval',
     title: 'unauthorized check',
@@ -510,7 +551,7 @@ test('a restart without a grant wakes nothing and says which gate stopped it', a
 
   const now = Date.now() + 60 * 60 * 1000
   const second = coldHost()
-  apply(second.ctx)
+  mountHost(second)
   const service = second.state.provided.get('den')
 
   const outcome = await service.kernel.tick({ agent: undefined, now })
@@ -525,7 +566,7 @@ test('a restart without a grant wakes nothing and says which gate stopped it', a
 
 test('downtime longer than the interval resumes the cadence instead of firing a storm', async () => {
   const first = coldHost()
-  apply(first.ctx)
+  mountHost(first)
   await callTool(first.state, 'den_schedule_check', {
     kind: 'interval',
     title: 'every five minutes',
@@ -540,7 +581,7 @@ test('downtime longer than the interval resumes the cadence instead of firing a 
   // check-ins on the first tick. `nextTriggerAt` catches up in whole steps instead.
   const now = Date.now() + 24 * 60 * 60 * 1000
   const second = coldHost()
-  apply(second.ctx)
+  mountHost(second)
   const service = second.state.provided.get('den')
 
   const outcome = await service.kernel.tick({ agent: undefined, now })
@@ -555,7 +596,7 @@ test('the real heartbeat fires the wake, with no agent handed to tick()', async 
   // arguments. So those calls exercise a path that never runs in the field, and this
   // test drives the one that does.
   const first = coldHost()
-  apply(first.ctx)
+  mountHost(first)
   await callTool(first.state, 'den_schedule_check', {
     kind: 'interval',
     title: 'heartbeat check',
@@ -583,7 +624,7 @@ test('the real heartbeat fires the wake, with no agent handed to tick()', async 
   mock.timers.enable({ apis: ['setInterval'], now: Date.now() })
   try {
     const second = coldHost()
-    apply(second.ctx)
+    mountHost(second)
     const service = second.state.provided.get('den')
     assert.ok(service.kernel, 'the heartbeat must be running')
     assert.equal(second.state.sentMessages.length, 0, 'nothing has fired yet')
@@ -617,7 +658,7 @@ test('the real heartbeat fires the wake, with no agent handed to tick()', async 
 
 test('a wake whose reply never lands is recorded, retried, and not charged', async () => {
   const first = coldHost()
-  apply(first.ctx)
+  mountHost(first)
   await callTool(first.state, 'den_schedule_check', {
     kind: 'interval',
     title: 'unreadable reply',
@@ -630,7 +671,7 @@ test('a wake whose reply never lands is recorded, retried, and not charged', asy
 
   const now = Date.now() + 60 * 60 * 1000
   const second = coldHost()
-  apply(second.ctx)
+  mountHost(second)
   const service = second.state.provided.get('den')
   // Authority resolves, the wake is delivered, but no assistant message is ever
   // appended: the reply cannot be read.
@@ -652,7 +693,7 @@ test('a wake whose reply never lands is recorded, retried, and not charged', asy
 
 test('a refusal distinguishes "no transcript" from "not authorized"', async () => {
   const first = coldHost()
-  apply(first.ctx)
+  mountHost(first)
   await callTool(first.state, 'den_schedule_check', {
     kind: 'interval',
     title: 'readable transcript, unauthorized',
@@ -666,7 +707,7 @@ test('a refusal distinguishes "no transcript" from "not authorized"', async () =
 
   const now = Date.now()
   const second = coldHost()
-  apply(second.ctx)
+  mountHost(second)
   const service = second.state.provided.get('den')
 
   // The transcript is readable and the grant is valid, so authority is genuine. Delivery
@@ -698,7 +739,7 @@ test('a refusal distinguishes "no transcript" from "not authorized"', async () =
 
 test('a refusal is not charged, so the intent survives until it can run', async () => {
   const first = coldHost()
-  apply(first.ctx)
+  mountHost(first)
   await callTool(first.state, 'den_schedule_check', {
     kind: 'interval',
     title: 'never authorized',
@@ -714,7 +755,7 @@ test('a refusal is not charged, so the intent survives until it can run', async 
 
   const now = Date.now()
   const second = coldHost()
-  apply(second.ctx)
+  mountHost(second)
   const service = second.state.provided.get('den')
 
   const outcome = await service.kernel.tick({ agent: undefined, now })
@@ -738,7 +779,7 @@ test('a refused wake is throttled instead of re-asked every heartbeat', async ()
   // same question again — 1,440 times a day, each one appending to the event log. The
   // reply to a permanent condition cannot change by asking again.
   const first = coldHost()
-  apply(first.ctx)
+  mountHost(first)
   await callTool(first.state, 'den_schedule_check', {
     kind: 'interval',
     title: 'never authorized',
@@ -751,7 +792,7 @@ test('a refused wake is throttled instead of re-asked every heartbeat', async ()
 
   const now = Date.now()
   const second = coldHost()
-  apply(second.ctx)
+  mountHost(second)
   const service = second.state.provided.get('den')
 
   const refused = await service.kernel.tick({ agent: undefined, now })
@@ -789,7 +830,7 @@ test('an idle tick answers with the same shape as a busy one', async () => {
   // happened, and for a resident assistant that is the common case. The first two
   // assertions below are the ones that found it.
   const host = coldHost()
-  apply(host.ctx)
+  mountHost(host)
   const service = host.state.provided.get('den')
 
   const idle = await service.kernel.tick({ agent: undefined, now: Date.now() })
@@ -819,7 +860,7 @@ test('an idle tick answers with the same shape as a busy one', async () => {
 
 test('an unreadable transcript refuses without cold-resuming the conversation', async () => {
   const first = coldHost()
-  apply(first.ctx)
+  mountHost(first)
   await callTool(first.state, 'den_schedule_check', {
     kind: 'interval',
     title: 'gone conversation',
@@ -833,7 +874,7 @@ test('an unreadable transcript refuses without cold-resuming the conversation', 
 
   const now = Date.now()
   const second = coldHost()
-  apply(second.ctx)
+  mountHost(second)
   const service = second.state.provided.get('den')
   // Nothing live, nothing readable: the session is simply gone.
   second.state.sessions = { get: () => undefined }

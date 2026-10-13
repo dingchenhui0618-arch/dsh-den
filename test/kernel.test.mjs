@@ -39,6 +39,7 @@ const {
   recordSpoke,
 } = await import('../src/kernel.js')
 const { allNotices } = await import('../src/notices.js')
+const { KernelLease, leasePath } = await import('../src/resident.js')
 
 test.after(() => rmSync(sandbox, { recursive: true, force: true }))
 
@@ -62,6 +63,9 @@ test.beforeEach(() => {
     rmSync(join(sandbox, 'den', sub), { recursive: true, force: true })
   }
   rmSync(join(sandbox, 'den', 'pacing.json'), { force: true })
+  // The residency lease is durable too, and a lease left by one test would make the next one
+  // stand down and look like a broken kernel.
+  rmSync(leasePath(), { force: true })
 })
 
 /** Grant standing autonomy to a fake agent through a verifiable human turn. */
@@ -314,13 +318,12 @@ test('a valuable wake queues exactly one durable notice', async () => {
   assert.equal(mine[0].text, 'The build broke on main.')
 })
 
-test('two kernels over one home both admit the same check-in, because nothing holds residency', async () => {
+test('two kernels over one home deliver one check-in, because only one holds residency', async () => {
   // Two Hosts over one home is reachable by accident: `~/.dsh/den` is keyed on DSH_HOME, not
-  // on the profile, so two profiles share one state tree and both mount this plugin. There is
-  // no lock, and `pid` in status() is reported and never consulted.
+  // on the profile, so two profiles share one state tree and both mount this plugin.
   //
-  // Two kernels over one home model two Host processes. What they share is the trigger file on
-  // disk, which is the state that actually races.
+  // Two kernels over one home model two Host processes. What they share is the lease file and
+  // the trigger file on disk, which is the state that actually races.
   const sessionId = 'session-two-hosts'
   const agent = authorizedAgent(sessionId)
   const trigger = normalizeTrigger({
@@ -347,30 +350,63 @@ test('two kernels over one home both admit the same check-in, because nothing ho
     delivered += 1
     entered()
     // Park the first delivery inside the window that the real one spends waiting on a Host.
+    // This is the window the duplicate was measured in: without a lease, the second kernel
+    // admits the same check-in while the first is still in here.
     if (delivered === 1) await held
     return 'The build broke on main.'
   }
 
   const dueAt = 1000 + 300_000
-  const first = new DenKernel({ service, deliver }).tick({ agent, now: dueAt })
+  const first = new DenKernel({ service, deliver, lease: new KernelLease({ path: leasePath() }) }).tick({
+    agent,
+    now: dueAt,
+  })
   await inside // kernel one is now parked inside its delivery
-  const second = await new DenKernel({ service, deliver }).tick({ agent, now: dueAt })
+  const second = await new DenKernel({ service, deliver, lease: new KernelLease({ path: leasePath() }) }).tick({
+    agent,
+    now: dueAt,
+  })
   release()
   await first
 
-  // Without this the test passes for the wrong reason: a second kernel that *refused* would
-  // leave the delivery count at one and look exactly like exclusivity working. This is the
-  // mechanism being pinned — nothing holds residency, so both kernels admit the same check-in.
-  assert.equal(
-    second.results[0]?.outcome,
-    'spoke',
-    `the second kernel must have admitted the same check-in, or this proves nothing: ${JSON.stringify(second)}`,
-  )
-  // Measured while writing this: `delivered` was exactly 2 — the same check-in went to the
-  // conversation twice. It is a hazard being pinned, not behaviour being desired. When a lease
-  // lands, this assertion and the one above both have to change, which is the point of
-  // asserting the mechanism rather than the count.
-  assert.ok(delivered >= 2, `nothing excluded the second kernel, so it delivered too: ${delivered}`)
+  // The second host has to still be *running* and still tidying up after itself; standing down
+  // is not a failure state. Its tick reports `standby` with the holder's pid, which is what the
+  // status payload surfaces so an operator can tell a standby host from a broken one.
+  assert.equal(second.standby, true, `the second kernel must stand down, got ${JSON.stringify(second)}`)
+  assert.equal(second.results.length, 0, 'a standby tick must decide nothing')
+  assert.equal(second.due, 1, 'and must still report what it declined to act on')
+  assert.equal(delivered, 1, `the same check-in was delivered ${delivered} times`)
+})
+
+test('a standby kernel takes over once the holder stops renewing', async () => {
+  // The other half: standing down must not be permanent. If the holder is killed rather than
+  // disposed it never releases, so residency has to age out — otherwise a crash leaves the
+  // state tree with no resident at all, which is the failure a start-time lock would cause.
+  const leasePathHere = leasePath()
+  const holder = new KernelLease({ path: leasePathHere, staleMs: 1000 })
+  assert.equal(holder.acquire(10_000), true)
+
+  const standby = new KernelLease({ path: leasePathHere, staleMs: 1000, isAlive: () => true })
+  assert.equal(standby.acquire(10_500), false, 'a live holder inside the window keeps residency')
+
+  // Past the window the record is no longer authoritative, even with the owner still alive —
+  // a wandering pid must not hold the tree forever.
+  assert.equal(standby.acquire(12_000), true, 'a lease that stopped renewing must be reclaimable')
+  assert.equal(standby.report().held, true)
+})
+
+test('a fresh lease whose owner is gone is reclaimed at once, so a restart does not wait', async () => {
+  // The staleness window exists for a holder that died without releasing. It must not be what a
+  // restart waits for: after a restart the previous pid no longer exists, and there is no reason
+  // to leave the assistant mute for three heartbeats before noticing.
+  const path = leasePath()
+  const dead = new KernelLease({ path, staleMs: 600_000, isAlive: () => false })
+  assert.equal(dead.acquire(10_000), true, 'the first holder claims it')
+
+  const restarted = new KernelLease({ path, staleMs: 600_000, isAlive: () => false })
+  assert.equal(restarted.acquire(10_001), true, 'a dead owner is reclaimed immediately, well inside the window')
+  assert.equal(restarted.report().held, true)
+  assert.equal(restarted.report().holderPid, restarted.pid)
 })
 
 test('a refused wake is recorded in the ledger, never silently dropped', async () => {

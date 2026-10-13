@@ -41,6 +41,7 @@ import { denHome, listJsonFiles, reapStaleTempFiles, readJson, toLosslessJson, w
 import { currentGrant, recordGrant, sessionEvents } from './grant.js'
 import { allNotices, isExpired, pendingNotices, queueNotice } from './notices.js'
 import { installGate, RISK, classifyCall, recordAudit, auditPath } from './gate.js'
+import { KernelLease } from './resident.js'
 import { DenKernel, evaluateGates, readLedger, ledgerPath } from './kernel.js'
 import { deleteTrigger, dueTriggers, listTriggers, nextTriggerAt, normalizeTrigger, saveTrigger } from './triggers.js'
 import { ENTRY_KINDS, forget, recall, remember, scenarios } from './memory.js'
@@ -334,6 +335,12 @@ export class DenService {
         expired: notices.filter((notice) => isExpired(notice, now)).length,
       },
       kernel: this.kernel ? { running: this.kernel.timer !== null, lastTickAt: this.kernel.lastTickAt, lastError: this.kernel.lastError } : null,
+      /**
+       * Who holds residency over this state tree. `held: false` with a `holderPid` is a host
+       * that is running and deliberately not delivering, which is otherwise indistinguishable
+       * from a kernel that is broken — the distinction this field exists to make.
+       */
+      residency: this.kernelLease ? this.kernelLease.report() : null,
       gate: this.gateDisposer ? 'mounted' : 'not-mounted',
       /** Temp litter reclaimed at boot; non-zero means the process was hard-killed. */
       reapedTempFiles: this.reapedTempFiles,
@@ -1072,6 +1079,13 @@ export function apply(ctx) {
     }
     service.probeWakeApi = probeWakeApi
 
+    // One state tree, one resident heartbeat. Claimed per tick rather than at mount, so a host
+    // that loses the race keeps running and picks residency back up if the holder dies. See
+    // src/resident.js for why that direction, and not a start-time lock, is the safe one.
+    service.kernelLease = new KernelLease({
+      staleMs: Math.max(3 * service.state().tickSeconds * 1000, 60_000),
+    })
+
     const kernelCanDeliver = () => deliveryServiceReason() === null
 
     const startKernel = () => {
@@ -1098,12 +1112,22 @@ export function apply(ctx) {
         resolveAgent: createAgentResolver(ctx),
         tickSeconds: service.state().tickSeconds,
         onEvent: (event) => service.noteEvent(event),
+        lease: service.kernelLease,
       })
+      // Claim residency now rather than waiting for the first heartbeat, so `status()` can say
+      // whether this host is the resident from the moment it mounts. Failing here is not fatal
+      // and does not stop the kernel — it means this host begins in standby, and the tick
+      // re-claims either way. Without this, `held: false` would mean both "lost the race" and
+      // "has not ticked yet", which are different facts about a resident.
+      service.kernelLease?.acquire(Date.now())
       service.kernel.start()
       if (kernelRetryCount > 0) {
         service.noteEvent({ type: 'kernel-recovered', afterAttempts: kernelRetryCount })
       }
-      disposers.push(() => service.kernel?.stop())
+      disposers.push(() => {
+        service.kernel?.stop()
+        service.kernelLease?.release()
+      })
       return true
     }
 

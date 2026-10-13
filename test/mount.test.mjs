@@ -22,7 +22,7 @@ const { apply, inject, DenService, registerTools, createDeliver } = await import
 // One host fixture, shared with `roundtrip.test.mjs`. Two harnesses inventing their
 // own idea of the host is how a wrong shape gets agreed with instead of caught.
 const { fakeHost } = await import('./support/host.mjs')
-const { invokeAction } = await import('../src/panel-api.js')
+const { invokeAction, statusSnapshot } = await import('../src/panel-api.js')
 
 test('the plugin declares the web server its status route is mounted on', () => {
   assert.deepEqual(inject, ['agents', 'tools', 'webServer'])
@@ -355,9 +355,28 @@ test('state survival is measured rather than assumed: false on a first boot, tru
 
     const secondHost = fakeHost()
     apply(secondHost.ctx)
-    const second = secondHost.state.provided.get('den').status()
+    const secondService = secondHost.state.provided.get('den')
+    const second = secondService.status()
     assert.equal(second.stateSurvivesRestart, true, 'a second boot finds the state the first one left')
     assert.equal(second.stateCreatedAt, createdAt, 'and the creation time still names the first boot')
+
+    // Residency, in the same restart-shaped scene. The first instance is still **alive in this
+    // process**, so it still holds the lease and the second stands down. That is the honest
+    // answer here rather than a modelling artefact: a lease is released when its holder goes
+    // away, and this holder has not gone anywhere. In production the old process is dead, and a
+    // dead owner is reclaimed on the first claim instead of waiting out the staleness window —
+    // covered where a dead pid can be faked, in kernel.test.mjs.
+    assert.equal(first.residency?.held, true, 'the first boot holds residency')
+    assert.equal(second.residency?.held, false, 'the second boot must stand down while the first holds it')
+    assert.equal(second.residency?.holderPid, first.residency?.pid, 'and must name the holder')
+    assert.equal(second.kernel?.running, true, 'standing down is not failing: the heartbeat still runs')
+
+    // And it has to survive the panel payload, which is built field by field rather than spread.
+    // A status field is invisible to the panel until it is named there, which is a defect this
+    // repository has already shipped once, so the plumbing is asserted and not assumed.
+    const snapshot = statusSnapshot(secondService, {})
+    assert.equal(snapshot.residency?.held, false, 'the panel payload has to carry residency')
+    assert.equal(snapshot.residency?.holderPid, first.residency?.pid, 'including who holds it')
   } finally {
     process.env.DSH_HOME = previousHome
     rmSync(home, { recursive: true, force: true })

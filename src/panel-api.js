@@ -53,6 +53,8 @@ export function statusSnapshot(service, { sessionId, nextTriggerAt } = {}) {
     kernel: status.kernel,
     /** Non-null while the heartbeat is waiting for a delivery path. */
     kernelDeferred: status.kernelDeferred ?? null,
+    /** Who holds residency over this state tree; `held: false` is a standby host, not a broken one. */
+    residency: status.residency ?? null,
     gate: { mounted: status.gate === 'mounted', recent: service.gateAudit(8) },
     scenarios: service.listScenarios?.() ?? [],
     recentEvents: status.recentEvents,

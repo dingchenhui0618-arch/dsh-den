@@ -84,6 +84,7 @@ window.__ModuleLoader__.load({
         scheduleCreateHint: 'Not a permission grant: each run still re-checks autonomy, budget and quiet hours.',
         dueNow: 'due now',
         kernelWaiting: 'waiting for a delivery path',
+        kernelStandby: 'standby - another host on this home holds residency',
         kernelGaveUp: 'gave up after',
         attempts: 'attempts',
         footNote:
@@ -130,6 +131,7 @@ window.__ModuleLoader__.load({
         scheduleCreateHint: '这不是权限授予：每次运行仍会重新检查授权、预算与免打扰时段。',
         dueNow: '待触发',
         kernelWaiting: '等待投递通道',
+        kernelStandby: '待命 —— 同一 home 上另一个宿主持有驻留权',
         kernelGaveUp: '已放弃，尝试',
         attempts: '次',
         footNote: '授予授权需要人类证据。面板只生成一次性令牌，真正的写入发生在对话里。',
@@ -420,6 +422,13 @@ window.__ModuleLoader__.load({
         var kernelTone = 'success'
         if (d.kernel && d.kernel.running) {
           kernelValue = t('kernelOn') + ' · ' + t('lastTick') + ' ' + fmtTime(d.kernel.lastTickAt, t)
+          // Standing down is not failing. A host that is running and deliberately not delivering
+          // is the correct state when another host holds residency, and reporting it as an error
+          // would send the operator hunting a fault that is not there.
+          if (d.residency && d.residency.held === false) {
+            kernelTone = 'warn'
+            kernelValue = t('kernelStandby') + (d.residency.holderPid ? ' (pid ' + String(d.residency.holderPid) + ')' : '')
+          }
         } else if (d.kernelDeferred) {
           // The heartbeat being absent is the single most important thing this
           // panel can report: it means the assistant is not resident.

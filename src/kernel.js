@@ -206,12 +206,21 @@ export class DenKernel {
    *   Reads a transcript *without* starting a driver. Used for the authority check, so
    *   a refusal costs nothing; `resolveAgent` is only consulted once a wake is admitted.
    */
-  constructor({ service, deliver, onEvent, tickSeconds = 60, resolveAgent = null, resolveSession = null }) {
+  constructor({
+    service,
+    deliver,
+    onEvent,
+    tickSeconds = 60,
+    resolveAgent = null,
+    resolveSession = null,
+    lease = null,
+  }) {
     this.service = service
     this.deliver = deliver
     this.onEvent = onEvent ?? (() => {})
     this.resolveAgent = resolveAgent
     this.resolveSession = resolveSession
+    this.lease = lease
     this.tickSeconds = Math.max(5, tickSeconds)
     this.timer = null
     this.running = false
@@ -272,6 +281,23 @@ export class DenKernel {
     this.running = true
     this.lastTickAt = now
     try {
+      // One state tree, one resident. Nothing about `dueTriggers` is a claim — it is a read —
+      // and the delivery sits between that read and `markFired` with an `await` in the middle,
+      // so two hearts over one home deliver the same check-in twice. Measured, not reasoned:
+      // the second kernel's outcome was `spoke` and the conversation received it twice.
+      //
+      // The kernel still runs and still ticks; a host that cannot take the lease stands down
+      // for this tick and tries again on the next one. That is deliberate. A start-time lock
+      // would leave a window where *no* host holds residency, and a resident assistant that
+      // stopped delivering is worse than one that occasionally repeats itself.
+      if (this.lease) {
+        const held = this.lease.acquire(now)
+        if (!held) {
+          const holderPid = this.lease.holder?.pid ?? null
+          this.onEvent({ type: 'kernel-standby', holderPid })
+          return { due: dueTriggers(now).length, standby: true, holderPid, results: [] }
+        }
+      }
       return await this.#runDue({ agent, now })
     } finally {
       this.running = false
