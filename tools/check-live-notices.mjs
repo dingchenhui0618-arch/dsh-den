@@ -23,6 +23,7 @@ import { join } from 'node:path'
 
 import { denPath } from '../src/atom.js'
 import { NOTICE_TTL_MS, noticeId, queueNotice } from '../src/notices.js'
+import { finish, routeValue } from './lib/route-client.mjs'
 
 const portArg = process.argv.indexOf('--port')
 const PORT = portArg >= 0 ? Number(process.argv[portArg + 1]) : 19387
@@ -38,14 +39,7 @@ function bad(label, detail) {
 }
 
 async function status() {
-  const res = await fetch(`http://127.0.0.1:${PORT}/dsh-den`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action: 'status', sessionId: SYNTHETIC }),
-  })
-  const text = await res.text()
-  if (res.status !== 200) throw new Error(`route answered ${res.status}: ${text.slice(0, 160)}`)
-  return JSON.parse(text).value
+  return routeValue({ port: PORT, action: 'status', input: { sessionId: SYNTHETIC } })
 }
 
 console.log(`dsh-den live notice-expiry probe -> http://127.0.0.1:${PORT}/dsh-den\n`)
@@ -184,8 +178,9 @@ try {
 console.log('')
 if (problems.length === 0) {
   console.log('RESULT: PASS — the expiry rule works on the running host, in the host’s own directory.')
-  process.exit(0)
+  finish(0)
+} else {
+  console.log(`RESULT: FAIL — ${problems.length} problem(s):`)
+  for (const p of problems) console.log(`  - ${p.label}: ${p.detail}`)
+  finish(1)
 }
-console.log(`RESULT: FAIL — ${problems.length} problem(s):`)
-for (const p of problems) console.log(`  - ${p.label}: ${p.detail}`)
-process.exit(1)

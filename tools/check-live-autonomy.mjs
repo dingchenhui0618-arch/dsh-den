@@ -23,6 +23,8 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
+import { callRoute, finish } from './lib/route-client.mjs'
+
 const ROUTE = '/dsh-den'
 const portArg = process.argv.indexOf('--port')
 const PORT = portArg >= 0 ? Number(process.argv[portArg + 1]) : 19387
@@ -41,19 +43,11 @@ function bad(label, detail) {
 }
 
 async function post(body) {
-  const res = await fetch(`http://127.0.0.1:${PORT}${ROUTE}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  const text = await res.text()
-  let parsed
-  try {
-    parsed = JSON.parse(text)
-  } catch {
-    throw new Error(`${ROUTE} did not answer JSON (status ${res.status}): ${text.slice(0, 200)}`)
+  const answer = await callRoute({ port: PORT, route: ROUTE, action: body.action, input: body })
+  if (!answer.envelope) {
+    throw new Error(`${ROUTE} did not answer JSON (status ${answer.status}): ${answer.body.slice(0, 200)}`)
   }
-  return { status: res.status, envelope: parsed }
+  return { status: answer.status, envelope: answer.envelope }
 }
 
 /** A session name that cannot be a real conversation. */
@@ -73,6 +67,13 @@ console.log(`dsh-den live autonomy probe -> http://127.0.0.1:${PORT}${ROUTE}\n`)
   if (status !== 200 || envelope.ok !== true) {
     bad('the route answers', `status ${status}, ok ${envelope.ok}`)
     console.log('\nRESULT: FAIL — the host did not serve this tree, so no claim below is supported.')
+    // `process.exit(1)` is right here and wrong at the end of a probe, and the difference is
+    // whether a handle is still open. The crash this file was fixed for came from undici's
+    // global keep-alive pool closing underneath the exit; this probe now uses `node:http`
+    // with `agent: false`, and this guard runs after that one request has already answered
+    // and closed. Stopping immediately is the point — running the rest of the checks against
+    // a host that did not answer would bury the real cause under a cascade of invented ones.
+    // The normal endings below use `finish()`, which lets the loop drain.
     process.exit(1)
   }
   ok('the route answers', 'HTTP 200 with a well-formed envelope')
@@ -174,8 +175,9 @@ console.log('')
 if (problems.length === 0) {
   console.log('RESULT: PASS — an agent cannot obtain standing autonomy from the live host.')
   console.log('        What an *admitted* wake does is still unverified; that needs a human.')
-  process.exit(0)
+  finish(0)
+} else {
+  console.log(`RESULT: FAIL — ${problems.length} problem(s):`)
+  for (const p of problems) console.log(`  - ${p.label}: ${p.detail}`)
+  finish(1)
 }
-console.log(`RESULT: FAIL — ${problems.length} problem(s):`)
-for (const p of problems) console.log(`  - ${p.label}: ${p.detail}`)
-process.exit(1)

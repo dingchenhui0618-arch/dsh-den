@@ -22,6 +22,7 @@ import { join } from 'node:path'
 
 import { denPath } from '../src/atom.js'
 import { entriesFor, forget, recall, remember, scenarios } from '../src/memory.js'
+import { finish, routeValue } from './lib/route-client.mjs'
 
 const portArg = process.argv.indexOf('--port')
 const PORT = portArg >= 0 ? Number(process.argv[portArg + 1]) : 19387
@@ -36,13 +37,7 @@ function bad(label, detail) {
 }
 
 async function hostScenarios() {
-  const res = await fetch(`http://127.0.0.1:${PORT}/dsh-den`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action: 'status' }),
-  })
-  if (res.status !== 200) throw new Error(`route answered ${res.status}`)
-  const value = JSON.parse(await res.text()).value
+  const value = await routeValue({ port: PORT, action: 'status' })
   return Array.isArray(value?.scenarios) ? value.scenarios.map((s) => s.scenario) : null
 }
 
@@ -211,8 +206,9 @@ try {
 console.log('')
 if (problems.length === 0) {
   console.log('RESULT: PASS — scenario isolation holds, and the running host reads the same store.')
-  process.exit(0)
+  finish(0)
+} else {
+  console.log(`RESULT: FAIL — ${problems.length} problem(s):`)
+  for (const p of problems) console.log(`  - ${p.label}: ${p.detail}`)
+  finish(1)
 }
-console.log(`RESULT: FAIL — ${problems.length} problem(s):`)
-for (const p of problems) console.log(`  - ${p.label}: ${p.detail}`)
-process.exit(1)
