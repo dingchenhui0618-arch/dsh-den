@@ -38,7 +38,7 @@ export const MAX_ENTRY_CHARS = 4000
 /** Recall never returns more than this many characters, so it cannot flood a prompt. */
 export const MAX_RECALL_CHARS = 6000
 
-/** How many entries recall considers before scoring. */
+/** How many entries recall considers before scoring. The newest ones, not the last ones in the file. */
 const CANDIDATE_LIMIT = 200
 
 export const ENTRY_KINDS = ['fact', 'preference', 'decision', 'open-thread']
@@ -165,13 +165,14 @@ export function remember(scenario, text, kind = 'fact', { source = null } = {}) 
   let entries
   let created
   if (existing) {
-    // Re-learning the same fact refreshes it instead of duplicating it.
-    entries = store.entries.map((entry) => (entry.id === id ? { ...entry, createdAt: now, recalls: entry.recalls ?? 0 } : entry))
+    // Re-learning the same fact refreshes it instead of duplicating it. It keeps its position in the
+    // file, which is why recall cannot use file order to decide what is recent.
+    entries = store.entries.map((entry) => (entry.id === id ? { ...entry, createdAt: now } : entry))
     created = false
   } else {
     entries = [
       ...store.entries,
-      { id, kind, text: body, createdAt: now, source: source ? String(source).slice(0, 200) : null, recalls: 0 },
+      { id, kind, text: body, createdAt: now, source: source ? String(source).slice(0, 200) : null },
     ]
     created = true
   }
@@ -233,15 +234,30 @@ export function scenarios() {
  * small recency bonus breaks ties so that two equally relevant memories resolve
  * to the more recent one rather than to file order.
  *
- * @returns {{ entries: object[], considered: number, truncated: boolean, chars: number }}
+ * Only the `CANDIDATE_LIMIT` newest entries are scored, so an entry older than the
+ * whole window is unreachable no matter how well it matches. That bound is real and
+ * is not hidden: `considered`, `scored` and `stored` together say exactly how much
+ * of the scenario was looked at, and `stored - considered` is what the window left
+ * out. Ordering the window by `createdAt` rather than by file position matters
+ * because `remember` refreshes a re-learned fact in place: file order and recency
+ * disagree, and the disagreement lands on exactly the memories a human reinforced.
+ *
+ * @returns {{ entries: object[], considered: number, scored: number, stored: number,
+ *   truncated: boolean, chars: number }}
  */
 export function recall(scenario, query, { limit = 8, maxChars = MAX_RECALL_CHARS, now = Date.now() } = {}) {
   const name = normalizeScenario(scenario)
   const { store } = readScenario(name)
   const queryTokens = new Set(tokenize(query))
 
+  // The newest entries, not the last ones in the file. `entriesFor` documents the store as "newest
+  // first" and the eviction sort agrees; before this, recall was the one reader that used position.
+  const candidates = [...store.entries]
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, CANDIDATE_LIMIT)
+
   const scored = []
-  for (const entry of store.entries.slice(-CANDIDATE_LIMIT)) {
+  for (const entry of candidates) {
     const entryTokens = tokenize(entry.text)
     if (entryTokens.length === 0) continue
 
@@ -282,7 +298,14 @@ export function recall(scenario, query, { limit = 8, maxChars = MAX_RECALL_CHARS
     chosen.push({ ...item.entry, score: Number(item.score.toFixed(4)) })
   }
 
-  return { entries: chosen, considered: scored.length, truncated, chars }
+  return {
+    entries: chosen,
+    considered: candidates.length,
+    scored: scored.length,
+    stored: store.entries.length,
+    truncated,
+    chars,
+  }
 }
 
 /**

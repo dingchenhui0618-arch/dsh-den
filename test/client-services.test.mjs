@@ -147,7 +147,7 @@ test('every service the bundle reads off ctx is declared in inject', () => {
   // Spelled out, so a rename in the bundle cannot silently empty the check above.
   assert.deepEqual(
     [...reads].sort(),
-    ['locale', 'sessions', 'slots'],
+    ['locale', 'slots'],
     'the bundle reads exactly these services; update this list deliberately, not incidentally',
   )
 })
@@ -195,12 +195,17 @@ test('the client reaches the host the way every other plugin here does', () => {
   assert.match(code, /fetch\(API/, 'the host is reached with a plain fetch')
 })
 
-test('the bundle declares sessions, which it reads for the active conversation', () => {
-  // Autonomy and schedules are scoped per conversation, so this value decides which
-  // conversation a panel action targets. It must come from a declared service.
-  assert.match(bundle, /ctx\.sessions/, 'the fallback path reads ctx.sessions')
+test('the conversation comes from the seat that binds one, not from a guessed service', () => {
+  // This test used to require the opposite. It asserted the bundle matched /ctx\.sessions/ and that
+  // `sessions` was declared, on the belief that the active conversation could be discovered from the
+  // sessions service. The live catalog says that service has no `current()` and no `activeId()`, so the
+  // path it was pinning could only ever return null - a green test holding a dead path in place. That
+  // is the same shape as the double written from the code's own assumption, and it is worse, because
+  // it also gave the dead path a reason to stay.
   assert.ok(
-    declaredInject().includes('sessions'),
-    'and therefore sessions must be declared, because the shell catalog lists it',
+    !bundle.includes('ctx.sessions'),
+    'the bundle does not probe a sessions method the live service does not have',
   )
+  assert.ok(!declaredInject().includes('sessions'), 'so it does not declare a service it never reads')
+  assert.match(bundle, /conversation\.input\.dock/, 'it registers into the session-scoped composer dock')
 })

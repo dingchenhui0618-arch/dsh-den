@@ -202,6 +202,60 @@ test('CJK text is recalled without a segmenter', () => {
   assert.match(result.entries[0].text, /花生/)
 })
 
+// ---------------------------------------------------------------- THE WINDOW
+
+test('a memory re-learned after the scenario outgrew the window is still recalled', () => {
+  // The defect this pins, measured: `remember` refreshes a re-learned fact's `createdAt` *in place*,
+  // and recall used to score `entries.slice(-200)` - the last two hundred in file order. So the one
+  // memory that was reinforced most recently kept its original position, fell out of the window, and
+  // became unreachable: `entriesFor()[0]` said it was the newest thing in the scenario while
+  // `recall` returned nothing. The entries most likely to be lost that way are exactly the ones a
+  // human bothered to say twice.
+  const needle = remember('window', 'the zephyrine departure gate is the one nearest the annex')
+  // A control that lives *outside* the window once the scenario grows, and matches its query on a
+  // token no filler shares - so its absence can only be explained by the window, not by scoring.
+  const oldest = remember('window', 'the retired quokka marker is documented in the annex')
+  for (let index = 0; index < 250; index += 1) {
+    remember('window', `filler entry ${index} about unrelated widget calibration`)
+  }
+  const relearned = remember('window', 'the zephyrine departure gate is the one nearest the annex')
+
+  assert.equal(relearned.created, false, 'the same text must refresh rather than duplicate')
+  assert.equal(entriesFor('window')[0].id, needle.id, 'it is the newest entry by createdAt')
+
+  const found = recall('window', 'zephyrine departure gate annex')
+  assert.ok(
+    found.entries.some((entry) => entry.id === needle.id),
+    `the newest memory in the scenario must be reachable, got ${JSON.stringify(found.entries.map((e) => e.id))}`,
+  )
+
+  // The reverse control: the window still bounds the work. `oldest` matches its query perfectly and
+  // is now the oldest by createdAt, so "consider every entry" would also pass this test without it.
+  const outside = recall('window', 'retired quokka marker annex')
+  assert.ok(
+    !outside.entries.some((entry) => entry.id === oldest.id),
+    'an entry older than the whole window is not scored, and that bound must still hold',
+  )
+})
+
+test('recall reports how many entries it looked at, separately from how many matched', () => {
+  // `considered` used to be `scored.length`: the number that *matched*, reported under a name that
+  // promises the number *looked at*. A query sharing no tokens with most of a scenario printed
+  // `considered: 0` while two hundred entries had in fact been scored, which is the opposite of what
+  // a caller reads it for.
+  for (let index = 0; index < 250; index += 1) {
+    remember('accounting', `filler entry ${index} about unrelated widget calibration`)
+  }
+  const result = recall('accounting', 'zephyrine')
+  assert.equal(result.considered, 200, 'the window, not the match count')
+  assert.equal(result.stored, 250, 'and the scenario is bigger than the window, which is now visible')
+  assert.equal(result.scored, 0, 'nothing matched, which is a different fact')
+
+  const matched = recall('accounting', 'widget calibration')
+  assert.equal(matched.considered, 200)
+  assert.ok(matched.scored > 0, 'the match count is still reported, under its own name')
+})
+
 // ---------------------------------------------------------------- PRUNING
 
 test('the entry cap holds and eviction is reported', () => {

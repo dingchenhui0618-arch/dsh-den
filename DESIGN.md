@@ -1022,7 +1022,58 @@ created
 
 三次移除式证伪各自只让对应的新钉子失败,全部按 sha256 还原。这也顺手回答了上轮那个悬案的另一半:**这一轮没有再复现**,所以不敢说并发缺陷已找到——只能说,它下次出现时会**带着原因出现**,而不是再变成一个 30 秒的谜。
 
-- `dsh-muse`、`dsh-bot` 只作**只读参考**，不 fork、不复制代码进本仓库。
+### 2.22 刚学到的东西,恰恰最先搜不到
+
+`remember` 对同一条事实是**原地刷新** `createdAt`——这是写明的契约(「re-learning the same fact refreshes it」)。而 `recall` 打分的候选是 `store.entries.slice(-CANDIDATE_LIMIT)`,即**文件顺序**的后 200 条。两者读的「最近」不是同一个东西:`entriesFor` 的文档说仓库是 `newest first`(按 `createdAt`),淘汰排序也按 `createdAt`,**只有 recall 一个人按位置**。
+
+后果:一条被重复reinforce 的记忆留在它最初写入的位置,于是它可以是**整个场景里最新的一条**(`entriesFor()[0]` 就是它),同时**落在候选窗口之外、永久搜不到**。而 `den_scenarios` 照样报着 `entries: 250`。
+
+量出来的(`_tmp_dsh_probe/memory-window-probe.mjs`,250 条,针在最前):
+
+| | 修前 | 修后 |
+| --- | --- | --- |
+| 针是场景里最新的一条(`entriesFor()[0].id == 针`) | 是 | 是 |
+| 针的文件位置 | 0 / 250 | 0 / 250 |
+| `recall` 找得到它 | **否** | **是** |
+| `recall` 报的 `considered` | **0** | **200** |
+| 对照:窗口内的条目找得到 | 是 | 是 |
+
+在 7×24 的场景下这个方向是反的:被说得越多遍的记忆,越可能先消失。
+
+**修法有两半,第二半才是关键。** 候选按 `createdAt` 取最新 200——那条看似已够。但窗口本身**会静默丢掉内容**,所以返回里必须让它可见:`considered` 由「打分过的条数」改成它名字说的「看过的条数」,并新增 `scored`(匹配数)与 `stored`(场景总数),`den_recall` 原样带出。**窗口没有取消**:500 条全打分是一个成本上界,而窗口外的条目正是淘汰的下一个候选;取消它会让「按 createdAt 取最新」和「全都看」变成同一件事,这条测试就再也分不清对错了。
+
+所以测试是**双向钉的**:同一场景里,最新的那条必须能找到,**最老的那条必须找不到**——后者用一个「独占 token 且完美匹配查询」的条目,它的缺席只能由窗口解释。实测:把窗口退回文件顺序 → 最新那条找不到(单向);**把窗口取消 → 最老那条反而被找到**,同一测试从另一侧失败。两个方向都不是「一律通过」。
+
+**顺手清掉一个只写不读的字段。** 每条记忆都带 `recalls: 0`,`remember` 的两条分支都写它,而全仓库**没有任何地方读过**(`src/`、`src/client/`、`test/`、`tools/` 都查过)。它叫「被回忆过几次」却永远是 0——又一个「以一个从未发生的事件命名的字段」。真正的实现要么让 `recall` 变成写操作(代价、非幂等、和「确定性只读检索」的承诺冲突),要么删掉它。删掉。
+
+### 2.23 证伪器自己会假绿
+
+三条移除式证伪第一遍**全部报通过**——而其中一条(把候选退回文件顺序)在同一份源码上单独跑时**确实失败**。原因不在被测代码,在**我自己的命令行**:`--test-name-pattern=$c.p` 没有加引号,PowerShell 把带空格的模式拆成了多个参数,真正的模式只剩第一个词。测试确实跑了、也确实是那一条,可它报的是「通过」——**一个因为命令写坏而变绿的证伪器,比没有证伪器更糟**:它制造出的正是它本该排除的信心。
+
+规矩是:证伪器必须在**变异落盘之后**再跑,并断言**恰好跑了 1 条测试、且就是那一条**。重做后三条各自 `tests 1 / fail 1`,失败者与变异一一对应,源码按 sha256 还原。
+
+### 2.24 面板把授予控件挂在了一个壳明确不绑定会话的座位上
+
+用户的截图暴露了它:面板上「Standing autonomy」写着 **unknown for this view**,底下 **no active conversation — autonomy is per conversation**,而**当时有活跃会话**。「新建自检」也是灰的。也就是说**能力 1 的人类因子在已发布的 UI 里根本走不通**:面板是唯一能 mint 令牌的地方,而它拿不到会话 id。
+
+**三个独立来源指向同一个结论,而且它们都不是猜的。**
+
+1. **活页面的槽目录**(client `Slots`,`root: main`)原话:*"The reserved `conversation` key hosts the Conversation; **other keys receive no Session binding.**"* 而它的 `standardProps` 是 `useResource`/`useWorkspaces`/`usePanelInfo`/`useSessions`/`useSessionStatus`/`useSessionRetainInfo`——**没有 `sessionId`**,`ownerProps` 是 `[]`。我的面板注册在非保留键 `dsh-den.status` 上,所以壳**按设计**不给它会话。
+2. **活页面的 `sessions` 服务契约**:方法只有 `retain`/`using`/`retainInfo`/`refreshProjections`/`search`/`fork`/`scope`/`binding`——**没有 `current()`,也没有 `activeId()`**。我代码里的两条回退读的是两个不存在的方法。
+3. **整个 21 个项目的插件生态**(含参考实现 `dsh-bot`):**没有任何插件用 `activeId`/`currentId` 找活跃会话**;唯三的出现全在**我自己的代码和我自己写的测试替身**里(`check-client-interaction.mjs` 喂 `{activeId:'session-active'}`)。`dsh-bot` 的槽组件签名是 `({sessionId, useSession, useConversation, useSessions, renderFactorySlot})`——**`sessionId` 是 prop**,而 `useSessions` 是**带 selector 的 hook**(`useSessions(s => s.byId[sessionId]?.blank)`),我却把它当零参调用。
+
+**更糟的是有一个测试把缺陷钉住了。** `test/client-services.test.mjs` 里那条 `'the bundle declares sessions, which it reads for the active conversation'` **要求** bundle 匹配 `/ctx\.sessions/`、**要求** `sessions` 被声明。它不是同谋,它是**给死路发了一张长期许可证**:代码删不掉,因为删了测试就红。那条测试现在改成反向断言(不得探测不存在的方法、不得声明不读的服务、必须注册到会话作用域的座位上)。
+
+**修法:控件搬到真的会给会话的座位上。** 活页面目录量到 `conversation.input.dock`:`scope: session`、`replaceRisk: none`、`standardProps` 明确含 **`sessionId: SessionId`**、`ownerProps` 是 `InputZone { session, input }`,而且是**全宽、就在输入框上方**——令牌生成后正好在它下面粘贴,而授权本来就必须由人类消息携带令牌才成立,所以控件结束的地方正是证据开始的地方。
+
+**顺手修掉第二个同样死掉的控件。** 截图里灰掉的「新建自检」不是样式问题:`schedules/create` 要求会话,而 `main` 里 `sessionId` 恒为 null,按钮恒 disabled——一个永远点不动的控件。自检块被抽成一个函数,状态页只显示列表并指出表单在哪,输入框上方的座位显示表单。
+
+**座位 id 也必须自己起**:目录写明 *"a fresh id is added beside the shipped entries, while reusing a shipped id puts you in THAT cell and replaces it"*,而那个座位上已经有 `todo`/`goal`/`queue` 三个壳自己的条目。所以用 `dsh-den-grant`,并把「不得复用壳的 id」也写成断言。
+
+新增断言里有一条是**为自己写的**:「状态页不得渲染授予按钮」不能靠找字符串——页面文案里本来就有「授予」两个字,所以它检查的是**按钮**。第一版就是找字符串,于是报了一个假红。
+
+
+
 - 借鉴的是**机制与教训**（授权绑定、keeper 重新武装、TTL、多域隔离），实现代码自己写。
 - 两者均为 MIT；本项目同样 MIT，若未来复制其代码片段须保留原始版权声明。
 

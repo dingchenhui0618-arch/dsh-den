@@ -29,6 +29,9 @@ window.__ModuleLoader__.load({
     var NS = 'dsh.den'
     /* Sidebar entry id and main-panel key. These MUST be the same value. */
     var PANEL_KEY = 'dsh-den.status'
+    /** Its own seat in the composer dock: a fresh id adds an entry rather than replacing the shell's. */
+    var GRANT_KEY = 'dsh-den-grant'
+    var GRANT_ORDER = 15
     /**
      * The host route. Must equal the `path` the host hands to `webServer.register`,
      * which is `/<package name>` by the convention every client plugin here follows
@@ -71,9 +74,14 @@ window.__ModuleLoader__.load({
         working: 'working…',
         autonomyGrant: 'Grant',
         autonomyRevoke: 'Revoke',
-        autonomyNoSession: 'no active conversation — autonomy is per conversation',
+        autonomyNoSession:
+          'this page has no conversation bound to it — grant from the control above the message box',
+        grantDock: 'Standing autonomy · this conversation',
+        grantDockGranted: 'granted for this conversation',
+        grantDockNotGranted: 'not granted for this conversation',
+        grantDockUnknown: 'state unknown',
         autonomyTokenHint:
-          'Paste this token to the assistant in the conversation; it will grant access with this message as proof. The token is single-use and expires.',
+          'Paste this token to the assistant as your next message; it will grant access with that message as proof. The token is single-use and expires.',
         autonomyCopied: 'token ready',
         schedules: 'Self-checks',
         scheduleNone: 'none — the den will not wake on its own',
@@ -81,6 +89,7 @@ window.__ModuleLoader__.load({
         schedulePrompt: 'What to check',
         scheduleMinutes: 'Every (minutes)',
         scheduleAdd: 'Add self-check',
+        scheduleAddElsewhere: 'add one from the control above the message box',
         scheduleRemove: 'remove',
         scheduleCreateHint: 'Not a permission grant: each run still re-checks autonomy, budget and quiet hours.',
         dueNow: 'due now',
@@ -89,7 +98,7 @@ window.__ModuleLoader__.load({
         kernelGaveUp: 'gave up after',
         attempts: 'attempts',
         footNote:
-          'Granting autonomy needs human evidence. The panel mints a single-use token; the write happens in the conversation.',
+          'Granting autonomy needs human evidence, and it is granted per conversation — so the control sits above the message box, where the shell hands the panel a real session id. This page is registered into `main`, which the shell documents as giving no Session binding to any key but the reserved `conversation`, so it cannot mint a token for a conversation it cannot name.',
       },
       zh: {
         nav: 'Den',
@@ -120,15 +129,20 @@ window.__ModuleLoader__.load({
         working: '处理中…',
         autonomyGrant: '授予',
         autonomyRevoke: '撤销',
-        autonomyNoSession: '没有活动会话 —— 授权是按会话授予的',
+        autonomyNoSession: '这个页面没有被绑定任何会话 —— 请到输入框上方的控件里授予',
+        grantDock: '常驻自治 · 本会话',
+        grantDockGranted: '本会话已授予',
+        grantDockNotGranted: '本会话未授予',
+        grantDockUnknown: '状态未知',
         autonomyTokenHint:
-          '把这个令牌交给对话里的助理，它会以你这条消息作为证据完成写入。令牌一次性有效并会过期。',
+          '把这个令牌作为你的下一条消息发给助理，它会以那条消息作为证据完成写入。令牌一次性有效并会过期。',
         schedules: '自检',
         scheduleNone: '无 —— 助理不会自己醒来',
         scheduleTitle: '名称',
         schedulePrompt: '检查什么',
         scheduleMinutes: '每（分钟）',
         scheduleAdd: '新建自检',
+        scheduleAddElsewhere: '请到输入框上方的控件里新建',
         scheduleRemove: '删除',
         scheduleCreateHint: '这不是权限授予：每次运行仍会重新检查授权、预算与免打扰时段。',
         dueNow: '待触发',
@@ -136,7 +150,8 @@ window.__ModuleLoader__.load({
         kernelStandby: '待命 —— 同一 home 上另一个宿主持有驻留权',
         kernelGaveUp: '已放弃，尝试',
         attempts: '次',
-        footNote: '授予授权需要人类证据。面板只生成一次性令牌，真正的写入发生在对话里。',
+        footNote:
+          '授予授权需要人类证据，而且是按会话授予的 —— 所以控件挂在输入框上方，那里壳会把真实的会话 id 交给面板。本页注册在 `main` 上，而壳自己写明：除保留键 `conversation` 外，其它键都不带会话绑定，所以它无法为一个自己叫不出名字的会话 mint 令牌。',
       },
     }
 
@@ -267,6 +282,14 @@ window.__ModuleLoader__.load({
 
       var sessionId = props.sessionId
       var act = props.act
+      /**
+       * Compact mode renders only what needs a conversation, for the dock above the message box.
+       *
+       * The seat is `conversation.input.dock`: session-scoped, full width, `replaceRisk: none`, and
+       * its live catalog lists `sessionId: SessionId` among the standard props. That is the whole
+       * reason the control can work at all - a status page in `main` has no conversation to name.
+       */
+      var compact = !!props.compact
 
       var load = React.useCallback(function () {
         setView(function (prev) {
@@ -375,6 +398,133 @@ window.__ModuleLoader__.load({
 
       var d = view.data
       var busy = action.busy !== null
+
+      /**
+       * The self-check block, shared by both seats because it has the same problem as the grant: a
+       * self-check belongs to a conversation (`schedules/create` refuses without one), so the form is
+       * only useful where a conversation is known. The status page shows the list and says where the
+       * form is; the dock above the message box shows both.
+       */
+      function schedulesBlock(withForm) {
+        return React.createElement(
+          'div',
+          { style: { marginTop: 14, paddingTop: 10, borderTop: '1px solid var(--dsw-alias-border-l2)' } },
+          React.createElement('div', { style: { fontSize: 13, color: 'var(--dsw-alias-label-primary)', marginBottom: 4 } }, t('schedules')),
+          sched.list.length === 0
+            ? React.createElement('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)' } }, t('scheduleNone'))
+            : React.createElement(
+                'div',
+                null,
+                sched.list.map(function (item) {
+                  return React.createElement(
+                    'div',
+                    { key: item.id, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '3px 0' } },
+                    React.createElement(
+                      'span',
+                      { style: { fontSize: 12, color: 'var(--dsw-alias-label-primary)' } },
+                      item.title + (item.dueNow ? ' · ' + t('dueNow') : ''),
+                    ),
+                    React.createElement(Button, {
+                      disabled: busy || !sessionId,
+                      onClick: function () { onRemoveSchedule(item.id) },
+                    }, t('scheduleRemove')),
+                  )
+                }),
+              ),
+          withForm
+            ? React.createElement(
+                'div',
+                null,
+                React.createElement(Field, {
+                  label: t('scheduleTitle'),
+                  value: form.title,
+                  onChange: function (value) { setForm({ title: value, prompt: form.prompt, minutes: form.minutes }) },
+                }),
+                React.createElement(Field, {
+                  label: t('schedulePrompt'),
+                  value: form.prompt,
+                  onChange: function (value) { setForm({ title: form.title, prompt: value, minutes: form.minutes }) },
+                }),
+                React.createElement(Field, {
+                  label: t('scheduleMinutes'),
+                  type: 'number',
+                  value: form.minutes,
+                  onChange: function (value) { setForm({ title: form.title, prompt: form.prompt, minutes: value }) },
+                }),
+                React.createElement(Button, {
+                  primary: true,
+                  disabled: busy || !sessionId,
+                  onClick: onAddSchedule,
+                }, t('scheduleAdd')),
+                React.createElement(
+                  'div',
+                  { style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)', marginTop: 4 } },
+                  t('scheduleCreateHint'),
+                ),
+              )
+            : React.createElement(
+                'div',
+                { style: { fontSize: 12, color: 'var(--dsw-alias-state-warn-primary)' } },
+                t('scheduleAddElsewhere'),
+              ),
+        )
+      }
+
+      /**
+       * Compact mode: only the controls that need a conversation, in the seat that supplies one.
+       *
+       * The minted token is shown here rather than anywhere else because this strip sits directly
+       * above the message box, which is where the human has to paste it - the grant is not complete
+       * until a human message carries the token, so the control ends where the evidence begins.
+       */
+      if (compact) {
+        var known = Boolean(d) && d.autonomyKnown !== false
+        var granted = known && Boolean(d.autonomy)
+        return React.createElement(
+          'div',
+          null,
+          React.createElement(
+            'div',
+            {
+              style: {
+                display: 'flex',
+                alignItems: 'baseline',
+                flexWrap: 'wrap',
+                gap: 8,
+                padding: '8px 10px',
+                fontSize: 12,
+                color: 'var(--dsw-alias-label-secondary)',
+              },
+            },
+          React.createElement('span', { style: { color: 'var(--dsw-alias-label-primary)' } }, t('grantDock')),
+          React.createElement('span', null, !known ? t('grantDockUnknown') : granted ? t('grantDockGranted') : t('grantDockNotGranted')),
+          React.createElement(Button, {
+            primary: !granted,
+            disabled: busy || !sessionId,
+            onClick: function () { onGrant(true) },
+          }, t('autonomyGrant')),
+          React.createElement(Button, {
+            disabled: busy || !sessionId,
+            onClick: function () { onGrant(false) },
+          }, t('autonomyRevoke')),
+          action.token
+            ? React.createElement(
+                'code',
+                { style: { padding: '2px 6px', borderRadius: 4, background: 'var(--dsw-alias-bg-layer-2)', userSelect: 'all' } },
+                action.token,
+              )
+            : null,
+          action.token
+            ? React.createElement('span', { style: { flexBasis: '100%' } }, t('autonomyTokenHint'))
+            : null,
+          action.error
+            ? React.createElement('span', { style: { flexBasis: '100%', color: 'var(--dsw-alias-state-warn-primary)' } }, action.error)
+            : null,
+          ),
+          schedulesBlock(true),
+        )
+      }
+
       var children = [React.createElement('h2', { key: 'h', style: { margin: '0 0 4px', fontSize: 16, color: 'var(--dsw-alias-label-primary)' } }, t('title'))]
 
       if (view.phase === 'error') {
@@ -492,79 +642,23 @@ window.__ModuleLoader__.load({
 
         /* ------------------------------------------------------- controls */
 
+        // Compact mode returned above, so this page is never the one holding a conversation - and it
+        // should not pretend otherwise. `main` is root-scoped and keyed, and its own catalog says only
+        // the reserved `conversation` key receives a Session binding. The old version tried to discover
+        // one anyway through `props.useSessions()` (a selector hook, called with no selector) and the
+        // `sessions.current()` / `sessions.activeId()` pair - methods the live service does not
+        // have, so all three returned nothing while a test double written from the same assumption
+        // said success. The token `ctx` is deliberately absent here: the bundle check greps the
+        // source for `ctx.<service>` to prove every service read is declared, and a comment is not a read.
         children.push(
           React.createElement(
             'div',
-            { key: 'grant', style: { marginTop: 14, paddingTop: 10, borderTop: '1px solid var(--dsw-alias-border-l2)' } },
-            React.createElement(Button, {
-              primary: true,
-              disabled: busy || !sessionId,
-              onClick: function () { onGrant(true) },
-            }, t('autonomyGrant')),
-            React.createElement(Button, {
-              disabled: busy || !sessionId,
-              onClick: function () { onGrant(false) },
-            }, t('autonomyRevoke')),
-            !sessionId
-              ? React.createElement('div', { style: { fontSize: 12, color: 'var(--dsw-alias-state-warn-primary)', marginTop: 4 } }, t('autonomyNoSession'))
-              : null,
+            { key: 'grant-where', style: { marginTop: 14, paddingTop: 10, borderTop: '1px solid var(--dsw-alias-border-l2)', fontSize: 12, color: 'var(--dsw-alias-state-warn-primary)' } },
+            t('autonomyNoSession'),
           ),
         )
 
-        children.push(
-          React.createElement(
-            'div',
-            { key: 'sched', style: { marginTop: 14, paddingTop: 10, borderTop: '1px solid var(--dsw-alias-border-l2)' } },
-            React.createElement('div', { style: { fontSize: 13, color: 'var(--dsw-alias-label-primary)', marginBottom: 4 } }, t('schedules')),
-            sched.list.length === 0
-              ? React.createElement('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)' } }, t('scheduleNone'))
-              : React.createElement(
-                  'div',
-                  null,
-                  sched.list.map(function (item) {
-                    return React.createElement(
-                      'div',
-                      { key: item.id, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '3px 0' } },
-                      React.createElement(
-                        'span',
-                        { style: { fontSize: 12, color: 'var(--dsw-alias-label-primary)' } },
-                        item.title + (item.dueNow ? ' · ' + t('dueNow') : ''),
-                      ),
-                      React.createElement(Button, {
-                        disabled: busy,
-                        onClick: function () { onRemoveSchedule(item.id) },
-                      }, t('scheduleRemove')),
-                    )
-                  }),
-                ),
-            React.createElement(Field, {
-              label: t('scheduleTitle'),
-              value: form.title,
-              onChange: function (value) { setForm({ title: value, prompt: form.prompt, minutes: form.minutes }) },
-            }),
-            React.createElement(Field, {
-              label: t('schedulePrompt'),
-              value: form.prompt,
-              onChange: function (value) { setForm({ title: form.title, prompt: value, minutes: form.minutes }) },
-            }),
-            React.createElement(Field, {
-              label: t('scheduleMinutes'),
-              type: 'number',
-              value: form.minutes,
-              onChange: function (value) { setForm({ title: form.title, prompt: form.prompt, minutes: value }) },
-            }),
-            React.createElement(Button, {
-              primary: true,
-              disabled: busy || !sessionId,
-              onClick: onAddSchedule,
-            }, t('scheduleAdd')),
-            React.createElement(
-              'div',
-              { style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)', marginTop: 4 } },
-              t('scheduleCreateHint'),
-            ),
-          ),
-        )
+        children.push(schedulesBlock(false))
       }
 
       children.push(
@@ -750,55 +844,35 @@ window.__ModuleLoader__.load({
       })
 
       /**
-       * Resolve the active conversation, which the panel needs for two reasons:
-       * standing autonomy and schedules are both scoped per conversation, and a
-       * guessed id would silently act on the wrong one.
+       * The per-conversation controls, in the one seat that hands over a conversation.
        *
-       * Two sources, in order of trust. The `main` slot's documented owner props
-       * include `useSessions`, so prefer the shell's own hook; fall back to a
-       * `ctx.sessions` probe; and if neither answers, report unknown rather than
-       * invent an id. An invented session id is worse than a blank field.
+       * `conversation.input.dock` is session-scoped and its live catalog lists `sessionId: SessionId`
+       * among the standard props, so the id comes from the shell rather than from a guess. It is also
+       * directly above the message box, which is where the minted token has to be pasted.
        */
-      function useActiveSession(props) {
-        var fromHook = null
-        try {
-          if (typeof props.useSessions === 'function') {
-            var snapshot = props.useSessions()
-            fromHook = readSessionId(snapshot)
-          }
-        } catch (error) {
-          fromHook = null
-        }
-        if (fromHook) return fromHook
-        try {
-          var sessions = ctx.sessions
-          if (sessions && typeof sessions.current === 'function') return sessions.current() || null
-          if (sessions && typeof sessions.activeId === 'function') return sessions.activeId() || null
-        } catch (error) {
-          return null
-        }
-        return null
-      }
-
-      /** Pull an id out of whichever snapshot shape the shell hands over. */
-      function readSessionId(snapshot) {
-        if (!snapshot) return null
-        if (typeof snapshot === 'string') return snapshot
-        if (typeof snapshot.activeId === 'string') return snapshot.activeId
-        if (typeof snapshot.currentId === 'string') return snapshot.currentId
-        if (snapshot.active && typeof snapshot.active.id === 'string') return snapshot.active.id
-        if (snapshot.current && typeof snapshot.current.id === 'string') return snapshot.current.id
-        return null
-      }
+      ctx.slots.inject('conversation.input.dock', function () {
+        return ctx.slots.register(
+          { name: 'conversation.input.dock', id: GRANT_KEY, order: GRANT_ORDER },
+          function GrantDock(props) {
+            return React.createElement(DenPanel, {
+              t: t,
+              act: act,
+              sessionId: (props || {}).sessionId,
+              compact: true,
+            })
+          },
+        )
+      })
 
       ctx.slots.inject('main', function () {
         return ctx.slots.register({ name: 'main', key: PANEL_KEY }, function Bound(props) {
-          var sessionId = useActiveSession(props || {})
-          return React.createElement(DenPanel, {
-            t: t,
-            act: act,
-            sessionId: sessionId,
-          })
+          // No session is resolved here on purpose. This seat is root-scoped and keyed, and the shell's
+          // own catalog states the rule: "The reserved `conversation` key hosts the Conversation; other
+          // keys receive no Session binding." A status page that needs a conversation must live
+          // somewhere a conversation is handed to it, and trying to discover one from here produced
+          // three wrong shapes that a matching test double happily agreed with.
+          void props
+          return React.createElement(DenPanel, { t: t, act: act, sessionId: null })
         })
       })
     }
@@ -807,7 +881,7 @@ window.__ModuleLoader__.load({
       name: 'dsh-den',
       /* Cordis *service* names — a different table from package.json's
        * `dsh.client.inject`, which lists package names. */
-      inject: ['slots', 'locale', 'sessions'],
+      inject: ['slots', 'locale'],
       apply: apply,
     }
 

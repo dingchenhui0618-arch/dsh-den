@@ -917,7 +917,12 @@ export function registerTools(tools, service) {
       return {
         scenario: String(args.scenario),
         count: result.entries.length,
+        // `considered` is how many entries the scorer looked at, not how many matched - the two differ
+        // whenever a query shares no tokens with most of the scenario, and the difference is the whole
+        // point of reporting it. `stored - considered` is what the candidate window left out.
+        stored: result.stored,
         considered: result.considered,
+        scored: result.scored,
         truncated: result.truncated,
         entries: result.entries.map((entry) => ({ id: entry.id, kind: entry.kind, text: entry.text, score: entry.score })),
       }

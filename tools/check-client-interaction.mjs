@@ -332,7 +332,7 @@ function mount(registered, props) {
 
 /* ------------------------------------------------------------------- suite */
 
-function boot({ sessionId = 'session-active', scripted = {} } = {}) {
+function boot({ sessionId = 'session-active', scripted = {} } = {}, slot = 'main') {
   calls.length = 0
   // Merge rather than replace: a test that scripts one action and then boots would
   // otherwise silently lose the reply it just installed, which reads as the panel
@@ -341,9 +341,28 @@ function boot({ sessionId = 'session-active', scripted = {} } = {}) {
   activeSession = sessionId
   const ctx = makeCtx()
   exportsValue.apply(ctx)
-  const main = ctx.slots.entries.find((entry) => entry.options?.name === 'main')
-  if (!main) throw new Error('the bundle did not register a main panel')
-  return main.component
+  const entry = ctx.slots.entries.find((entry) => entry.options?.name === slot)
+  if (!entry) throw new Error(`the bundle did not register a ${slot} entry`)
+  return entry.component
+}
+
+/**
+ * The per-conversation control's registered component, from the seat that actually hands one over.
+ *
+ * `mount(component, { useSessions: () => ({ activeId: 'session-active' }) })` used to stand in for the
+ * shell here, and it proved nothing: `activeId` was a shape the client and the double had agreed on
+ * between themselves, while the live `sessions` service has no `current()` and no `activeId()` at all.
+ * The seat below is the one whose own live catalog lists `sessionId: SessionId` among its standard
+ * props, so the id arrives as a prop and there is nothing left to guess.
+ */
+function bootDock({ scripted = {} } = {}) {
+  calls.length = 0
+  scriptReplies(scripted)
+  const ctx = makeCtx()
+  exportsValue.apply(ctx)
+  const dock = ctx.slots.entries.find((entry) => entry.options?.name === 'conversation.input.dock')
+  if (!dock) throw new Error('the bundle did not register a composer-dock entry')
+  return { component: dock.component, options: dock.options }
 }
 
 /**
@@ -379,7 +398,7 @@ function healthyStatus(overrides = {}) {
 }
 
 const component = boot({ scripted: { status: healthyStatus(), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } } })
-const panel = mount(component, { useSessions: () => ({ activeId: 'session-active' }) })
+const panel = mount(component, {})
 await panel.settle()
 
 if (process.env.DEN_DEBUG) {
@@ -393,7 +412,13 @@ if (process.env.DEN_DEBUG) {
 
 const text = panel.text()
 check(text.includes('Den'), 'the panel renders its title')
-check(text.includes('授予') && text.includes('撤销'), 'the panel renders both autonomy buttons')
+// Looking for the *string* would pass on the copy that says where the control is, so this looks for a
+// button: an affordance the page would have to render to be clickable.
+check(
+  !panel.buttons().some((button) => textOf(button).trim() === '授予'),
+  'the status page renders no grant button, because it has no conversation to grant for',
+)
+check(text.includes('输入框上方'), 'and it says where the grant control is instead')
 check(text.includes('自检'), 'the panel renders the self-check section')
 check(text.includes('运行中'), 'a running heartbeat is reported as running')
 check(text.includes('今天') === false, 'no stray copy is invented')
@@ -403,19 +428,54 @@ check(text.includes('今天') === false, 'no stray copy is invented')
 const statusCall = calls.find((entry) => (entry.body?.action ?? 'status') === 'status')
 check(Boolean(statusCall), 'the panel requests a status snapshot')
 check(statusCall?.body?.action === 'status', 'the snapshot request names the status action explicitly')
-check(statusCall?.body?.sessionId === 'session-active', 'the snapshot request carries the active conversation id')
+check(
+  statusCall?.body?.sessionId == null,
+  'the status page sends no conversation id, because it has none to send',
+)
+// Read here, before the dock below is mounted: `calls` is shared, so a check placed after that mount
+// would be reading the dock's requests while describing this page.
+check(
+  !calls.some((entry) => entry.body?.action === 'schedules/list'),
+  'the status page does not ask for a conversation it cannot name',
+)
 
-const listCall = calls.find((entry) => entry.body?.action === 'schedules/list')
-check(Boolean(listCall), 'the panel asks for the schedule list')
-check(listCall?.body?.sessionId === 'session-active', 'the schedule list is scoped to the active conversation')
+/* --- the per-conversation controls sit where a conversation arrives --------- */
+
+const dock = bootDock({
+  scripted: { status: healthyStatus({ autonomy: 'session-active', autonomyKnown: true }), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } },
+})
+check(
+  dock.options.name === 'conversation.input.dock',
+  'the grant control registers into the session-scoped composer dock',
+)
+// The catalog's own rule: "a fresh id is added beside the shipped entries, while reusing a shipped id
+// puts you in THAT cell and replaces it." Reusing one of these would silently delete a shell control.
+const SHIPPED_DOCK_IDS = ['todo', 'goal', 'queue']
+check(
+  !SHIPPED_DOCK_IDS.includes(dock.options.id),
+  `the grant dock uses its own id so it adds a cell instead of replacing one (got ${dock.options.id})`,
+)
+
+const grantPanel = mount(dock.component, { sessionId: 'session-active' })
+await grantPanel.settle()
+const grantText = grantPanel.text()
+check(grantText.includes('授予') && grantText.includes('撤销'), 'the dock renders the autonomy controls')
+check(grantText.includes('已授予'), 'and reports the conversation it was told about as granted')
+const dockStatus = calls.find((entry) => (entry.body?.action ?? 'status') === 'status')
+check(
+  dockStatus?.body?.sessionId === 'session-active',
+  'the dock carries the session the shell handed it, rather than discovering one',
+)
+
 check(text.includes('助理不会自己醒来'), 'an empty schedule list is called out, not left blank')
+check(text.includes('输入框上方'), 'and adding one is pointed at the seat that has a conversation')
 
 /* --- clicking Grant mints a token and does NOT claim authority ------------- */
 
 const revokeCalls = () => calls.filter((entry) => entry.body?.action === 'autonomy/request')
 check(revokeCalls().length === 0, 'no autonomy action is sent before a click')
 
-await panel.click('授予')
+await grantPanel.click('授予')
 
 const grantCall = calls.find((entry) => entry.body?.action === 'autonomy/request')
 check(Boolean(grantCall), 'clicking Grant sends an autonomy/request')
@@ -431,9 +491,10 @@ check(
 scriptReplies({
   'autonomy/request': { ok: true, value: { token: 'tok-abc123', autonomy: true, expiresAt: Date.now() + 600000, ttlMs: 600000 } },
 })
-const panel2 = mount(boot({ scripted: { status: healthyStatus(), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } } }), {
-  useSessions: () => ({ activeId: 'session-active' }),
-})
+const panel2 = mount(
+  bootDock({ scripted: { status: healthyStatus(), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } } }).component,
+  { sessionId: 'session-active' },
+)
 await panel2.settle()
 await panel2.click('授予')
 if (process.env.DEN_DEBUG) {
@@ -446,9 +507,10 @@ check(panel2.text().includes('一次性'), 'the panel explains the token is sing
 
 /* --- creating a self-check sends the right payload ------------------------ */
 
-const panel3 = mount(boot({ scripted: { status: healthyStatus(), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } } }), {
-  useSessions: () => ({ activeId: 'session-active' }),
-})
+const panel3 = mount(
+  bootDock({ scripted: { status: healthyStatus(), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } } }).component,
+  { sessionId: 'session-active' },
+)
 await panel3.settle()
 const inputs = panel3.inputs()
 check(inputs.length === 3, `the form renders three fields (title, prompt, minutes); saw ${inputs.length}`)
@@ -469,9 +531,10 @@ check(panel3.text().includes('不是权限授予'), 'the panel states that a sch
 
 /* --- invalid input is refused locally, without a wasted round trip --------- */
 
-const panel4 = mount(boot({ scripted: { status: healthyStatus(), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } } }), {
-  useSessions: () => ({ activeId: 'session-active' }),
-})
+const panel4 = mount(
+  bootDock({ scripted: { status: healthyStatus(), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } } }).component,
+  { sessionId: 'session-active' },
+)
 await panel4.settle()
 await panel4.type(0, 'too often')
 await panel4.type(1, 'x')
@@ -494,8 +557,8 @@ const panel5 = mount(
         value: { schedules: [{ id: 'sch-1', kind: 'interval', title: 'CI watch', enabled: true, fireCount: 4, dueNow: true }], invalidCount: 0 },
       },
     },
-  }),
-  { useSessions: () => ({ activeId: 'session-active' }) },
+  }, 'conversation.input.dock'),
+  { sessionId: 'session-active' },
 )
 await panel5.settle()
 check(panel5.text().includes('CI watch'), 'an existing schedule is listed by title')
@@ -516,7 +579,7 @@ const panel6 = mount(
       'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } },
     },
   }),
-  { useSessions: () => ({ activeId: 'session-active' }) },
+  { sessionId: 'session-active' },
 )
 await panel6.settle()
 check(panel6.text().includes('等待投递通道'), 'a deferred heartbeat is shown as waiting, not as running')
@@ -532,7 +595,7 @@ const panel7 = mount(
       'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } },
     },
   }),
-  { useSessions: () => ({ activeId: 'session-active' }) },
+  { sessionId: 'session-active' },
 )
 await panel7.settle()
 check(panel7.text().includes('已放弃'), 'giving up on the heartbeat is stated plainly')
@@ -550,7 +613,7 @@ const standbyPanel = mount(
       'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } },
     },
   }),
-  { useSessions: () => ({ activeId: 'session-active' }) },
+  { sessionId: 'session-active' },
 )
 await standbyPanel.settle()
 check(standbyPanel.text().includes('待命'), 'a host that stood down says standby instead of "running"')
@@ -563,20 +626,24 @@ const holdingPanel = mount(
       'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } },
     },
   }),
-  { useSessions: () => ({ activeId: 'session-active' }) },
+  { sessionId: 'session-active' },
 )
 await holdingPanel.settle()
 check(!holdingPanel.text().includes('待命'), 'while the host that holds residency is not labelled standby')
 
-/* --- no active conversation disables the actions instead of guessing ------- */
+/* --- no session means no grant button, on either seat ---------------------- */
 
-const panel8 = mount(boot({ sessionId: null, scripted: { status: healthyStatus({ autonomyKnown: false }), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } } }), {
-  useSessions: () => null,
-})
+// The status page offers none at all: it is mounted in `main`, which the shell documents as giving
+// no Session binding to any key but the reserved `conversation` — asserted at the top of this file.
+// The dock's own seat always carries a session, so the case below cannot arise through the shell; it
+// pins the guard directly, with a prop the shell would not send.
+const panel8 = mount(
+  boot({ scripted: { status: healthyStatus({ autonomyKnown: false }), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } } }, 'conversation.input.dock'),
+  { sessionId: null },
+)
 await panel8.settle()
 const grantButton = panel8.buttons().find((button) => textOf(button).trim() === '授予')
-check(grantButton?.props?.disabled === true, 'without a conversation the grant button is disabled')
-check(panel8.text().includes('没有活动会话'), 'and the panel says why')
+check(grantButton?.props?.disabled === true, 'a grant button without a conversation is disabled, not a no-op')
 
 /* --- a host failure is surfaced, not swallowed ---------------------------- */
 
@@ -587,7 +654,7 @@ const panel9 = mount(
       'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } },
     },
   }),
-  { useSessions: () => ({ activeId: 'session-active' }) },
+  { sessionId: 'session-active' },
 )
 await panel9.settle()
 check(panel9.text().includes('disk on fire'), 'a host error is shown to the human')
@@ -603,7 +670,7 @@ const panel10 = mount(
   boot({
     scripted: { 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } },
   }),
-  { useSessions: () => ({ activeId: 'session-active' }) },
+  { sessionId: 'session-active' },
 )
 await panel10.settle()
 const transportError = panel10.text()

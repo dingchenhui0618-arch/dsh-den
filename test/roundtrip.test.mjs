@@ -308,6 +308,6 @@ test('the shipped exports carry no internals until a harness asks', () => {
   })
   assert.equal(Object.keys(shipped).sort().join(','), 'apply,inject,name')
   assert.equal(shipped.name, 'dsh-den')
-  assert.equal(shipped.inject.join(','), 'slots,locale,sessions')
+  assert.equal(shipped.inject.join(','), 'slots,locale')
   assert.equal(shipped.__internals, undefined, 'production must not expose test internals')
 })
