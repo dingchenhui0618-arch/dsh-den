@@ -222,9 +222,15 @@ reason rather than caution:
 > refused. The panel would show a green light over a dead circuit.
 
 So `autonomy/request` mints a **single-use, 10-minute token** and reports it. The
-human carries that token to the assistant in the conversation, and the normal
-`den_set_autonomy` path performs the write with real human-message evidence behind
-it. Schedules are a different risk class and are written directly, because a
+human carries that token into the conversation, and the grant is then enforced by
+**two independent factors**: the token must appear **in the text of a human message
+in the current turn**, and the tool call itself must be approved rather than
+auto-denied. The token also *identifies* the message — `humanMessageId` is optional,
+because a model driving a tool call has no reliable way to know message ids, and
+that lookup is *stricter* than the id path since it requires the token. An agent can
+mint a token on demand and can cite any id it likes, but it cannot author a
+`user/message`, so it cannot manufacture the evidence. A refusal does not spend the
+token. Schedules are a different risk class and are written directly, because a
 schedule is explicitly *not* a permission grant: every run still re-checks
 authority, budget, quiet hours and pacing.
 

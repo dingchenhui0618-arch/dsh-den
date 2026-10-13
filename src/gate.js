@@ -230,11 +230,15 @@ export function classifyCall(exec) {
 
   for (const rule of OUTBOUND_PATTERNS) {
     if (rule.pattern.test(text)) {
+      const destination = destinationOf(text)
       return {
         risk: RISK.ask,
         rule: `outbound:${rule.id}`,
-        reason: `this call appears to ${rule.what}; confirm before it runs`,
+        reason: destination
+          ? `this call appears to ${rule.what} (destination ${destination}); confirm before it runs`
+          : `this call appears to ${rule.what}; confirm before it runs`,
         what: rule.what,
+        destination,
       }
     }
   }
@@ -250,6 +254,21 @@ export function classifyCall(exec) {
     rule: 'unknown-tool',
     reason: `unrecognised tool ${name || '(unnamed)'}; confirm before it runs`,
   }
+}
+
+/**
+ * The host a command is aimed at, when the command names one.
+ *
+ * "upload data to a server" is true both of an HTTP POST carrying a body to a public host
+ * and of the same POST aimed at 127.0.0.1, and those are different propositions: the second
+ * cannot leave this machine. The rule deliberately fires on both — a loopback service can
+ * relay, so it is not automatically safe — but a reader deciding whether to approve should
+ * not have to guess which one they are looking at. Naming the destination adds information
+ * without moving the risk; the decision still belongs to the human.
+ */
+function destinationOf(text) {
+  const match = String(text ?? '').match(/https?:\/\/([^\s/"'`)]+)/i)
+  return match ? match[1] : ''
 }
 
 /**
@@ -303,7 +322,10 @@ export function decide(classification) {
 /** A Chinese rendering of the reason, so the prompt is readable in this locale. */
 function translateReason(classification) {
   const what = classification.what
-  if (what) return `这个调用看起来要${what === 'push code to a remote' ? '把代码推到远端' : what}；请先确认。`
+  const target = classification.destination ? `（目标 ${classification.destination}）` : ''
+  if (what) {
+    return `这个调用看起来要${what === 'push code to a remote' ? '把代码推到远端' : what}${target}；请先确认。`
+  }
   return '这个调用可能有副作用；请先确认。'
 }
 
