@@ -33,8 +33,9 @@
     "diagnose:status": "node tools/diagnose-status-output.mjs",
     "check:package": "node tools/check-package-contents.mjs",
     "check:install": "node tools/check-install.mjs",
-    "verify": "npm test && npm run check:bundle && npm run check:ui && npm run check:acceptance && npm run check:package && npm run check:install",
-    "check:wake-api": "node tools/check-wake-api.mjs"
+    "verify": "npm test && npm run check:source-tracked && npm run check:bundle && npm run check:ui && npm run check:acceptance && npm run check:package && npm run check:install",
+    "check:wake-api": "node tools/check-wake-api.mjs",
+    "check:source-tracked": "node tools/check-no-ignored-source.mjs"
   },
   "engines": {
     "node": "^22.19.0 || >=24"

@@ -22,7 +22,7 @@ import { join } from 'node:path'
 
 import { denPath } from '../src/atom.js'
 import { entriesFor, forget, recall, remember, scenarios } from '../src/memory.js'
-import { finish, routeValue } from './lib/route-client.mjs'
+import { finish, routeValue } from './support/route-client.mjs'
 
 const portArg = process.argv.indexOf('--port')
 const PORT = portArg >= 0 ? Number(process.argv[portArg + 1]) : 19387

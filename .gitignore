@@ -1,7 +1,11 @@
 # Dependencies and build output
 node_modules/
-dist/
-lib/
+# Anchored on purpose. A bare `lib/` matches at ANY depth, and it silently swallowed
+# `tools/lib/route-client.mjs` — a source file three probes import — so the pushed
+# repository was missing it while the local tree worked fine. An ignore rule that matches
+# more than intended removes source from the repo and nothing reports it.
+/lib/
+/dist/
 
 # Local runtime state - the den's own data must never be committed
 .den-state/

@@ -23,7 +23,7 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-import { callRoute, finish } from './lib/route-client.mjs'
+import { callRoute, finish } from './support/route-client.mjs'
 
 const ROUTE = '/dsh-den'
 const portArg = process.argv.indexOf('--port')
