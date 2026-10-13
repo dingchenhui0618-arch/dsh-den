@@ -627,6 +627,92 @@ test('a refusal is not charged, so the intent survives until it can run', async 
   service.kernel.stop()
 })
 
+test('a refused wake is throttled instead of re-asked every heartbeat', async () => {
+  // Found on the running host, not here: a single unauthorized `once` trigger produced a
+  // `wake-refused` event every 60 seconds, exactly on the tick. Nothing on the refusal
+  // path advances `lastFiredAt`, so the trigger stayed due and every heartbeat asked the
+  // same question again — 1,440 times a day, each one appending to the event log. The
+  // reply to a permanent condition cannot change by asking again.
+  const first = coldHost()
+  apply(first.ctx)
+  await callTool(first.state, 'den_schedule_check', {
+    kind: 'interval',
+    title: 'never authorized',
+    prompt: 'x',
+    sessionId: SESSION_ID,
+    everySeconds: 300,
+  })
+  ageStoredTriggers(Date.now() - 60 * 60 * 1000)
+  first.state.dispose?.()
+
+  const now = Date.now()
+  const second = coldHost()
+  apply(second.ctx)
+  const service = second.state.provided.get('den')
+
+  const refused = await service.kernel.tick({ agent: undefined, now })
+  assert.equal(refused.results[0].outcome, 'refused')
+  assert.equal(refused.results[0].gate, 'authority')
+
+  // One second later the trigger is still due by its own cadence — which is exactly why
+  // the cadence alone cannot be what stops it.
+  const again = await service.kernel.tick({ agent: undefined, now: now + 1000 })
+assert.equal(again.due, 0, 'a refused wake must go quiet for the retry window')
+  assert.equal(again.results.length, 0, 'and must not be re-decided in the meantime')
+
+  const stored = service.listTriggers().valid[0]
+  assert.ok(
+    Number.isFinite(stored.lastAttemptAt),
+    'the throttle is what did it, so the attempt must be recorded on the trigger',
+  )
+  assert.equal(
+    new Date(stored.lastAttemptAt).getTime(),
+    now,
+    'recorded at the refusal, not at some later moment',
+  )
+  assert.equal(stored.fireCount, 0, 'throttling must not charge the check-in')
+
+  // And it must come back, or the throttle would be indistinguishable from a silent drop.
+  const later = await service.kernel.tick({ agent: undefined, now: now + 16 * 60 * 1000 })
+  assert.equal(later.due, 1, 'once the window passes the check-in is reconsidered')
+  service.kernel.stop()
+})
+
+test('an idle tick answers with the same shape as a busy one', async () => {
+  // `tick()` used to resolve to `{due: 0, woke: 0, spoke: 0}` when nothing was due and
+  // to an object *with* `results` otherwise. Reading `tick().results.length` — the
+  // obvious way to ask what a tick decided — threw on exactly the ticks where nothing
+  // happened, and for a resident assistant that is the common case. The first two
+  // assertions below are the ones that found it.
+  const host = coldHost()
+  apply(host.ctx)
+  const service = host.state.provided.get('den')
+
+  const idle = await service.kernel.tick({ agent: undefined, now: Date.now() })
+  assert.equal(idle.due, 0)
+  assert.ok(Array.isArray(idle.results), 'an idle tick must still report its decisions as a list')
+  assert.equal(idle.results.length, 0)
+
+  await callTool(host.state, 'den_schedule_check', {
+    kind: 'interval',
+    title: 'something due',
+    prompt: 'x',
+    sessionId: SESSION_ID,
+    everySeconds: 300,
+  })
+  ageStoredTriggers(Date.now() - 60 * 60 * 1000)
+
+  const busy = await service.kernel.tick({ agent: undefined, now: Date.now() })
+  assert.equal(busy.due, 1)
+  assert.ok(Array.isArray(busy.results))
+  assert.deepEqual(
+    Object.keys(busy).sort(),
+    Object.keys(idle).sort(),
+    'the two outcomes of one method must not have different shapes',
+  )
+  service.kernel.stop()
+})
+
 test('an unreadable transcript refuses without cold-resuming the conversation', async () => {
   const first = coldHost()
   apply(first.ctx)

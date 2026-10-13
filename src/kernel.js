@@ -298,7 +298,14 @@ export class DenKernel {
 
   async #runDue({ agent, now }) {
     const due = dueTriggers(now)
-    if (due.length === 0) return { due: 0, woke: 0, spoke: 0 }
+    // The empty case returns the same shape as the busy one, `results` included.
+    //
+    // It used to omit `results`, so `tick()` resolved to `{due: 0, woke: 0, spoke: 0}`
+    // on a quiet heartbeat and to an object *with* `results` otherwise. A caller reading
+    // `tick().results.length` — which is the obvious way to ask "what did this tick
+    // decide?" — got a `TypeError` on exactly the ticks where nothing happened, and that
+    // is the common case for a resident assistant. Found by writing that assertion.
+    if (due.length === 0) return { due: 0, woke: 0, spoke: 0, results: [] }
 
     const state = this.service.state()
     const results = []
@@ -333,6 +340,23 @@ export class DenKernel {
           // particular must be auditable, otherwise "why did it stop working?"
           // is unanswerable.
           bumpLedger('refused', new Date(now))
+          /**
+           * And it is *throttled*, which this path did not do.
+           *
+           * Nothing here advances `lastFiredAt`, so the trigger stays due and the next
+           * heartbeat picks it up again — and the next. Measured on the running host: a
+           * single unauthorized `once` trigger produced a `wake-refused` event every 60
+           * seconds, exactly on the tick, with no backoff. A permanent condition was
+           * being re-evaluated 1,440 times a day, each one appending to the event log.
+           *
+           * The reply to a permanent condition cannot change by asking again, so the
+           * retry throttle that already exists for failed *delivery* is the right
+           * instrument here too. It costs promptness in one case worth naming: a trigger
+           * refused just before a human grants autonomy waits out the throttle rather
+           * than firing at the next tick. Up to 15 minutes late is a better trade than
+           * flooding the log forever, and the cadence anchor is untouched either way.
+           */
+          markAttemptFailed(trigger, now)
           this.onEvent({
             type: 'wake-refused',
             triggerId: trigger.id,
@@ -428,7 +452,18 @@ export class DenKernel {
       }
     }
 
-    return { due: due.length, results }
+    return {
+      due: due.length,
+      // Derived from the decisions rather than counted separately, so the three cannot
+      // disagree. The two branches of this method used to return *different key sets* —
+      // the idle one had `woke`/`spoke` and the busy one did not — which meant a caller
+      // reading `tick().spoke` got a number on quiet ticks and `undefined` on the ticks
+      // that actually spoke. Both that and the missing `results` were found by asserting
+      // the two shapes are equal, which is a test worth keeping for exactly this reason.
+      woke: results.filter((r) => r.outcome !== 'refused').length,
+      spoke: results.filter((r) => r.outcome === 'spoke').length,
+      results,
+    }
   }
 }
 
