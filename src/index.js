@@ -40,7 +40,7 @@ import { join } from 'node:path'
 import { denHome, listJsonFiles, reapStaleTempFiles, readJson, toLosslessJson, writeJsonAtomic } from './atom.js'
 import { currentGrant, recordGrant, sessionEvents } from './grant.js'
 import { allNotices, isExpired, pendingNotices, queueNotice } from './notices.js'
-import { installGate, RISK, classifyCall, recordAudit } from './gate.js'
+import { installGate, RISK, classifyCall, recordAudit, auditPath } from './gate.js'
 import { DenKernel, evaluateGates, readLedger, ledgerPath } from './kernel.js'
 import { deleteTrigger, dueTriggers, listTriggers, nextTriggerAt, normalizeTrigger, saveTrigger } from './triggers.js'
 import { ENTRY_KINDS, forget, recall, remember, scenarios } from './memory.js'
@@ -228,7 +228,10 @@ export class DenService {
   }
 
   gateAudit(limit = 50) {
-    const stored = readJson(`${this.root}/gate-audit.json`)
+    // `auditPath()` rather than a locally joined string: the reader and the writer must
+    // resolve to the same file, and the bug this replaced was exactly a reader and a writer
+    // that disagreed about storage while both looked correct in isolation.
+    const stored = readJson(auditPath())
     const entries = Array.isArray(stored?.entries) ? stored.entries : []
     return entries.slice(-limit)
   }

@@ -3,7 +3,19 @@
 > A **7×24 resident personal assistant** for [DeepSeek Harness](https://github.com/deepseek-ai/dsh).
 > Not another chat window — an assistant that stays on, keeps its own memory, works while you are away, and stops to ask before it acts outside your trust boundary.
 
-Status: **the core is implemented, tested (229/229), and active in a real profile.** The plugin is loaded inside a real DSH 0.2.0-rc.2 desktop profile — it is in that profile's `dsh.profile.bundles`, and the running host reports it as `fiberPhase: active` — registering 11 model-facing tools, the approval guard, the heartbeat, and an interactive status panel. Verified against the *running* system rather than only in tests: the heartbeat ticks on its 60-second cadence, and the panel is an **active occupant** of both `sidebar.panellist` (`id: dsh-den.status`, order 245) and the `main` panel (`key: dsh-den.status`).
+Status: **the core is implemented, tested (233/233), and active in a real profile.** The plugin is loaded inside a real DSH 0.2.0-rc.2 desktop profile — it is in that profile's `dsh.profile.bundles`, and the running host reports it as `fiberPhase: active` — registering 11 model-facing tools, the approval guard, the heartbeat, and an interactive status panel. Verified against the *running* system rather than only in tests: the heartbeat ticks on its 60-second cadence, and the panel is an **active occupant** of both `sidebar.panellist` (`id: dsh-den.status`, order 245) and the `main` panel (`key: dsh-den.status`).
+
+**And it reproduces from this repository alone.** A fresh `git clone` of the published repo — no `node_modules`, because the package declares **no dependencies at all** — runs the whole suite green:
+
+```
+node_modules present in clone: False
+dependencies declared: (none)
+ℹ tests 233   ℹ pass 233   ℹ fail 0
+test exit: 0
+```
+
+That is the claim worth making precisely: not "it works on my machine", but *a third party with a Node binary and nothing else can check this*. It is also the check that would have caught the worst bug in this project's history — a `.gitignore` line reading bare `lib/` matched at any depth, so a source file that three live probes imported was **never committed**, and the pushed repo was broken while every local test passed. `npm run check:source-tracked` now asserts that every source file on disk is tracked by git, and names the ignore rule that hid it.
+
 
 **The wake delivery path was broken and is now fixed — that history is worth reading, because the test suite was green throughout.** The plugin delivered wakes with `subagents.sendMessage(agent, trigger.sessionId, …)`, where `agent` is the *target conversation's own driver*. The host admits a send only when the sender is the target's direct parent or direct continuable child — `authorizeLineage` requires `parentSession === parent.id` — so the call asked a session to be its own parent and **every admitted wake in production died** with `delivery requires the exact live parent agent`. Five tests covered that path and passed, because the fakes granted any delivery at all: the double was lying about the *calling convention*, not the service.
 
@@ -25,6 +37,23 @@ RESULT: PASS — 8 checks, and the delivery surface is the one this Host actuall
 That check exists because the defect it guards against was an *assumption about an API*, and it is placed where the assumption can be measured: `agents.get`/`agents.resume` are declared to return `Agent`, and `Agent` is declared as `{ readonly id }`. `followup` appears in no service signature — it is a method on the live agent object the factory builds — so the surfaced contract is narrower than the runtime object and no amount of reading signatures answers "will delivery work on this Host". The probe reports `sawLiveAgent: false` rather than a pass when no agent is live: *I could not look* is not *it is not there*.
 
 **What is still outstanding is one human step, not a defect.** No admitted wake has ever been delivered, because admitting one requires standing autonomy and no human has granted it. That single drill is the last unverified path in the project; everything on either side of it is measured. See `DESIGN.md` §2.7 for the code evidence and §2.8 for how the fakes were made to stop hiding it.
+
+**Capability 4 is verified end to end, and the way it was verified is the point.** The gate's secret rule matches on *path*, and it is installed as `ctx.tools.guard`, so it intercepts every tool call in the profile — including the assistant's own. That makes a zero-risk live test possible: read a credential-shaped path **that does not exist**. If the gate works the call is refused before the filesystem is touched; if it does not, the result is `ENOENT` and nothing leaks.
+
+```
+Error: refused: this would pull a stored credential into the conversation (credentials-yaml)
+```
+
+That sentence is `src/gate.js` verbatim, and the host's own service event stream recorded the decision alongside it:
+
+```json
+{"type":"gate","tool":"read","rule":"secret:credentials-yaml","risk":2,"decision":"deny",
+ "sessionId":"session-95cc8a8d-a3e9-4e2a-a67d-12292d17ba24"}
+```
+
+Two more entries in that stream corrected a misattribution of my own: `outbound:curl-upload` and `outbound:recursive-delete`, both `ask`. Two tool calls I had reported to the user as *"the user rejected it"* were in fact denied by **this plugin's own gate** — classified `ask`, and a host without an approval facility turns `ask` into a denial. The gate had been shaping the session the whole time.
+
+The same evidence exposed a defect worth naming, because it is a whole class rather than a slip: `onDecision` announced decisions through `noteEvent` (the in-memory ring the panel shows) and **never called `recordAudit`**, while `gateAudit()` read `gate-audit.json` — a file no code wrote. So the panel's gate surface reported *"no decisions"* permanently, including while three real ones had just been made. `recordAudit` was dead code and the durable-audit design had never run once. **Reading a file that is never written looks exactly like a gate that has never fired.** The seam is now fixed and pinned from both ends — the service reader *and* the file on disk — because asserting only through `gateAudit()` would pass if reader and writer were the same piece of memory.
 
 **The running host was serving an older build; it has since been restarted, and the same check that said so now says otherwise.** Before the restart, the `Tool` inspect provider reported a different tool count from this tree's source and `GET /dsh-den` answered 404. Afterwards, `npm run verify:live` reports:
 
