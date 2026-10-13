@@ -1120,6 +1120,42 @@ README 开头写着「Verified against the *running* system」,但**没有说那
 
 **写这个测试时又踩了一个自己造的坑。** 第一版正则写成 `([a-z]+|\d+)\s+(?:[a-z-]+\s+){0,2}named actions`,在「and the six named actions」上它**匹配成功了**,但捕获组是 `and`;而我的代码对非数字捕获直接跳过——于是这次匹配**把整个短语吞掉了**,引擎再也不会从 `six` 重新开始。测试于是报告「README 里没有这条声明」,而那句话明明就在那里。修法是:捕获不是数字时把 `lastIndex` 退回 `match.index + 1` 重试。一个匹配成功后吞掉了自己没能捕获的东西——这类缺陷的读数和「东西不在那里」完全一样。
 
+### 2.28 演练的最后一跳卡在一个「不是开关的开关」上：审批策略是权限预设的副作用
+
+**2026-10-13 宿主重启后的实测**（这是本项目第一次让 live 那一半整体通过）：
+
+- 宿主 `startedAt 2026-10-13T09:50:07.589Z`（pid 42628），自报 `freshness: {known: true, stale: false}` ——「运行中的就是这棵树」；
+- `npm run verify:live` **exit 0**：`PASS - the running host is serving this tree, and it loaded it after the last edit`，以及 `PASS - a browser request has reached it before this script started`；
+- 七个 live 探针全部通过：`check:deployment`、`check:autonomy`（`RESULT: PASS — an agent cannot obtain standing autonomy from the live host`）、`check:notices`、`check:memory`（场景隔离成立，且**运行中的宿主读的是同一个存储**）、`check:tools`（`VERDICT: PROVEN`，disk 证据表明 `den_*` 工具真被调用过）、`check:wake-api`（8 项）、`check:grant-bypass`。
+
+**面板修复已经在用户页面上跑起来了 —— 而且不是靠看像素。** 重启后 141 秒，一条 `panel-autonomy-requested` 事件带着**真实会话 id**（`session-95cc8a8d-…`，正是本会话）到达路由。上一版面板没有会话可传（它解析活动会话失败，只能传 null），而宿主此刻加载的确实是新代码，所以那条请求只可能来自 dock。区分「我探针发的」和「页面发的」靠的是 sessionId 的字面值：我的探针用 `live-autonomy-probe` / `grant-bypass-probe`。**两条独立事实（宿主加载了这棵树 + 一条只有 dock 能发出的请求）合起来，比看一眼截图更硬。**
+
+**卡点**：`den_set_autonomy` 被宿主自动拒绝 —— `Error: the user rejected tool "den_set_autonomy"`。本会话的审批策略是 `never`。
+
+**根因不是用户忘了开，而是 DSH 把它绑在权限预设里。** 宿主里写着 `APPROVAL_POLICIES = ["ask", "never"]`，而它由 `@deepseek-ai/dsh-permission-presets` 的**一个 Permissions 选择器**同时决定 sandbox 与 approval：
+
+| preset | sandbox | approval |
+|---|---|---|
+| `read-only` | read-only | `ask` |
+| `workspace-write` | workspace-write | `ask` |
+| `danger-full-access` | danger-full-access | **`never`** |
+| `Auto`（由 `dsh-experimental-auto-review` 注册） | — | — |
+
+用户 profile 的 patch 里写着 `defaultPreset: danger-full-access` —— 于是**每个新会话都默认落在 `approval: never` 上**，所以「重启一次」在结构上永远不可能让审批出现。而且**没有任何预设是 `danger-full-access` + `ask`**，文档又把 `custom` 明确排除在选择目标之外（*"never a switch target or event payload"*）。要让一次需要审批的动作通过，只能把会话切到 `read-only` 或 `workspace-write`。
+
+**这条同时解释了那句「ask 被渲染成 user rejected」**：`Error: the user rejected tool …` 里没有人拒绝过任何东西，它是 `never` 策略的确定后果。一个「拒绝」字样出现在没有任何人做出选择的地方 —— 这正是本仓库反复在记的那类缺陷，只不过这次它在宿主里，不在我们这半边。
+
+**顺带记一条我不做的事**：插件的客户端代码跑在用户页面里，技术上够得着权限预设的写路径。**我不碰它。** 理由与「插件不能给自己授权」是同一条：改自己的权限不是本插件该做的事，哪怕改的方向是「变得更严格」。
+
+**演练的确切步骤（四次点击）**：
+
+1. 界面上把 **Permissions** 选择器从 `danger-full-access` 切到 `workspace-write`（它带 `approval: ask`）；
+2. 在消息框上方那一条面板上点「授予」，得到一串令牌（10 分钟有效、一次性）；
+3. 复制那串令牌，**在消息里带上它**发给我；
+4. 我调 `den_set_autonomy` 时，弹窗里点「允许」。
+
+之后 kernel 的下一次 tick 会引入一次被准入的唤醒，ledger 的 `turns`/`spoken` 从 0 变成 1 —— **那才是能力 1 的正向半边**，也是整个目标里唯一还没有被观测过的事件。
+
 - `dsh-muse`、`dsh-bot` 只作**只读参考**，不 fork、不复制代码进本仓库。
 - 借鉴的是**机制与教训**（授权绑定、keeper 重新武装、TTL、多域隔离），实现代码自己写。
 - 两者均为 MIT；本项目同样 MIT，若未来复制其代码片段须保留原始版权声明。
