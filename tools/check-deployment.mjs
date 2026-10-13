@@ -94,6 +94,33 @@ if (reachable) {
   }
 }
 
+/* ------------------------------------ 1b. what this route shares with the shell */
+//
+// The shell it lives in demands a token; this route does not. That is not a choice made here:
+// `ctx.webServer.register(route)` takes no authentication argument, so a plugin route is ungated by
+// construction, and the gate for the shell lives on a different service (`connection.authorizeIndex`
+// / `requestRejection`), which the index goes through and a route does not.
+//
+// Measured, same origin, same instant: `GET /` answers 401 with "dsh web authentication required"
+// while `GET /dsh-den` answers 200 with the full status document. Bounded by the host binding to
+// 127.0.0.1, so the reach is a local process rather than the network - and a local process running
+// as this user can already read `~/.dsh/den/` on disk, which is where all of this comes from. The
+// shell is gated because it carries every session's conversation, which is a different asset.
+//
+// Pinned rather than assumed: if DSH ever gates plugin routes, this check fails and the paragraph
+// in DESIGN that describes the boundary has to be rewritten.
+const shell = await get('/')
+const shellGated = shell.status === 401 || shell.status === 403
+if (reachable && shell.status !== 0) {
+  check(
+    shellGated,
+    'the shell demands a token, and this route is ungated by DSH design',
+    shellGated
+      ? ''
+      : `GET / answered ${shell.status}, so plugin routes may now be gated - revisit DESIGN 2.18`,
+  )
+}
+
 /* ------------------------------------------------- 2. state written by a boot */
 
 const stateExists = existsSync(STATE_PATH)
