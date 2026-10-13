@@ -421,6 +421,54 @@ test('a trigger created before the restart is found and fired after it', async (
   service.kernel.stop()
 })
 
+test('two hosts on one home are both told the same trigger is due, because nothing claims it', async () => {
+  // `~/.dsh/den` is keyed on DSH_HOME, not on the profile, so two profiles — or the desktop
+  // app plus a `dsh` in a terminal — load this plugin twice over one state tree. Both start a
+  // kernel. There is no lock and no lease; `pid` in status() is reported and never consulted.
+  //
+  // What is measured here is the precondition, not the duplicate itself. `dueTriggers(now)`
+  // is a pure read, and the delivery sits between that read and `markFired` — with an `await`
+  // in between (kernel.js: the ordering is deliberate and documented: a crash mid-delivery
+  // must leave the check-in due rather than eat it, so a duplicate costs one cheap turn).
+  // Under one host that trades a rare duplicate for a guaranteed loss-avoidance. Under two,
+  // the same ordering makes the duplicate the normal case rather than the rare one.
+  //
+  // Claiming the trigger before delivering would fix this and reintroduce the loss the
+  // comment at kernel.js rejects, which is why the right answer is exclusivity rather than a
+  // reordering. This test pins the absence of a claim; it does not claim the duplicate.
+  const a = coldHost()
+  apply(a.ctx)
+  const b = coldHost()
+  apply(b.ctx)
+
+  const title = 'Two-host probe'
+  const created = await callTool(a.state, 'den_schedule_check', {
+    kind: 'interval',
+    title,
+    prompt: 'Report only failures.',
+    sessionId: SESSION_ID,
+    everySeconds: 300,
+  })
+  assert.equal(created.ok, true, `the schedule must be created: ${JSON.stringify(created)}`)
+
+  const now = Date.now() + 86_400_000
+  const fromA = a.state.provided.get('den').dueTriggers(now)
+  const fromB = b.state.provided.get('den').dueTriggers(now)
+
+  const mineA = fromA.filter((entry) => entry.trigger.title === title).map((entry) => entry.trigger.id)
+  const mineB = fromB.filter((entry) => entry.trigger.title === title).map((entry) => entry.trigger.id)
+
+  assert.equal(mineA.length, 1, 'the trigger must be due on the host that made it')
+  assert.deepEqual(
+    mineB,
+    mineA,
+    'and equally due on the second host, because a read is not a claim and nothing excludes a second kernel',
+  )
+
+  a.state.dispose?.()
+  b.state.dispose?.()
+})
+
 test('authority survives the restart because it is re-attested, not re-granted', async () => {
   const first = coldHost()
   apply(first.ctx)

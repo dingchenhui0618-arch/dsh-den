@@ -3,14 +3,14 @@
 > A **7×24 resident personal assistant** for [DeepSeek Harness](https://github.com/deepseek-ai/dsh).
 > Not another chat window — an assistant that stays on, keeps its own memory, works while you are away, and stops to ask before it acts outside your trust boundary.
 
-Status: **the core is implemented, tested (239/239), and active in a real profile.** The plugin is loaded inside a real DSH 0.2.0-rc.2 desktop profile — it is in that profile's `dsh.profile.bundles`, and the running host reports it as `fiberPhase: active` — registering 11 model-facing tools, the approval guard, the heartbeat, and an interactive status panel. Verified against the *running* system rather than only in tests: the heartbeat ticks on its 60-second cadence, and the panel is an **active occupant** of both `sidebar.panellist` (`id: dsh-den.status`, order 245) and the `main` panel (`key: dsh-den.status`).
+Status: **the core is implemented, tested (240/240), and active in a real profile.** The plugin is loaded inside a real DSH 0.2.0-rc.2 desktop profile — it is in that profile's `dsh.profile.bundles`, and the running host reports it as `fiberPhase: active` — registering 11 model-facing tools, the approval guard, the heartbeat, and an interactive status panel. Verified against the *running* system rather than only in tests: the heartbeat ticks on its 60-second cadence, and the panel is an **active occupant** of both `sidebar.panellist` (`id: dsh-den.status`, order 245) and the `main` panel (`key: dsh-den.status`).
 
 **And it reproduces from this repository alone.** A fresh `git clone` of the published repo — no `node_modules`, because the package declares **no dependencies at all** — runs the whole suite green:
 
 ```
 node_modules present in clone: False
 dependencies declared: (none)
-ℹ tests 239   ℹ pass 239   ℹ fail 0
+ℹ tests 240   ℹ pass 240   ℹ fail 0
 test exit: 0
 ```
 
@@ -302,6 +302,7 @@ These were read out of the running Host rather than assumed, and two of them cha
 - **D5 memory + status UI** — scenario-isolated memory domains *(done, tested)*; interactive resident panel *(done: registers in the live sidebar, verified through 41 interaction checks and 22 route tests)*
 - **D6 7×24** — supervised survival: killed process recovers with no human intervention, verified over a long run
   - *Progress:* the watchdog distinguishes a wedged Host from a healthy one (`StrictHttp`; a TCP-listening-but-HTTP-dead Host was previously logged as healthy), and the plugin's own heartbeat now self-heals instead of deferring permanently. The kernel also runs on its own clock with nobody present: after the instance booted at `05:06:55.290Z` it began ticking on the 60-second cadence and its `lastTickAt` kept advancing across separate checks, none of which the kernel was answering. What is still open is a **long unattended run** — the acceptance criterion is a kill-and-recover observed without a human, not a configuration.
+  - *Known limit:* "resident" assumes **one Host per state tree**, and nothing enforces it. `~/.dsh/den` is keyed on `DSH_HOME`, not on the profile, so two profiles share one tree; there is no lock, and `pid` is only ever reported. Measured: with two Hosts over one home, `dueTriggers` tells both that the same trigger is due, because a read is not a claim. The duplicate wake that follows is a direct consequence of a deliberate ordering recorded at `kernel.js` — the check-in stays due if the process dies mid-delivery, trading a rare duplicate for never losing a check-in. Under one Host that trade is right; under two it makes the duplicate routine. The fix is exclusivity, not a reordering, since claiming before delivery would buy back the loss that comment refuses. Not implemented yet: DESIGN 2.16 records why it waits to measure the duplicate rather than reason about it.
 
 ## 7×24 in two stages
 
