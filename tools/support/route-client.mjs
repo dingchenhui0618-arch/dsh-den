@@ -77,6 +77,43 @@ export async function routeValue({ port, route = '/dsh-den', action, input, time
 }
 
 /**
+ * Whether a live probe may speak about this tree at all.
+ *
+ * Measured by `check-deployment.mjs` on 2026-10-13: the host loaded at `08:43:05.676Z` while
+ * `client/client.js` changed at `09:24:00`, and every `check:*` probe still exited 0. They were
+ * run individually, and each describes the *running* instance — which was the code from before
+ * the edits. `verify:live` stops at step 1 for exactly this reason, but the individual probes had
+ * no such gate, so "all thirteen exit 0" was reported as live evidence about a tree the host had
+ * never loaded. The gap was never the missing measurement; it was that the measurement was not on
+ * the path a single probe takes.
+ *
+ * `usable: false` has two distinct causes and both are refusal: an instance that says it is older
+ * than the tree, and an instance that cannot say. Only one of them is the instance's fault, and
+ * neither is a pass.
+ *
+ * @param {object|null|undefined} freshness the `freshness` field of a status payload
+ * @returns {{usable: boolean, code: string, reason: string}} `code` is `current`, `stale`,
+ *   `cannot-say`, or `no-field`.
+ */
+export function judgeHostUsability(freshness) {
+  if (freshness === null || freshness === undefined) {
+    return {
+      usable: false,
+      code: 'no-field',
+      reason:
+        'this instance does not report its own freshness, so it predates the field — which means it is ' +
+        'running code older than the tree being probed',
+    }
+  }
+  const detail = typeof freshness.detail === 'string' && freshness.detail ? freshness.detail : 'no detail given'
+  if (freshness.known !== true) {
+    return { usable: false, code: 'cannot-say', reason: `the instance cannot judge itself: ${detail}` }
+  }
+  if (freshness.stale) return { usable: false, code: 'stale', reason: detail }
+  return { usable: true, code: 'current', reason: detail }
+}
+
+/**
  * End a probe with a clean exit.
  *
  * Do not call `process.exit()`: it tears the loop down underneath whatever is still

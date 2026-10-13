@@ -25,18 +25,18 @@
     "check:ui": "node tools/check-client-interaction.mjs",
     "check:acceptance": "node tools/check-acceptance.mjs",
     "check:deployment": "node tools/check-deployment.mjs",
-    "check:autonomy": "node tools/check-live-autonomy.mjs",
-    "check:notices": "node tools/check-live-notices.mjs",
-    "check:memory": "node tools/check-live-memory.mjs",
+    "check:autonomy": "node tools/require-fresh-host.mjs && node tools/check-live-autonomy.mjs",
+    "check:notices": "node tools/require-fresh-host.mjs && node tools/check-live-notices.mjs",
+    "check:memory": "node tools/require-fresh-host.mjs && node tools/check-live-memory.mjs",
     "verify:live": "node tools/verify-after-restart.mjs",
-    "check:tools": "node tools/check-tools-live.mjs",
+    "check:tools": "node tools/require-fresh-host.mjs && node tools/check-tools-live.mjs",
     "diagnose:status": "node tools/diagnose-status-output.mjs",
     "check:package": "node tools/check-package-contents.mjs",
     "check:install": "node tools/check-install.mjs",
     "verify": "npm test && npm run check:source-tracked && npm run check:bundle && npm run check:ui && npm run check:acceptance && npm run check:package && npm run check:install",
-    "check:wake-api": "node tools/check-wake-api.mjs",
+    "check:wake-api": "node tools/require-fresh-host.mjs && node tools/check-wake-api.mjs",
     "check:source-tracked": "node tools/check-no-ignored-source.mjs",
-    "check:grant-bypass": "node tools/check-live-grant-bypass.mjs"
+    "check:grant-bypass": "node tools/require-fresh-host.mjs && node tools/check-live-grant-bypass.mjs"
   },
   "engines": {
     "node": "^22.19.0 || >=24"
