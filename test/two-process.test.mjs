@@ -25,7 +25,6 @@ import { fileURLToPath } from 'node:url'
 const childScript = fileURLToPath(new URL('./support/resident-child.mjs', import.meta.url))
 const sandboxHome = mkdtempSync(join(tmpdir(), 'dsh-den-two-process-'))
 const SESSION_ID = 'session-two-process'
-const NOW = 1000 + 300_000
 
 let children = []
 
@@ -62,7 +61,7 @@ function alive(pid) {
 
 function spawnChild(mode, resultFile, flags = []) {
   const child = spawn(process.execPath, [childScript, mode, resultFile, ...flags], {
-    env: { ...process.env, DSH_HOME: sandboxHome, DEN_CHILD_SESSION: SESSION_ID, DEN_CHILD_NOW: String(NOW) },
+    env: { ...process.env, DSH_HOME: sandboxHome, DEN_CHILD_SESSION: SESSION_ID },
     stdio: 'ignore',
   })
   children.push(child)
@@ -72,6 +71,13 @@ function spawnChild(mode, resultFile, flags = []) {
 const exited = (child) =>
   new Promise((resolve, reject) => {
     child.on('exit', (code) => (code === 0 ? resolve(code) : reject(new Error(`child exited ${code}`))))
+    child.on('error', reject)
+  })
+
+/** Wait for a child that was killed rather than one that finished, so any exit code is fine. */
+const stopped = (child) =>
+  new Promise((resolve, reject) => {
+    child.on('exit', resolve)
     child.on('error', reject)
   })
 
@@ -157,4 +163,42 @@ test('two real processes deliver one check-in, because only one holds residency'
 
   const deliveries = readFileSync(`${firstFile}.deliveries`, 'utf8').trim().split('\n').filter(Boolean)
   assert.equal(deliveries.length, 1, `one check-in must be delivered once, not ${deliveries.length} times`)
+})
+
+test('a killed process leaves residency behind and the next one recovers it with nobody watching', async () => {
+  // Cold recovery, the way it actually happens. The holder is killed rather than disposed, so
+  // nothing releases the lease and nothing renews it — the file is simply left behind by a
+  // process that no longer exists, which is what a crash or a forced restart looks like from the
+  // next boot's side.
+  //
+  // This is also the case a start-time lock would get wrong: if residency were claimed once at
+  // boot, this state tree would have no resident until a human noticed. The next process has to
+  // take it over on its own, and then actually deliver.
+  const holderFile = at(sandboxHome, 'killed.json')
+  const holder = spawnChild('hold', holderFile)
+  await waitForFile(holderFile)
+  const holderPid = readResult(holderFile).pid
+  assert.equal(alive(holderPid), true, 'the holder was alive when it claimed residency')
+
+  holder.kill()
+  await stopped(holder)
+  const deadline = Date.now() + 10_000
+  while (alive(holderPid) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25))
+  assert.equal(alive(holderPid), false, 'it has to be genuinely gone, or this tests nothing')
+  assert.equal(existsSync(`${sandboxHome}/den/kernel-lease.json`), true, 'and its lease is still on disk')
+
+  const recoverFile = at(sandboxHome, 'recovered.json')
+  const recover = spawnChild('tick', recoverFile, ['--setup'])
+  await exited(recover)
+  const report = readResult(recoverFile)
+
+  assert.equal(report.standby, false, 'a dead owner must not keep the survivor waiting')
+  // `holderPid` on the tick result only exists on a standby tick — the kernel has no reason to
+  // report a holder it is not deferring to. Who holds residency is the lease's answer.
+  assert.equal(report.residency.held, true, 'the survivor holds residency now')
+  assert.equal(report.residency.holderPid, report.pid, 'and it is the survivor that holds it')
+  assert.equal(report.due, 1, 'and it found the check-in the dead process never fired')
+
+  const deliveries = readFileSync(`${recoverFile}.deliveries`, 'utf8').trim().split('\n').filter(Boolean)
+  assert.equal(deliveries.length, 1, 'which it delivered, with no human involved')
 })

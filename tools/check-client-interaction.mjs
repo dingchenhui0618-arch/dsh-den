@@ -537,6 +537,37 @@ const panel7 = mount(
 await panel7.settle()
 check(panel7.text().includes('已放弃'), 'giving up on the heartbeat is stated plainly')
 
+/* --- a standby host is reported as standby, not as a fault ---------------- */
+
+// Standing down is correct behaviour when another host holds residency over the same state tree,
+// so it must not read as a broken heartbeat: an operator sent hunting a fault that is not there
+// is the cost of getting this wrong. Both directions are pinned, because a branch that labels
+// every host standby would pass the first check on its own.
+const standbyPanel = mount(
+  boot({
+    scripted: {
+      status: healthyStatus({ residency: { held: false, holderPid: 4242, staleMs: 180_000, lastError: null } }),
+      'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } },
+    },
+  }),
+  { useSessions: () => ({ activeId: 'session-active' }) },
+)
+await standbyPanel.settle()
+check(standbyPanel.text().includes('待命'), 'a host that stood down says standby instead of "running"')
+check(standbyPanel.text().includes('4242'), 'and names the process that holds residency')
+
+const holdingPanel = mount(
+  boot({
+    scripted: {
+      status: healthyStatus({ residency: { held: true, holderPid: null, staleMs: 180_000, lastError: null } }),
+      'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } },
+    },
+  }),
+  { useSessions: () => ({ activeId: 'session-active' }) },
+)
+await holdingPanel.settle()
+check(!holdingPanel.text().includes('待命'), 'while the host that holds residency is not labelled standby')
+
 /* --- no active conversation disables the actions instead of guessing ------- */
 
 const panel8 = mount(boot({ sessionId: null, scripted: { status: healthyStatus({ autonomyKnown: false }), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } } }), {

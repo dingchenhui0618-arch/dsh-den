@@ -46,7 +46,12 @@ if (mode === 'report' || mode === 'hold') {
   else process.exit(0)
 } else if (mode === 'tick') {
   const sessionId = process.env.DEN_CHILD_SESSION
-  const now = Number(process.env.DEN_CHILD_NOW)
+  // The real clock, not a synthetic one. A synthetic `now` puts this process's lease timestamps
+  // thousands of times away from the other process's real ones, so the record always reads as
+  // stale and the pid-liveness branch is never reached — and that branch is the one these
+  // processes exist to exercise. Real time keeps both on one clock, so freshness is decided by
+  // whether the recorded owner is still alive, exactly as it is in the field.
+  const now = Date.now()
 
   // The grant and the check-in are written by whichever process runs with `--setup`. Both
   // children then read the same files, which is what makes them two Hosts over one home rather
@@ -59,7 +64,7 @@ if (mode === 'report' || mode === 'hold') {
       title: 'cross-process check',
       prompt: 'report only failures',
     })
-    saveTrigger({ ...trigger, createdAt: 1000, lastFiredAt: 1000 })
+    saveTrigger({ ...trigger, createdAt: now - 3_600_000, lastFiredAt: now - 3_600_000 })
     writeJsonAtomic(denPath('grants', `${digest(sessionId)}.json`), {
       version: 1,
       sessionId,
