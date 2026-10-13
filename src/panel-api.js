@@ -68,6 +68,9 @@ export function statusSnapshot(service, { sessionId, nextTriggerAt } = {}) {
      * is that adding a field is a two-file change and only one of them fails loudly.
      */
     wakeApi: status.wakeApi ?? null,
+    /** Which process is answering, so "has this Host loaded my change" is answerable. */
+    pid: status.pid ?? null,
+    startedAt: status.startedAt ?? null,
     /** Present so the panel can explain its own transport failure. */
     route: status.statusRoute ?? null,
     /**

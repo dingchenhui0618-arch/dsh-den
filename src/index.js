@@ -113,6 +113,12 @@ export class DenService {
     // accumulate, so sweep once at boot. Only the den's own tree is touched, and
     // the grace period keeps a concurrent writer's in-flight file safe.
     this.reapedTempFiles = reapStaleTempFiles(this.root) + reapStaleTempFiles(join(this.root, 'memory'))
+    /**
+     * When this instance was constructed, which is when this process last loaded the
+     * plugin. Distinct from the Host's own start time and from any file's mtime, and the
+     * only one of the three that answers "is the code I just edited actually running".
+     */
+    this.startedAt = new Date().toISOString()
 
     /**
      * Claim the tree on disk at boot, so the assistant's existence is durable from
@@ -294,6 +300,18 @@ export class DenService {
        * looked healthy. This field makes the waiting state itself observable.
        */
       kernelDeferred: this.kernelDeferred ?? null,
+      /**
+       * Which process is answering, so "has this host loaded my change yet" is answerable.
+       *
+       * A Host that has not reloaded a changed plugin file and a Host that is genuinely
+       * broken look identical from a route response. Without this, the only way to tell was
+       * to guess, and guessing produced the wrong report once already — the panel said
+       * "absent, so this must be a stale build" while the build was current and the payload
+       * allow-list was the real cause. `startedAt` is when this plugin instance was
+       * applied, so a restart changes it and a reload of nothing does not.
+       */
+      pid: typeof process !== 'undefined' && Number.isFinite(process.pid) ? process.pid : null,
+      startedAt: this.startedAt,
       /**
        * Whether the wake delivery surface actually exists on this Host, measured rather
        * than assumed.

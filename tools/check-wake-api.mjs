@@ -28,12 +28,15 @@
  * Run: node tools/check-wake-api.mjs [baseUrl]
  */
 
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 
 const BASE = process.argv[2] ?? 'http://127.0.0.1:19387'
 const ROUTE = '/dsh-den'
+/** Where the probe remembers the host process it last looked at. */
+const LAST_SEEN = join(tmpdir(), 'dsh-den-wake-api-seen.json')
 
 function get(url) {
   return new Promise((resolve, reject) => {
@@ -68,21 +71,42 @@ try {
   process.exit(1)
 }
 
-const wake = payload.wakeApi
+const wake = payload?.value?.wakeApi
 const reported = wake !== undefined && wake !== null
 
-// What the shipped build emits. The running Host may still be the previous build, and
-// saying so is more useful than reporting a product defect that is really a stale process.
-const statusPath = join(process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? '.', '.dsh'), 'den', 'state.json')
-const stateHasWake = existsSync(statusPath) && readFileSync(statusPath, 'utf8').includes('wakeApi')
+// A build that predates the field and a build that has it but is not loaded look the same
+// from outside. Say both, name the one transferable fact, and start a clock so a restart
+// can be told apart from a reload by whether this number changed.
+const startedAt = payload?.value?.startedAt ?? null
+const pid = payload?.value?.pid ?? null
+const observedNow = { pid, startedAt, at: new Date().toISOString() }
+// Read the previous run, then record this one. One file, read-then-write, so the rotation
+// cannot get out of step with itself.
+let previous = null
+try {
+  previous = JSON.parse(readFileSync(LAST_SEEN, 'utf8'))
+} catch {
+  previous = null
+}
+try {
+  writeFileSync(LAST_SEEN, JSON.stringify(observedNow, null, 2))
+} catch {
+  /* a probe must not fail because it cannot keep a note */
+}
+const sameProcess = previous !== null && previous.pid === pid && previous.startedAt === startedAt
 
 check(
   reported,
   'the status payload carries the wake-surface measurement',
   reported
     ? undefined
-    : `absent. This Host is running a build from before the field existed (state.json mentions it: ${stateHasWake}). ` +
-      'That is a stale process, not a product defect — restart DSH and re-run.',
+    : 'absent from the payload the running Host serves.\n' +
+      `       This process: pid ${pid ?? '?'}, started ${startedAt ?? '?'}` +
+      (previous === null ? '' : ` (previous run: pid ${previous.pid ?? '?'}, started ${previous.startedAt ?? '?'})`) +
+      `\n       Same process as the previous run: ${sameProcess ? 'yes — nothing has been reloaded, so the field cannot' +
+        ' appear no matter how correct the source is' : 'no — a new process is serving an old payload, which is a real problem'}.` +
+      '\n       The source is correct either way; what this measures is whether the running' +
+      ' host has loaded it.',
 )
 
 if (!reported) {
