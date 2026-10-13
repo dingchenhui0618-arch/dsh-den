@@ -99,7 +99,16 @@ console.log('\n=== GOAL 2 — boot persists state ===')
 
   const afterBoot = await first.tool('den_status').execute({})
   check(existsSync(join(den, 'state.json')), 'booting writes state.json', join(den, 'state.json'))
-  check(afterBoot.stateSurvivesRestart === true, 'status reports that state survives a restart')
+  // The honest answer on a first-ever boot into an empty home is `false`: nothing survived
+  // a restart, because nothing preceded it. This check used to assert `true`, which the old
+  // implementation produced by reading the state file *after* the boot had written it — so
+  // the assertion passed for a machine that had never been restarted, and the field's name
+  // supplied a conclusion the measurement did not support.
+  check(
+    afterBoot.stateSurvivesRestart === false,
+    'a first boot reports that nothing preceded it, rather than claiming a survival',
+    `stateSurvivesRestart=${afterBoot.stateSurvivesRestart} stateCreatedAt=${afterBoot.stateCreatedAt}`,
+  )
   const stored = JSON.parse(readFileSync(join(den, 'state.json'), 'utf8'))
   check(typeof stored.dailyTurnBudget === 'number', 'the stored state carries the budget', `dailyTurnBudget=${stored.dailyTurnBudget}`)
   check(typeof stored.tickSeconds === 'number', 'the stored state carries the cadence', `tickSeconds=${stored.tickSeconds}`)
@@ -116,6 +125,20 @@ console.log('\n=== GOAL 2 — boot persists state ===')
     JSON.stringify(afterRestart.quietHours) === JSON.stringify({ from: 23 * 60 + 30, to: 6 * 60 + 15 }),
     'a restart preserves quiet hours',
     JSON.stringify(afterRestart.quietHours),
+  )
+  // And this is where the field named `stateSurvivesRestart` finally measures what it says.
+  // The second boot started with the first boot's file already on disk, so it reports the
+  // survival it can actually observe — and the creation time it reports is the first boot's,
+  // which is the independent half of the same claim.
+  check(
+    afterRestart.stateSurvivesRestart === true,
+    'a second boot finds the state a first boot left behind',
+    `stateSurvivesRestart=${afterRestart.stateSurvivesRestart}`,
+  )
+  check(
+    afterRestart.stateCreatedAt !== null && afterRestart.stateCreatedAt === afterBoot.stateCreatedAt,
+    'and it is the first boot that created it, not the second',
+    `first=${afterBoot.stateCreatedAt} second=${afterRestart.stateCreatedAt}`,
   )
 }
 

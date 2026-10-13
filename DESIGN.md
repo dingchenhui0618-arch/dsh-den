@@ -549,6 +549,45 @@ Error: refused: this would pull a stored credential into the conversation (crede
 
 **这个修复需要一次重启才在活体上生效**，与投递修复一样：插件模块在宿主启动时载入。
 
+### 2.11 第三个「报告它没测量过的结论」的字段：`stateSurvivesRestart`
+
+同一类缺陷的第三例。前两例是 `statusSnapshot` 的白名单，和 `gateAudit()` 读一个从不被写的文件。
+
+```js
+stateSurvivesRestart: readJson(this.statePath) !== undefined,   // 在 status() 里
+```
+
+它上面两行的注释写着：*"Counts come from disk, never from memory, so this cannot overstate what survived a restart."* ——**而它恰恰在过度声称**。
+
+启动时 `saveState({})` 会写下 `state.json`，而 `status()` 在写入**之后**才读它。所以这个字段在**从未重启过的机器的第一次启动**上就是 `true`。**一个以过去事件命名、却用现在时读取来回答的字段，不是测量，是一个碰巧看起来像测量的常量。**
+
+设计者自己的注释把意图说得很清楚：*"A resident assistant that cannot say whether it has ever run is not reporting its state honestly."* ——要回答的是「以前跑过没有」。而这个实现永远回答「有」。
+
+**代价是它已经被当成证据引用了**：`tools/check-acceptance.mjs` 在**全新 home 的第一次启动**上断言 `stateSurvivesRestart === true`，检查名却是「boot persists state」。字段的名字**代替了**测量来提供结论。
+
+**修法**：在启动 claim 目录**之前**捕获，这才是一个「答案还有可能是否」的时刻。
+
+```js
+const priorState = readJson(this.statePath)
+this.priorStateExisted = priorState !== undefined
+this.priorStateCreatedAt = priorState?.createdAt ?? null
+```
+
+`status()` 改为报告 `stateSurvivesRestart: this.priorStateExisted`，并新增 `stateCreatedAt`——它是让上面那行**可被读者独立核对**的另一半。
+
+**两个消费方一并改成断言真相**，而且比原来更强：
+
+```
+ok   a first boot reports that nothing preceded it, rather than claiming a survival
+       stateSurvivesRestart=false
+ok   a second boot finds the state a first boot left behind
+       stateSurvivesRestart=true
+```
+
+那条验收里本来就有**第二次启动**（`afterRestart`），所以能力 2 的持久化主张现在由一个真实的 `false → true` 转变来支撑，而不是由一个恒真的常量。`test/mount.test.mjs` 里也补了一条专用测试，用**同一个 home 上的两次 `apply()`** 钉住这个转变——那是「进程重启」从插件这一侧看到的样子。
+
+**可复用的判据**：一个字段若以**过去事件**命名（survived / recovered / delivered / refused），就必须在**该事件还有可能没发生**的时刻采样。晚一步采样，它就从测量退化成常量，而且**不会报错**——只会安静地为假。
+
 
 
 - `dsh-muse`、`dsh-bot` 只作**只读参考**，不 fork、不复制代码进本仓库。

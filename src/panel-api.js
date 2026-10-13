@@ -71,6 +71,13 @@ export function statusSnapshot(service, { sessionId, nextTriggerAt } = {}) {
     /** Which process is answering, so "has this Host loaded my change" is answerable. */
     pid: status.pid ?? null,
     startedAt: status.startedAt ?? null,
+    /**
+     * Whether a previous life left state behind, and when that state was first written.
+     * Carried through the same allow-list for the same reason as the fields above: the
+     * value is only worth anything if the human-facing surface can actually see it.
+     */
+    stateSurvivesRestart: status.stateSurvivesRestart === true,
+    stateCreatedAt: status.stateCreatedAt ?? null,
     /** Present so the panel can explain its own transport failure. */
     route: status.statusRoute ?? null,
     /**

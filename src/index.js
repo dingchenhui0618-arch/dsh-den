@@ -129,6 +129,20 @@ export class DenService {
      */
     this.startedAt = new Date().toISOString()
 
+    // Measured *before* the boot claims the tree, because that ordering is the whole
+    // question. `stateSurvivesRestart` used to be computed inside `status()` as
+    // `readJson(statePath) !== undefined`, which is evaluated after the write below and is
+    // therefore `true` on the very first boot of a machine that has never been restarted.
+    // A field named for a past event, answered by a present-tense read, is not a
+    // measurement — it is a constant that happens to look like one, and it was cited as
+    // evidence in `check-acceptance.mjs` with the name supplying the conclusion.
+    //
+    // Capturing it here answers the question the name asks: was there already state on
+    // disk from a previous life?
+    const priorState = readJson(this.statePath)
+    this.priorStateExisted = priorState !== undefined
+    this.priorStateCreatedAt = priorState?.createdAt ?? null
+
     /**
      * Claim the tree on disk at boot, so the assistant's existence is durable from
      * the first moment rather than from the first schedule.
@@ -269,7 +283,13 @@ export class DenService {
       name: state.displayName,
       home: this.root,
       stateFile: this.statePath,
-      stateSurvivesRestart: readJson(this.statePath) !== undefined,
+      // True only when a previous life left state behind, captured before this boot wrote
+      // anything. On a first-ever boot it is `false`, which is the honest answer: nothing
+      // survived, because nothing preceded it.
+      stateSurvivesRestart: this.priorStateExisted,
+      // When the stored configuration was first written. Together with `startedAt` this is
+      // what makes the line above checkable by a reader instead of trusted.
+      stateCreatedAt: state.createdAt ?? null,
       quietHours: state.quietHours,
       dailyTurnBudget: state.dailyTurnBudget,
       cooldownSeconds: state.cooldownSeconds,

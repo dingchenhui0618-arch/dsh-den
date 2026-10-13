@@ -317,17 +317,53 @@ test('the status tool reports filesystem truth, not intentions', async () => {
   const status = await statusTool.execute({})
 
   assert.equal(status.name, 'Den')
-  // Booting claims the tree on disk, so the configuration on show is stored state
-  // rather than a default that has never been written.
-  assert.equal(status.stateSurvivesRestart, true, 'boot must persist state, not leave the home empty')
+  // Two facts live here and they used to be conflated. That the boot *claimed the tree* is
+  // what this test is about. That the state *survived a restart* is a claim about a
+  // previous life: this file shares one home and earlier tests have already booted into it,
+  // so `true` is the honest answer *here* — but it is an observation about the disk, not a
+  // constant. The false-to-true transition is pinned on an empty home in the test below.
+  assert.equal(status.stateSurvivesRestart, true, 'the field must agree with what earlier boots left on disk')
+  assert.ok(status.stateCreatedAt, 'and the tree must record when it was first claimed')
   assert.equal(status.gate, 'mounted')
   assert.ok(status.kernel.running)
   assert.equal(status.triggers.total, 0)
   assert.equal(status.ledger.turns, 0)
 })
 
-test('booting persists state without clobbering an existing configuration', async () => {
-  const { ctx, state } = fakeHost()
+test('state survival is measured rather than assumed: false on a first boot, true on a second', () => {
+  // `stateSurvivesRestart` was computed as `readJson(statePath) !== undefined` *inside*
+  // `status()`, which runs long after the boot wrote that very file. It was therefore
+  // always `true` — on a machine that had never been restarted, on a home that had just
+  // been created — while its name asserted a past event and a live acceptance check cited
+  // it as proof of one. A field can only be evidence if it is read at a moment when the
+  // answer could still be no, so it is captured before the boot claims the tree.
+  //
+  // Two `apply()` calls over one home is what a process restart looks like from the
+  // plugin's side: new instances, same disk.
+  const home = mkdtempSync(join(tmpdir(), 'dsh-den-reboot-'))
+  const previousHome = process.env.DSH_HOME
+  try {
+    process.env.DSH_HOME = home
+
+    const firstHost = fakeHost()
+    apply(firstHost.ctx)
+    const first = firstHost.state.provided.get('den').status()
+    assert.equal(first.stateSurvivesRestart, false, 'a first boot has nothing behind it to survive')
+    assert.ok(first.stateCreatedAt, 'yet it must still claim the tree and record when')
+    const createdAt = first.stateCreatedAt
+
+    const secondHost = fakeHost()
+    apply(secondHost.ctx)
+    const second = secondHost.state.provided.get('den').status()
+    assert.equal(second.stateSurvivesRestart, true, 'a second boot finds the state the first one left')
+    assert.equal(second.stateCreatedAt, createdAt, 'and the creation time still names the first boot')
+  } finally {
+    process.env.DSH_HOME = previousHome
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('booting persists state without clobbering an existing configuration', async () => {  const { ctx, state } = fakeHost()
   apply(ctx)
   const configure = state.tools.find((tool) => tool.name === 'den_configure')
   await configure.execute({ dailyTurnBudget: 7, tickSeconds: 120 })
