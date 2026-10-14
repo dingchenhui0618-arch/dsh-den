@@ -1060,16 +1060,19 @@ if (process.argv.includes('--demo')) {
         // old label named. `grantPanel` is that component mounted with the session the shell hands
         // over, which is the real case; it pairs with the `main, shell.overlay` injection check.
         hint: '右下角 420px 卡片；按住顶部条可拖；[–] 收成胶囊；没有对话时提示说一句就开始',
+        tall: true,
         tree: grantPanel.tree,
       },
       {
         label: '② 浮窗里的消息流：可滚动、可直接发话',
         hint: '演示数据。一轮问答；发完立即重读，所以自己的话先出现，回复随后到',
+        tall: true,
         tree: panelTalk.tree,
       },
       {
         label: '① 收成胶囊：缩小不等于失明，胶囊上仍然报信息',
         hint: '常驻中 / 心跳 / 预算 / 待重启都在这一行白话里，点开回到卡片',
+        tall: true,
         tree: panelPill.tree,
       },
       {

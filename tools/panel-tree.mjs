@@ -174,8 +174,14 @@ h1{font-size:18px;margin:0 0 6px}
 .meta{font-size:12px;color:var(--dsw-alias-label-secondary)}
 .banner{margin:12px 0 0;padding:8px 10px;border-radius:6px;font-size:12px;
 background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-state-warn-primary)}
-section{max-width:760px;margin:22px auto;padding:16px;border-radius:10px;
+/* A section is a positioning context on purpose. The floating window is absolutely positioned with
+   its own inset, so with no positioned ancestor it anchors to the viewport instead: every window
+   in the page stacked in the bottom-right corner, on top of one another, and the sections above it
+   looked empty while actually holding the window. The tall class gives a window the room it needs without
+   clipping it — a card can be 72vh, which no fixed height would fit. */
+section{position:relative;max-width:760px;margin:22px auto;padding:16px;border-radius:10px;
 background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2)}
+section.tall{min-height:560px}
 h2{font-size:13px;margin:0 0 4px;font-weight:600}
 .hint{margin:0 0 12px;font-size:12px;color:var(--dsw-alias-label-tertiary)}
 button{font:inherit}
@@ -185,7 +191,7 @@ background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary)}
 border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
 `
   const body = sections
-    .map((section) => `  <section>\n    <h2>${escapeHtml(section.label)}</h2>\n    <p class="hint">${escapeHtml(section.hint)}</p>\n    <div>${toHtml(section.tree)}</div>\n  </section>`)
+    .map((section) => `  <section${section.tall ? ' class="tall"' : ''}>\n    <h2>${escapeHtml(section.label)}</h2>\n    <p class="hint">${escapeHtml(section.hint)}</p>\n    <div>${toHtml(section.tree)}</div>\n  </section>`)
     .join('\n')
   return `<!doctype html>
 <html lang="zh-CN" data-theme="light">
