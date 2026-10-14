@@ -603,8 +603,11 @@ if (process.argv.includes('--demo')) {
     sections: [
       {
         label: '对话输入框上方那条（dock）',
-        hint: '常驻时你只看见这一条：一句白话 + 待读通知 + 一个「读过了」',
-        tree: dock && dock.tree ? dock.tree : [],
+        // `dock` is the `bootDock()` descriptor — a component plus its options, never mounted — so
+        // `dock.tree` was always undefined and this section rendered an empty box. `grantPanel` is the
+        // same seat mounted with the session the shell hands over, which is the real case.
+        hint: '常驻与授权都在这一条上，默认只占一行',
+        tree: grantPanel.tree,
       },
       {
         label: '页面座位（默认视图，按下 [详情] 之前）',
