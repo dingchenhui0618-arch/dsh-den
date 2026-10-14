@@ -424,7 +424,8 @@ if (process.env.DEN_DEBUG) {
 const text = panel.text()
 check(text.includes('常驻助理') && !text.includes('Den ——'), 'the panel renders its title, lowercase to match the nav entry')
 check(text.includes('进行中 2'), 'the plain line carries the task count once there is work')
-check(text.includes('卡住 1'), 'a stuck step rides on that same line, not behind details')// Looking for the *string* would pass on the copy that says where the control is, so this looks for a
+check(text.includes('卡住 1'), 'a stuck step rides on that same line, not behind details')
+  check(text.includes('怎么用'), 'the panel itself says how to ask, so the person does not have to be told')// Looking for the *string* would pass on the copy that says where the control is, so this looks for a
 // button: an affordance the page would have to render to be clickable.
 check(
   !panel.buttons().some((button) => textOf(button).trim() === '授予'),
