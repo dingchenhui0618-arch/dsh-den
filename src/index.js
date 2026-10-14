@@ -52,7 +52,7 @@ import { TASKS_FILE } from './tasks-store.js'
 import { PROFILE_FILE } from './profile.js'
 import { registerProfileTools } from './profile-tools.js'
 import { registerTaskTools } from './tasks-tools.js'
-import { ensureConversation } from './conversation.js'
+import { ensureConversation, promptConversation } from './conversation.js'
 
 export const name = 'dsh-den'
 export const inject = ['agents', 'tools', 'webServer']
@@ -651,13 +651,16 @@ export function createDeliver(ctx, service) {
      */
     let wake = agent
     let wakeSessionId = trigger.sessionId
-    if (!wake || typeof wake.followup !== 'function') {
+    // A driver is only needed for the fallback now: the admission path below addresses a session id
+    // and the host resumes that session itself. So this branch exists to learn *which* session the
+    // wake belongs to, and to keep a driver in hand in case the host exposes no session controller.
+    if (!wake) {
       try {
         const standing = await ensureConversation(
           ctx,
           service?.conversationPath ? { path: service.conversationPath } : {},
         )
-        if (standing && typeof standing.agent?.followup === 'function') {
+        if (standing?.sessionId) {
           wake = standing.agent
           wakeSessionId = standing.sessionId
           // Recorded, not silent: "the check ran in den's own conversation" is a different fact
@@ -665,23 +668,36 @@ export function createDeliver(ctx, service) {
           service.noteEvent({ type: 'wake-standing', triggerId: trigger.id, sessionId: standing.sessionId })
         }
       } catch {
-        /* the block below reports it, in the words it already used */
+        /* the fallback below reports it, in the words it already used */
       }
-    }
-    if (!wake || typeof wake.followup !== 'function') {
-      service.noteEvent({ type: 'wake-unavailable', triggerId: trigger.id })
-      // Throwing, not returning empty.
-      //
-      // The kernel reads an empty reply as "nothing worth saying" — a *successful* wake
-      // that chose silence. That is the wrong report for a wake that never reached
-      // anyone: it would charge the turn, advance the cadence, and quietly consume a
-      // check-in the human asked for. Throwing routes it to the kernel's failure path,
-      // which charges only the retry throttle and leaves the schedule due, so it runs
-      // when a delivery path exists again. Never claim work that did not happen.
-      throw new Error('dsh-den: no delivery path for this wake')
     }
 
     const text = `${instruction}\n\n## Scheduled check\n${trigger.title}\n${trigger.prompt}`
+
+    /**
+     * Admit the wake through the host's own entry point.
+     *
+     * `sessionController.prompt` is "Admit one prompt after explicitly resuming its Session" — the
+     * same call the GUI composer makes — and it writes the `user/message` into the session log *and*
+     * starts the turn, which is exactly what the reply read-back below then waits for. The
+     * agent-handle path further down stays as the fallback, for a host that exposes no session
+     * controller: `Agent` declares only `readonly id: SessionId`, so `followup` is not part of the
+     * contract at all, and building delivery on it is what left the first standing message with a
+     * session header on disk and no turn to read a reply from.
+     */
+    let admitted = null
+    if (wakeSessionId) {
+      try {
+        admitted = await promptConversation(ctx, wakeSessionId, text)
+      } catch (error) {
+        service.noteEvent({
+          type: 'wake-admit-failed',
+          triggerId: trigger.id,
+          sessionId: wakeSessionId,
+          error: String(error?.message || error),
+        })
+      }
+    }
 
     /**
      * Read the wake turn's own reply, which is what the "is this worth saying?"
@@ -700,7 +716,9 @@ export function createDeliver(ctx, service) {
      * reply is distinguishable from everything the human said earlier.
      */
     const sessions = ctx.get?.('sessions')
-    const before = sessionEvents(wake.session)
+    // The store is the authority: a live driver is not guaranteed to expose `.session`, and the
+    // session it would expose is the same one the store already keeps by id.
+    const before = sessionEvents(sessions?.get?.(wakeSessionId) || wake?.session || null)
     const baselineSeq = before.length ? Number(before[before.length - 1].seq) || 0 : 0
     // The turn the splice happens *into* is not the wake's turn. See `awaitWakeReply`.
     const baselineTurn = highestTurn(before)
@@ -730,15 +748,26 @@ export function createDeliver(ctx, service) {
      * The id is derived from the trigger and the moment so that a redelivery after a crash
      * is a distinct message rather than a duplicate the inbox projection would reject.
      */
-    if (typeof wake.followup !== 'function') {
-      throw new Error('dsh-den: the resolved agent cannot accept a followup message')
+    if (!admitted) {
+      // Throwing, not returning empty.
+      //
+      // The kernel reads an empty reply as "nothing worth saying" — a *successful* wake that chose
+      // silence. That is the wrong report for a wake that never reached anyone: it would charge the
+      // turn, advance the cadence, and quietly consume a check-in the human asked for. Throwing
+      // routes it to the kernel's failure path, which charges only the retry throttle and leaves the
+      // schedule due, so it runs when a delivery path exists again. Never claim work that did not
+      // happen.
+      if (typeof wake?.followup !== 'function') {
+        service.noteEvent({ type: 'wake-unavailable', triggerId: trigger.id })
+        throw new Error('dsh-den: no delivery path for this wake')
+      }
+      wake.followup({
+        id: `den-wake-${trigger.id}-${baselineSeq}`,
+        role: 'user',
+        source: { kind: 'user' },
+        content: [{ type: 'text', text }],
+      })
     }
-    wake.followup({
-      id: `den-wake-${trigger.id}-${baselineSeq}`,
-      role: 'user',
-      source: { kind: 'user' },
-      content: [{ type: 'text', text }],
-    })
 
     const reply = await awaitWakeReply(sessions, wakeSessionId, baselineSeq, baselineTurn)
     if (reply === null) {
