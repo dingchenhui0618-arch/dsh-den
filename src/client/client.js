@@ -1129,6 +1129,43 @@ window.__ModuleLoader__.load({
        * invented, because autonomy and schedules are both scoped per conversation
        * and a guessed id would silently target the wrong one.
        */
+      /**
+       * One shared status read for both seats.
+       *
+       * The panel polls `status` every 15s and the sidebar dot every 20s, so on a fresh page they fire
+       * together and the same question is asked twice. Memoising at this layer means the second caller
+       * joins the first caller's in-flight promise instead of issuing its own request, and any read
+       * within ten seconds returns the same answer — without the two components having to know about
+       * each other.
+       *
+       * What this does **not** buy: the two still poll on their own schedules, so they can still show
+       * answers of different ages. Only a single poller feeding both would remove that, and it is not
+       * what this is. Failures are deliberately **not** cached: a status read that failed must stay
+       * visible to the next caller rather than being replayed as if it had succeeded.
+       */
+      var rawCall = call
+      var statusMemo = { at: 0, value: null, inflight: null }
+      call = function (action, payload, sessionId) {
+        if (action !== 'status') return rawCall(action, payload, sessionId)
+        if (statusMemo.inflight) return statusMemo.inflight
+        if (statusMemo.value && Date.now() - statusMemo.at < 10000) {
+          return Promise.resolve(statusMemo.value)
+        }
+        statusMemo.inflight = rawCall(action, payload, sessionId).then(
+          function (value) {
+            statusMemo.at = Date.now()
+            statusMemo.value = value
+            statusMemo.inflight = null
+            return value
+          },
+          function (error) {
+            statusMemo.inflight = null
+            throw error
+          },
+        )
+        return statusMemo.inflight
+      }
+
       function act(action, payload, sessionId) {
         return call(action, payload, sessionId)
       }
