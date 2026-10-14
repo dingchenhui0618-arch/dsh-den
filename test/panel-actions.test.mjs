@@ -235,6 +235,33 @@ test('a panel-created schedule is still not a permission grant', async () => {
   assert.equal(service.status().grants, 0, 'creating a schedule must not create an autonomy grant')
 })
 
+test('reading a notice through the panel is what takes it out of the pending count', async () => {
+  // The user's report (2026-10-14): a wake had spoken, the page said `Pending notices 1 / 1`, and
+  // nothing anywhere showed the text. Two claims are pinned here — the text travels to the panel,
+  // and the count can reach zero — because a count that cannot is worse than no count at all.
+  const { route, service } = await live()
+  service.enqueueNotice('session-1', 'the build went green while you were out')
+
+  const status = await viaRoute(route, 'status', { sessionId: 'session-1' })
+  const pending = status.result.value.notices.pending
+  assert.equal(pending.length, 1, 'the text is owed to the conversation, not merely counted')
+  assert.match(pending[0].text, /went green/)
+  assert.equal(status.result.value.notices.deliverable, 1)
+
+  const acked = await viaRoute(route, 'notices/ack', { sessionId: 'session-1', id: pending[0].id })
+  assert.equal(acked.result.ok, true, JSON.stringify(acked.result))
+
+  const after = await viaRoute(route, 'status', { sessionId: 'session-1' })
+  assert.equal(after.result.value.notices.deliverable, 0, 'the count a human watches reaches zero')
+  assert.equal(after.result.value.notices.delivered, 1)
+  assert.deepEqual(after.result.value.notices.pending, [])
+
+  // A notice from another conversation is not this conversation's to acknowledge.
+  service.enqueueNotice('session-2', 'something else happened')
+  const wrong = await viaRoute(route, 'notices/ack', { sessionId: 'session-1', id: 'not-a-real-id' })
+  assert.equal(wrong.result.ok, false)
+})
+
 test('a schedule with no conversation is refused, and the route does not guess one', async () => {
   const { service, modules } = await live()
   const outcome = await modules.invokeAction(

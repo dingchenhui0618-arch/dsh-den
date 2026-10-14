@@ -92,6 +92,8 @@ window.__ModuleLoader__.load({
         autonomyCopyDone: 'copied — paste it as your next message',
         autonomyCopyFailed: 'copy failed — select the token above by hand',
         schedules: 'Self-checks',
+        noticesOwed: 'while you were away:',
+        noticeReadIt: 'read it',
         scheduleNone: 'none — say "check CI every 30 minutes" in the conversation and the den will add it',
         scheduleNew: 'New',
         scheduleClose: 'Close',
@@ -146,6 +148,8 @@ window.__ModuleLoader__.load({
         autonomyRevoke: '撤销',
         autonomyNoSession: '这个页面没有被绑定任何会话 —— 请到输入框上方的控件里授予',
         grantDock: '常驻自治 · 本会话',
+        noticesOwed: '你不在的时候：',
+        noticeReadIt: '读过了',
         grantDockGranted: '本会话已授予',
         grantDockNotGranted: '本会话未授予',
         grantDockUnknown: '状态未知',
@@ -449,6 +453,17 @@ window.__ModuleLoader__.load({
         })
       }
 
+      /**
+       * "Read it" — the human says they saw what the den said while they were away.
+       *
+       * This is the only thing that marks a notice delivered, and it has to come from the human:
+       * a panel render is not a human reading it, so inferring one from the other would make the
+       * count lie in the opposite direction to the bug it fixes.
+       */
+      function onAckNotice(id) {
+        run('notice', act('notices/ack', { id: id }, sessionId)).then(function () { load() })
+      }
+
       function onAddSchedule() {
         var minutes = Number(form.minutes)
         if (!form.title || !form.prompt) {
@@ -569,6 +584,46 @@ window.__ModuleLoader__.load({
       }
 
       /**
+       * What the den said while nobody was asking, rendered where the human actually looks.
+       *
+       * Measured defect (2026-10-14, reported by the user reading this very strip): a wake spoke, the
+       * page reported `Pending notices 1 / 1`, and no surface in the product showed the text. The
+       * count told the human that something had happened and nothing told them what. The same defect
+       * made the count permanent: nothing could mark a notice delivered, so it stayed pending for
+       * ever. Both halves are fixed here and in `notices.js`, and they are the same fix seen from two
+       * ends — a notice only reaches zero once a human has read it and said so.
+       */
+      function noticesBlock() {
+        var owed = (d && d.notices && d.notices.pending) || []
+        if (!owed.length) return null
+        return React.createElement(
+          'div',
+          {
+            style: {
+              display: 'flex',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: 8,
+              padding: '6px 10px',
+              fontSize: 12,
+              background: 'var(--dsw-alias-bg-layer-2)',
+              color: 'var(--dsw-alias-label-secondary)',
+            },
+          },
+          React.createElement('span', { style: { color: 'var(--dsw-alias-label-primary)' } }, t('noticesOwed')),
+          React.createElement(
+            'span',
+            { style: { flex: '1 1 200px', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+            owed[0].text,
+          ),
+          owed.length > 1
+            ? React.createElement('span', null, '+' + String(owed.length - 1))
+            : null,
+          React.createElement(Button, { onClick: function () { onAckNotice(owed[0].id) } }, t('noticeReadIt')),
+        )
+      }
+
+      /**
        * Compact mode: only the controls that need a conversation, in the seat that supplies one.
        *
        * The minted token is shown here rather than anywhere else because this strip sits directly
@@ -605,7 +660,17 @@ window.__ModuleLoader__.load({
             disabled: busy || !sessionId,
             onClick: function () { onGrant(false) },
           }, t('autonomyRevoke')),
-          action.token
+          /**
+           * The token is shown only while it is still an open invitation.
+           *
+           * Measured defect (2026-10-14, the user's screenshot): after the grant had landed — the
+           * state row read "granted for this conversation" — this strip still displayed the spent
+           * token and told the human to paste it as their next message. The token is single-use, so
+           * the instruction was already impossible to follow, and the two lines contradicted each
+           * other. `granted` comes from the host snapshot, which is the same thing the row above
+           * reports, so the strip cannot disagree with itself.
+           */
+          action.token && !granted
             ? React.createElement(
                 'span',
                 { style: { display: 'inline-flex', alignItems: 'center', gap: 6, maxWidth: '100%' } },
@@ -619,13 +684,14 @@ window.__ModuleLoader__.load({
                 }),
               )
             : null,
-          action.token
+          action.token && !granted
             ? React.createElement('span', { style: { flexBasis: '100%' } }, t('autonomyTokenHint'))
             : null,
           action.error
             ? React.createElement('span', { style: { flexBasis: '100%', color: 'var(--dsw-alias-state-warn-primary)' } }, action.error)
             : null,
           ),
+          noticesBlock(),
           schedulesBlock(true),
         )
       }

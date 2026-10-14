@@ -17,6 +17,7 @@ export const PANEL_ACTIONS = [
   'schedules/list',
   'schedules/create',
   'schedules/delete',
+  'notices/ack',
 ]
 
 /** How long a minted autonomy token stays usable. */
@@ -259,6 +260,17 @@ export async function invokeAction(service, action, payload = {}, { sessionId, n
       } catch (error) {
         return { ok: false, error: String(error?.message ?? error) }
       }
+    }
+
+    case 'notices/ack': {
+      // "Acknowledged" means the human says they read it. Without a conversation there is nothing
+      // to acknowledge *for*, and guessing one would mark another conversation's notice as read.
+      if (!liveSessionId) return { ok: false, error: 'acknowledging a notice needs a conversation' }
+      const noticeId = String(input.id ?? '')
+      const acknowledged = service.ackNotice(liveSessionId, noticeId)
+      if (!acknowledged.ok) return { ok: false, error: acknowledged.error }
+      service.noteEvent({ type: 'notice-acknowledged', noticeId, sessionId: liveSessionId })
+      return { ok: true, value: acknowledged }
     }
 
     case 'schedules/delete': {

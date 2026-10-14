@@ -40,7 +40,7 @@ import { fileURLToPath } from 'node:url'
 
 import { denHome, listJsonFiles, reapStaleTempFiles, readJson, toLosslessJson, writeJsonAtomic } from './atom.js'
 import { currentGrant, recordGrant, sessionEvents } from './grant.js'
-import { allNotices, isExpired, pendingNotices, queueNotice, sweepExpiredNotices } from './notices.js'
+import { ackNotice as markNoticeDelivered, allNotices, isExpired, pendingNotices, queueNotice, sweepExpiredNotices } from './notices.js'
 import { installGate, RISK, classifyCall, recordAudit, auditPath } from './gate.js'
 import { KernelLease } from './resident.js'
 import { DenKernel, evaluateGates, readLedger, ledgerPath } from './kernel.js'
@@ -248,6 +248,18 @@ export class DenService {
     return queueNotice(sessionId, text, kind)
   }
 
+  /**
+   * Mark a queued notice as read by the human.
+   *
+   * The panel calls this when the human presses "read it". It exists because a notice that had been
+   * shown could not stop being pending: the page reported `Pending notices 1 / 1` indefinitely, and
+   * the count a human was looking at could never reach zero. Nothing here infers delivery from a
+   * read — rendering a panel is not reading it.
+   */
+  ackNotice(sessionId, id) {
+    return markNoticeDelivered(sessionId, id)
+  }
+
   // -------------------------------------------------------------- triggers
 
   createTrigger(input) {
@@ -374,8 +386,22 @@ export class DenService {
       ledger: { path: ledgerPath(), ...ledger },
       notices: {
         total: notices.length,
-        deliverable: notices.filter((notice) => !isExpired(notice, now)).length,
-        expired: notices.filter((notice) => isExpired(notice, now)).length,
+        // "Deliverable" means: not yet shown to the human, and not too old to be worth showing.
+        // A delivered notice used to stay in this count forever, because nothing could mark it —
+        // the page said `1 / 1` while the human had never seen the text at all.
+        deliverable: notices.filter((notice) => !notice.deliveredAt && !isExpired(notice, now)).length,
+        expired: notices.filter((notice) => !notice.deliveredAt && isExpired(notice, now)).length,
+        delivered: notices.filter((notice) => Boolean(notice.deliveredAt)).length,
+        /**
+         * The text of what is still owed to this conversation, oldest first. This is the field a
+         * human-facing surface renders: a count tells the human that something happened, and only
+         * the text tells them what.
+         */
+        pending: notices
+          .filter((notice) => !notice.deliveredAt && !isExpired(notice, now))
+          .sort((a, b) => a.createdAt - b.createdAt)
+          .slice(0, 5)
+          .map((notice) => ({ id: notice.id, text: notice.text, createdAt: notice.createdAt })),
       },
       kernel: this.kernel ? { running: this.kernel.timer !== null, lastTickAt: this.kernel.lastTickAt, lastError: this.kernel.lastError } : null,
       /**

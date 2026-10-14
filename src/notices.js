@@ -96,6 +96,35 @@ function readExisting(path) {
   }
 }
 
+/**
+ * Mark one notice as delivered to the human, because the human said so.
+ *
+ * Measured defect (2026-10-14, reported by the user looking at the panel): a wake spoke — the kernel
+ * queued its text and charged the turn — and the page kept reporting `Pending notices 1 / 1` forever.
+ * The cause was in this module: `pendingNotices` knew only "deliverable" and "expired", so a notice
+ * that had been shown had no way to stop being pending, and a count that can never reach zero is a
+ * count nobody should trust.
+ *
+ * Only an explicit acknowledgement marks it. Inferring delivery from a *read* would make the count
+ * lie in the other direction: rendering a panel is not a human reading it.
+ *
+ * @returns {{ok: boolean, alreadyDelivered?: boolean, error?: string}}
+ */
+export function ackNotice(sessionId, id, now = Date.now()) {
+  if (!sessionId || !id) return { ok: false, error: 'acknowledging a notice needs a conversation and an id' }
+  const path = denPath('notices', `${id}.json`)
+  let notice
+  try {
+    notice = readJson(path)
+  } catch {
+    return { ok: false, error: 'no such notice' }
+  }
+  if (!isValidNotice(notice) || notice.sessionId !== sessionId) return { ok: false, error: 'no such notice' }
+  if (notice.deliveredAt) return { ok: true, alreadyDelivered: true }
+  writeJsonAtomic(path, { ...notice, deliveredAt: now })
+  return { ok: true, alreadyDelivered: false }
+}
+
 /** Ideas never expire; observation notices do. */
 export function isExpired(notice, now = Date.now()) {
   if (notice?.kind !== 'notice') return false
@@ -129,6 +158,9 @@ export function pendingNotices(sessionId, now = Date.now()) {
       continue
     }
     if (notice.sessionId !== sessionId) continue
+    // A notice the human has already acknowledged is neither deliverable nor expired. Without
+    // this the count a human is looking at could never reach zero — see `ackNotice`.
+    if (notice.deliveredAt) continue
     if (isExpired(notice, now)) expired.push(notice)
     else deliverable.push(notice)
   }

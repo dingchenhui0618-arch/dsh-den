@@ -18,11 +18,37 @@ process.env.DSH_HOME = sandbox
 const { denHome, digest, readJsonChecked, reapStaleTempFiles, writeJsonAtomic, publishIfAbsent, STALE_TEMP_MS } =
   await import('../src/atom.js')
 const { currentGrant, hasAutonomy, isDirectHumanDriver, recordGrant } = await import('../src/grant.js')
-const { NOTICE_TTL_MS, isExpired, noticeId, pendingNotices, queueNotice, sweepExpiredNotices } = await import(
-  '../src/notices.js'
-)
+const { NOTICE_TTL_MS, ackNotice, isExpired, noticeId, pendingNotices, queueNotice, sweepExpiredNotices } =
+  await import('../src/notices.js')
 
 test.after(() => rmSync(sandbox, { recursive: true, force: true }))
+
+test('a notice a human has read stops being pending, and only a human can stop it', () => {
+  // Measured defect (2026-10-14, reported by the user reading the panel): the page said
+  // `Pending notices 1 / 1` for a notice that had already been shown, because `pendingNotices` knew
+  // only "deliverable" and "expired". A count that can never reach zero is a count nobody should
+  // trust, and the same record was re-offered to every wake.
+  queueNotice('session-ack', 'the build went green while you were out', 'notice')
+  const before = pendingNotices('session-ack')
+  assert.equal(before.deliverable.length, 1, 'it starts pending')
+
+  const notice = before.deliverable[0]
+  assert.deepEqual(ackNotice('session-ack', notice.id), { ok: true, alreadyDelivered: false })
+
+  const after = pendingNotices('session-ack')
+  assert.equal(after.deliverable.length, 0, 'reading it takes it out of the pending count')
+  assert.equal(after.expired.length, 0, 'and not into the expired one — it was delivered, not stale')
+
+  // Pressing twice is not an error, and it does not restamp when it was read.
+  assert.deepEqual(ackNotice('session-ack', notice.id), { ok: true, alreadyDelivered: true })
+
+  // A notice belongs to one conversation. Acknowledging it from another is refused, because the
+  // alternative is one conversation marking another conversation's notice as read.
+  assert.equal(ackNotice('session-other', notice.id).ok, false)
+  assert.equal(ackNotice('session-ack', 'no-such-notice').ok, false)
+  assert.equal(ackNotice('', notice.id).ok, false)
+  assert.equal(pendingNotices('session-other').deliverable.length, 0)
+})
 
 test('state root is self-contained under the configured DSH home', () => {
   assert.equal(denHome(), join(sandbox, 'den'))
