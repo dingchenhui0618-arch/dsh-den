@@ -1161,6 +1161,82 @@ window.__ModuleLoader__.load({
       })
 
       /**
+       * The live dot beside the sidebar entry.
+       *
+       * The user's reference (Codex) shows the resident as a sidebar row with a status dot on its
+       * left, and the live Slot catalog hands us exactly that seat: `sidebar.toggle.badge` is
+       * documented as "Non-interactive notification inside the collapsed sidebar expand button".
+       * So the dot is not decoration — it is the one place the shell will show a state without a
+       * click, which is the whole point of a resident: glance, do not open.
+       *
+       * It reads the same `status` action the panel does, on a timer, so it cannot disagree with the
+       * panel. Colour carries the meaning (green = resident and heartbeat fine, amber = something is
+       * waiting for the human or the process is running older code, red = it stopped), and the
+       * accessible name is the existing resident copy rather than new wording.
+       */
+      ctx.slots.inject('sidebar.toggle.badge', function () {
+        return ctx.slots.register({ name: 'sidebar.toggle.badge' }, function StatusDot() {
+          var pair = React.useState(null)
+          var status = pair[0]
+          var setStatus = pair[1]
+
+          React.useEffect(function () {
+            var stopped = false
+            function read() {
+              call('status', {})
+                .then(function (next) {
+                  if (!stopped) setStatus(next)
+                })
+                .catch(function () {
+                  // A dot that cannot reach the plugin must not claim the resident is fine.
+                  if (!stopped) setStatus({ running: false })
+                })
+            }
+            read()
+            // `unref` is a Node-only affordance and a no-op in the browser: without it the interval
+            // keeps a Node process alive, which would hang the interaction harness rather than fail
+            // it. A check that hangs costs more than a check that is red.
+            var timer = setInterval(read, 20000)
+            if (timer && typeof timer.unref === 'function') timer.unref()
+            return function () {
+              stopped = true
+              clearInterval(timer)
+            }
+          }, [])
+
+          var tone = 'var(--dsw-alias-label-tertiary)'
+          var label = t('residentOff')
+          if (status) {
+            var waiting = Boolean(status.notices && status.notices.deliverable > 0)
+            var stale = Boolean(status.freshness && status.freshness.stale)
+            if (status.running === false) {
+              tone = 'var(--dsw-alias-state-error-primary)'
+              label = t('residentOff')
+            } else if (waiting || stale) {
+              tone = 'var(--dsw-alias-state-warn-primary)'
+              label = t('residentOn')
+            } else {
+              tone = 'var(--dsw-alias-state-success-primary)'
+              label = t('residentOn')
+            }
+          }
+
+          return React.createElement('span', {
+            'aria-label': label,
+            title: label,
+            style: {
+              display: 'inline-block',
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              background: tone,
+              boxShadow: '0 0 0 2px var(--dsw-alias-bg-layer-1)',
+            },
+          })
+        })
+      })
+
+      /**
        * The per-conversation controls, in the one seat that hands over a conversation.
        *
        * `conversation.input.dock` is session-scoped and its live catalog lists `sessionId: SessionId`
