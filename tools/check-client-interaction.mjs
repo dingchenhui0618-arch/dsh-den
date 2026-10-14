@@ -549,6 +549,23 @@ if (process.env.DEN_DEBUG) {
 }
 check(panel2.text().includes('tok-abc123'), 'the minted token is displayed for the human to carry to the conversation')
 
+/* --- the resident is visible without opening anything -------------------------------------------- */
+
+// The user's reference shows the resident as a sidebar row with a status dot beside it. The row is
+// `sidebar.panellist`; the dot is `sidebar.toggle.badge`, whose live catalog entry describes it as
+// "Non-interactive notification inside the collapsed sidebar expand button". What is asserted is the
+// **seat**, not the colour: which tone is right depends on a status payload this harness fakes, and a
+// check that pins a fake's colour proves nothing about the host.
+// A probe with its own context: `boot()` would clear `calls` and reset the scripted replies, which the
+// checks further down still read.
+function registersSlot(name) {
+  const probe = makeCtx()
+  exportsValue.apply(probe)
+  return probe.slots.entries.some((entry) => entry.options && entry.options.name === name)
+}
+check(registersSlot('sidebar.panellist'), 'the resident owns a row in the sidebar panel list')
+check(registersSlot('sidebar.toggle.badge'), 'and a dot in the seat the shell reserves for one')
+
 // --- the static preview page --------------------------------------------------------------------
 //
 // How the panel *looks* is decided by a human, not by an assertion, so the harness can emit the very
