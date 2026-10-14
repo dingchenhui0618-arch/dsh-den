@@ -10,6 +10,9 @@
 
 import { randomBytes } from 'node:crypto'
 
+import { denPath } from './atom.js'
+import { summarizeFromDisk, TASKS_FILE } from './tasks-store.js'
+
 export const PANEL_ACTIONS = [
   'status',
   'autonomy/request',
@@ -22,6 +25,20 @@ export const PANEL_ACTIONS = [
 
 /** How long a minted autonomy token stays usable. */
 export const AUTONOMY_TOKEN_TTL_MS = 10 * 60 * 1000
+
+/**
+ * The panel's task numbers, read from disk and never allowed to throw. A resident assistant must
+ * not lose its whole status page because one of its own bookkeeping files is unreadable: an absent
+ * or broken file already means "no tasks yet" to the store, and this keeps that same failure
+ * direction rather than trading a small problem for a large one.
+ */
+function taskCounts() {
+  try {
+    return summarizeFromDisk(denPath(TASKS_FILE))
+  } catch {
+    return { active: 0, blocked: 0, waiting: 0, total: 0 }
+  }
+}
 
 export function statusSnapshot(service, { sessionId, nextTriggerAt } = {}) {
   const status = service.status()
@@ -51,6 +68,8 @@ export function statusSnapshot(service, { sessionId, nextTriggerAt } = {}) {
     ledger: status.ledger,
     notices: status.notices,
     triggers: status.triggers,
+    /** How much is in progress, stuck, or waiting on the human (DESIGN 7.4). One line, not a view. */
+    tasks: taskCounts(),
     kernel: status.kernel,
     /** Non-null while the heartbeat is waiting for a delivery path. */
     kernelDeferred: status.kernelDeferred ?? null,
