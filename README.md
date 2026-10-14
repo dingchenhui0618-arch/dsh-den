@@ -3,7 +3,7 @@
 > A **7×24 resident personal assistant** for [DeepSeek Harness](https://github.com/deepseek-ai/dsh).
 > Not another chat window — an assistant that stays on, keeps its own memory, works while you are away, and stops to ask before it acts outside your trust boundary.
 
-Status: **the core is implemented, tested (320/320), and active in a real profile.** The plugin is loaded inside a real DSH 0.2.0-rc.2 desktop profile — it is in that profile's `dsh.profile.bundles`, and the running host reports it as `fiberPhase: active` — registering 11 model-facing tools, the approval guard, the heartbeat, and an interactive status panel. Verified against the *running* system rather than only in tests: the heartbeat ticks on its 60-second cadence, and the panel is an **active occupant** of both `sidebar.panellist` (`id: dsh-den.status`, order 245) and the `main` panel (`key: dsh-den.status`) — read from the live browser page through the host's read-only Slot inspector, not from the plugin's own registration call.
+Status: **the core is implemented, tested (323/323), and active in a real profile.** The plugin is loaded inside a real DSH 0.2.0-rc.2 desktop profile — it is in that profile's `dsh.profile.bundles`, and the running host reports it as `fiberPhase: active` — registering 11 model-facing tools, the approval guard, the heartbeat, and an interactive status panel. Verified against the *running* system rather than only in tests: the heartbeat ticks on its 60-second cadence, and the panel is an **active occupant** of both `sidebar.panellist` (`id: dsh-den.status`, order 245) and the `main` panel (`key: dsh-den.status`) — read from the live browser page through the host's read-only Slot inspector, not from the plugin's own registration call.
 
 **Those live sentences were re-established on 2026-10-14 against the instance reporting `startedAt: 2026-10-14T02:10:43.000Z`**, whose own freshness verdict is `known: true, stale: false` and which loaded this tree 1000 seconds after its last source edit. `npm run verify:live` exits 0 against it and **all seven live probes pass**: the heartbeat ticks on its 60-second cadence, the route answers, an agent **cannot** obtain standing autonomy from the live host, the approval gate is the only path to authority, the expiry rule works in the host's own directory, scenario isolation holds against the same store the host reads, and disk evidence shows the `den_*` tools really were invoked. The earlier instance, `08:43:05.676Z`, is why this paragraph exists: after the panel fix landed at `09:24:00` it was still serving the previous panel while six live probes went on printing passes — each one run on its own, and each one describing code that was no longer on disk. Two things now make that state impossible to report as a pass. The plugin reports `status.freshness`: the newest source edit beside it against its own start, computed per request rather than cached at boot, with "cannot tell" as its own answer instead of a healthy default. And every live probe script is chained behind `tools/require-fresh-host.mjs`, which refuses to run it when the instance is stale or cannot say.
 
@@ -21,7 +21,7 @@ Status: **the core is implemented, tested (320/320), and active in a real profil
 ```
 node_modules present in clone: False
 dependencies declared: (none)
-ℹ tests 320   ℹ pass 320   ℹ fail 0
+ℹ tests 323   ℹ pass 323   ℹ fail 0
 test exit: 0
 ```
 
@@ -233,7 +233,7 @@ These are hard constraints, not aspirations. The reference implementations below
 All state lives in a **self-contained** `$DSH_HOME/den/` tree, so it can be packed and moved to another machine or a server without hunting through unrelated DSH storage.
 
 ```bash
-npm test          # 320 unit + integration tests
+npm test          # 323 unit + integration tests
 npm run check:bundle   # 31 offline bundle-contract checks
 npm run check:ui       # 54 panel interaction checks
 npm run check:acceptance   # the two reliability goals, as one observable lifecycle

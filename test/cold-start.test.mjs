@@ -472,6 +472,77 @@ test('a trigger created before the restart is found and fired after it', async (
   service.kernel.stop()
 })
 
+test('a human turn still in flight is not mistaken for the wake reply', async () => {
+  // Measured on the live host (2026-10-14): the panel's queued notice carried a **previous chat
+  // message** as the den's own words. A wake fires on a timer, so the human's turn can still be
+  // running when the instruction is spliced in; that turn's assistant message then lands after the
+  // baseline seq and, for a moment, is the newest assistant message in the log — which is exactly
+  // what "the newest message after the baseline" returned.
+  //
+  // The human's reply is therefore appended first and the wake's own turn only 600ms later, so the
+  // unfixed read has a full poll cycle in which the human's text is the only candidate.
+  const first = coldHost()
+  mountHost(first)
+  const created = await callTool(first.state, 'den_schedule_check', {
+    kind: 'interval',
+    title: 'CI watch',
+    prompt: 'Report only failures.',
+    sessionId: SESSION_ID,
+    everySeconds: 300,
+  })
+  assert.equal(created.ok, true, 'the schedule must be created')
+  const grant = await grantAutonomy(first.state)
+  assert.equal(grant.ok, true, `the human grant must be recorded: ${JSON.stringify(grant)}`)
+  first.state.dispose?.()
+
+  // A fresh activation over the same home. The wake has to cold-resume the conversation, which is
+  // the delivery path the proven cold-wake test above uses — a single live host has no driver the
+  // resolver can hand back, and the wake would fail with "no delivery path" for the wrong reason.
+  const host = coldHost()
+  mountHost(host)
+  const service = host.state.provided.get('den')
+
+  const session = host.state.session
+  session.events.push({ seq: session.events.length + 1, type: 'turn/start', data: { turn: 41 } })
+  const base = session.events.length
+  host.state.followup = () => {
+    session.events.push({
+      seq: base + 1,
+      type: 'assistant/message',
+      data: {
+        turn: 41,
+        step: 9,
+        message: { role: 'assistant', source: { kind: 'model' }, content: [{ type: 'text', text: 'the human said this' }] },
+        stream: [],
+      },
+    })
+    setTimeout(() => {
+      session.events.push({
+        seq: base + 2,
+        type: 'assistant/message',
+        data: {
+          turn: 42,
+          step: 1,
+          message: { role: 'assistant', source: { kind: 'model' }, content: [{ type: 'text', text: 'the den actually said this' }] },
+          stream: [],
+        },
+      })
+    }, 600)
+  }
+
+  const outcome = await service.kernel.tick({ agent: undefined, now: Date.now() + 301000 })
+  const result = outcome.results[0]
+  assert.equal(result.outcome, 'spoke', `expected a spoken wake, got ${JSON.stringify(result)}`)
+
+  const texts = service.noticesFor(SESSION_ID).deliverable.map((notice) => notice.text)
+  assert.ok(
+    texts.includes('the den actually said this'),
+    `the notice must carry the wake's own words: ${JSON.stringify(texts)}`,
+  )
+  assert.ok(!texts.includes('the human said this'), 'a reply from a turn that was already running is not the den speaking')
+  service.kernel.stop()
+})
+
 test('two hosts on one home are both told the same trigger is due, because nothing claims it', async () => {
   // `~/.dsh/den` is keyed on DSH_HOME, not on the profile, so two profiles — or the desktop
   // app plus a `dsh` in a terminal — load this plugin twice over one state tree. Both start a
