@@ -1287,6 +1287,21 @@ the message does not quote the token
 
 结构测试的 `LIVE` 正则加上了 `drill-live-wake`：两个 npm 脚本都串在 `require-fresh-host.mjs` 之后，否则它会拿旧实例的 ledger 给整个项目下最后一个结论。
 
+### 2.34 判词第一次真跑就暴露了自己：帧没带会话，于是只能失败
+
+第一次在真宿主上跑 `drill:before`，帧里写着 `autonomy: null / autonomyKnown: false` —— 而我**刚刚**用面板令牌授权成功。原因不在宿主，在仪器：授权是**按会话**记录的，而 `status` 不带 `sessionId` 时会回答「不知道这个会话有没有授权」（`src/panel-api.js` 的 `statusSnapshot(service, { sessionId: liveSessionId })`）。用户在截图里看到的那句「state unknown」就是这个机制。
+
+后果比难看严重：`judgeWake` 里有一条 `autonomy !== true → 失败`。也就是说这个判词**永远只能失败** —— 一个只会拒绝的闸门，正是我在 `live-host-usability` 的注释里写过的那种「不是检查，是会被关掉的闸门」，只不过这次长在我自己刚写完的验收仪器上。它躲过了 7 条离线用例，因为那些用例直接构造帧；只有真跑一次才会露出来。这就是「离线测判词、合成宿主测管道」都替代不了「对着真宿主跑一次」的理由。
+
+改法：
+
+- `--session <id>` 可显式指定；没给就取宿主最近报出的事件里**最新一个带会话 id 的**，并在帧里记下来源（`sessionFrom: argument | newest-event | none`）；
+- 帧多两个字段（`sessionId` / `sessionFrom`），`--after` 的比对表也打印会话；
+- 判词新增一条**指认仪器**的失败：帧里没有会话时报「pass --session <id>」，且**不再**说「授权从未落地」—— 把「你没说哪个会话」和「授权真的没落地」分开，否则判词会冤枉一台正常的宿主；
+- 离线用例补一条：无会话的帧必须点名 `--session`，且不得指控宿主（`test/drill-live-wake.test.mjs`）。
+
+顺带修掉另一个「固定清单」缺陷：`--before` 原本无条件打印「去点授予、去复制令牌」，而第一次真跑时这两个动作**已经做过了** —— 它在让人重复一个已经花掉的令牌。现在它按帧里的状态说话：已授权就说「本会话已记录授权，无需动作」，已有自检就说「自检存在，等它到期」，两句话都由合成宿主测试钉住。
+
 - `dsh-muse`、`dsh-bot` 只作**只读参考**，不 fork、不复制代码进本仓库。
 - 借鉴的是**机制与教训**（授权绑定、keeper 重新武装、TTL、多域隔离），实现代码自己写。
 - 两者均为 MIT；本项目同样 MIT，若未来复制其代码片段须保留原始版权声明。

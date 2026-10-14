@@ -58,7 +58,7 @@ function runFrame(args, payload) {
     })
     server.listen(0, '127.0.0.1', () => {
       const { port } = server.address()
-      const child = spawn(process.execPath, [DRILL, ...args, '--port', String(port)], {
+      const child = spawn(process.execPath, [DRILL, ...args, '--session', 'session-drill', '--port', String(port)], {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env, DSH_HOME: home },
       })
@@ -70,21 +70,33 @@ function runFrame(args, payload) {
   })
 }
 
-test('frame one records what the host said, and states the trap before the human acts', async () => {
-  const result = await runFrame(['--before'], statusPayload())
-  assert.equal(result.code, 0, `frame one must succeed against a healthy host:\n${result.out}`)
-  assert.match(result.out, /RESULT: ARMED/)
+test('frame one records what the host said, and describes only what is still owed', async () => {
+  // Nothing is due yet, so the trap has to be said before the human acts rather than after they
+  // wait: authority is a permission, not a schedule.
+  const waiting = await runFrame(
+    ['--before'],
+    statusPayload({ autonomy: false, triggers: { total: 0, invalid: 0, due: 0 } }),
+  )
+  assert.equal(waiting.code, 0, `frame one must succeed against a healthy host:\n${waiting.out}`)
+  assert.match(waiting.out, /RESULT: ARMED/)
+  assert.match(waiting.out, /Authority alone wakes nothing/)
+  assert.match(waiting.out, /press 授予/)
 
   const frame = JSON.parse(readFileSync(framePath, 'utf8'))
   assert.equal(frame.startedAt, '2026-10-13T10:00:00.000Z', 'the frame carries the instance it read')
+  assert.equal(frame.sessionId, 'session-drill', 'and the conversation it read it about')
   assert.equal(frame.turns, 0)
   assert.equal(frame.spoken, 0)
-  assert.equal(frame.triggersTotal, 1)
+  assert.equal(frame.triggersTotal, 0)
   assert.ok(frame.at, 'and the moment it was taken, so the two frames can be told apart')
 
-  // The step people miss, said before they act rather than after they wait: authority is a
-  // permission, not a schedule.
-  assert.match(result.out, /Authority alone wakes nothing/)
+  // The state-aware half, which the first live run got wrong: it printed a fixed list and told its
+  // reader to mint a token that had already been spent.
+  const ready = await runFrame(['--before'], statusPayload())
+  assert.equal(ready.code, 0, ready.out)
+  assert.match(ready.out, /Authority is recorded for this conversation/)
+  assert.match(ready.out, /A self-check exists \(1\)/)
+  assert.ok(!/press 授予/.test(ready.out), 'and never asks for a grant that is already recorded')
 })
 
 test('frame two passes on a delivered, spoken wake and fails on a silent one', async () => {

@@ -18,6 +18,8 @@ const { judgeWake } = await import('../tools/drill-live-wake.mjs')
 function beforeFrame(overrides = {}) {
   return {
     at: '2026-10-13T10:00:00.000Z',
+    sessionId: 'session-drill',
+    sessionFrom: 'argument',
     startedAt: '2026-10-13T09:50:07.589Z',
     autonomy: true,
     autonomyKnown: true,
@@ -82,6 +84,25 @@ test('a grant with nothing due explains itself instead of blaming the host', () 
   assert.ok(
     verdict.failures.some((failure) => failure.includes('no self-check exists')),
     'the missing trigger must be named',
+  )
+})
+
+test('a frame read without a conversation blames the instrument, not the grant', () => {
+  // Measured on the first live run: `status` without a sessionId answers `autonomy: null,
+  // autonomyKnown: false` on a host that has authority, because authority is recorded per
+  // conversation. The verdict therefore has to tell "you did not say which conversation" apart
+  // from "the grant never landed" — the first is the drill's own defect and the second is an
+  // accusation against a host that may be perfectly fine.
+  const noSession = { ...wokeFrame(), sessionId: null, sessionFrom: 'none', autonomy: null, autonomyKnown: false }
+  const verdict = judgeWake(beforeFrame({ sessionId: null, sessionFrom: 'none' }), noSession)
+  assert.equal(verdict.pass, false)
+  assert.ok(
+    verdict.failures.some((failure) => failure.includes('--session')),
+    `the failure must name the missing conversation, got ${JSON.stringify(verdict.failures)}`,
+  )
+  assert.ok(
+    !verdict.failures.some((failure) => failure.includes('grant never landed')),
+    'and must not accuse the host of a missing grant',
   )
 })
 

@@ -29,8 +29,11 @@
  * The self-check floor is 300 seconds, so the wait between the frames is minutes, not seconds.
  *
  * Usage:
- *   node tools/drill-live-wake.mjs --before [--port 19387]
- *   node tools/drill-live-wake.mjs --after  [--port 19387]
+ *   node tools/drill-live-wake.mjs --before [--session <conversation-id>] [--port 19387]
+ *   node tools/drill-live-wake.mjs --after  [--session <conversation-id>] [--port 19387]
+ *
+ * `--session` matters: authority is recorded per conversation, so a status read without one
+ * reports `autonomy: null` for a host that has authority — see `resolveSession`.
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -45,15 +48,42 @@ const portArg = process.argv.indexOf('--port')
 const PORT = portArg >= 0 ? Number(process.argv[portArg + 1]) : 19387
 const isAfter = process.argv.includes('--after')
 const isBefore = process.argv.includes('--before')
+const sessionArg = process.argv.indexOf('--session')
+const SESSION = sessionArg >= 0 ? process.argv[sessionArg + 1] : null
 const framePath = join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'den', 'drill-frame.json')
+
+/**
+ * Which conversation the frames are about.
+ *
+ * This is not bookkeeping — authority is recorded **per conversation**, and a `status` read
+ * without a session answers `autonomy: null, autonomyKnown: false` for a host that has authority
+ * on every conversation it serves. The first version of this tool asked without a session and
+ * therefore recorded a frame that no wake could ever satisfy: the verdict could only fail, which
+ * is the same defect as a gate that refuses everything. It was found by running it against the
+ * real host, which is the argument for running these things rather than reasoning about them.
+ *
+ * An explicit `--session` wins. Failing that, the newest event the host reported *that names a
+ * conversation* is used, and the frame says which of the two it came from.
+ */
+function resolveSession(status) {
+  if (SESSION) return { sessionId: SESSION, sessionFrom: 'argument' }
+  const events = Array.isArray(status.recentEvents) ? status.recentEvents : []
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const sessionId = events[index]?.sessionId
+    if (typeof sessionId === 'string' && sessionId) return { sessionId, sessionFrom: 'newest-event' }
+  }
+  return { sessionId: null, sessionFrom: 'none' }
+}
 
 /**
  * The fields both frames record, flattened so a before/after diff is readable by a human in the
  * output rather than only by the comparison below.
  */
-function frameOf(status) {
+function frameOf(status, sessionId, sessionFrom) {
   return {
     at: new Date().toISOString(),
+    sessionId,
+    sessionFrom,
     startedAt: status.startedAt ?? null,
     autonomy: status.autonomy ?? null,
     autonomyKnown: status.autonomyKnown === true,
@@ -83,7 +113,12 @@ export function judgeWake(before, now) {
   const failures = []
   const notes = []
 
-  if (!now.autonomyKnown) failures.push('the host cannot say whether standing autonomy exists')
+  if (!now.sessionId) {
+    // The instrument, not the host. Without a conversation the status cannot resolve authority,
+    // so `autonomy === null` here says nothing about whether a grant exists — and the first
+    // version of this tool reported exactly that as "the grant never landed".
+    failures.push('the frames name no conversation, so authority cannot resolve — pass --session <id>')
+  } else if (!now.autonomyKnown) failures.push('the host cannot say whether standing autonomy exists')
   else if (now.autonomy !== true) failures.push('no authority is recorded — the grant never landed, so nothing may wake')
   if (now.kernelRunning !== true) failures.push('the heartbeat is not running, so nothing can wake on its own')
   if (now.residencyHeld === false) failures.push('this host is standing down: another host on this home holds residency')
@@ -115,8 +150,13 @@ function line(label, before, now) {
   return `  ${label.padEnd(18)} ${from.padEnd(28)} -> ${to}`
 }
 
-async function readStatus() {
-  const answer = await callRoute({ port: PORT, route: ROUTE, action: 'status', input: {} })
+async function readStatus(sessionId) {
+  const answer = await callRoute({
+    port: PORT,
+    route: ROUTE,
+    action: 'status',
+    input: sessionId ? { sessionId } : {},
+  })
   if (answer.status !== 200) throw new Error(`${ROUTE} answered ${answer.status}: ${answer.body.slice(0, 200)}`)
   if (!answer.envelope?.ok) throw new Error(`${ROUTE} did not return an ok envelope: ${answer.body.slice(0, 200)}`)
   const value = answer.envelope.value
@@ -151,14 +191,22 @@ async function main() {
 
   let status
   try {
-    status = await readStatus()
+    status = await readStatus(SESSION)
   } catch (error) {
     console.log(`RESULT: FAIL — ${error.message}`)
     finish(1)
     return
   }
 
-  const now = frameOf(status)
+  const resolved = resolveSession(status)
+  const now = frameOf({ ...status }, resolved.sessionId, resolved.sessionFrom)
+  if (resolved.sessionFrom === 'newest-event') {
+    console.log(`session: ${resolved.sessionId} (newest conversation the host named; pass --session to be explicit)\n`)
+  } else if (!resolved.sessionId) {
+    console.log('session: NONE — no --session given and no event named a conversation; authority cannot resolve.\n')
+  } else {
+    console.log(`session: ${resolved.sessionId} (--session)\n`)
+  }
 
   if (!isAfter) {
     mkdirSync(dirname(framePath), { recursive: true })
@@ -166,13 +214,23 @@ async function main() {
     console.log('frame --before recorded:')
     for (const [key, value] of Object.entries(now)) console.log(`  ${key.padEnd(18)} ${JSON.stringify(value)}`)
     console.log(`\n  written to ${framePath}\n`)
+    // State-aware, because the drill is run by a human who may already have done some of it: the
+    // first live run of this tool told its reader to mint a token that had already been spent.
     console.log('What is still owed, in order:')
-    console.log('  1. In the panel strip above the message box, press 授予 (Grant), then 复制令牌 (copy token).')
-    console.log('  2. Send that token to the assistant as a message. Authority is only recorded when a human')
-    console.log('     message carries the token — the panel cannot complete it alone.')
-    console.log('  3. Give it something due: a self-check whose interval has elapsed (the floor is 300s).')
-    console.log('     Authority alone wakes nothing; the wake needs a trigger that is due.')
-    console.log('  4. Run `npm run drill:after` once a heartbeat has had the chance to deliver it.\n')
+    if (now.autonomy === true) {
+      console.log('  1. Authority is recorded for this conversation — nothing to do here.')
+    } else {
+      console.log('  1. In the panel strip above the message box, press 授予 (Grant), then 复制令牌 (copy token).')
+      console.log('     Send that token to the assistant as a message: authority is only recorded when a human')
+      console.log('     message carries the token, and the panel cannot complete it alone.')
+    }
+    if (now.triggersTotal >= 1) {
+      console.log(`  2. A self-check exists (${now.triggersTotal}); it has to come due, then a heartbeat has to deliver it.`)
+    } else {
+      console.log('  2. Give it something due: a self-check whose interval has elapsed (the floor is 300s).')
+      console.log('     Authority alone wakes nothing; the wake needs a trigger that is due.')
+    }
+    console.log('  3. Run `npm run drill:after` once a heartbeat has had the chance to deliver it.\n')
     console.log('RESULT: ARMED — the frame is on disk, and `--after` will compare against it.')
     finish(0)
     return
@@ -189,6 +247,7 @@ async function main() {
 
   const verdict = judgeWake(before, now)
   console.log('frame comparison (before -> now):')
+  console.log(line('conversation', before.sessionId, now.sessionId))
   console.log(line('startedAt', before.startedAt, now.startedAt))
   console.log(line('autonomy', before.autonomy, now.autonomy))
   console.log(line('kernel.running', before.kernelRunning, now.kernelRunning))
