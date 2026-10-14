@@ -847,6 +847,17 @@ console.log('')
 if (failures.length) {
   console.log(`FAIL — ${failures.length} of ${checkCount} checks failed:`)
   for (const failure of failures) console.log(`  - ${failure}`)
+  /**
+   * 负向断言，所以它无条件生效 —— 不会变成那种"看着有用、永远不触发"的假断言。
+   *
+   * 面板不该用这个插件自己的词汇来描述人的状态。「待读」指的是"我攒了话想跟你说、你还没看"，
+   * 但对看面板的人来说那是个要先学的名词。它被换成了「有话想跟你说」，这条断言负责让它别再回来：
+   * 只要有人把字符串改回去，这里就红。
+   */
+  check(
+    !text.includes('待读'),
+    'the panel does not say 待读 — that is the den’s word, not the person’s',
+  )
   process.exit(1)
 }
 console.log(`PASS — ${checkCount} interaction checks`)
