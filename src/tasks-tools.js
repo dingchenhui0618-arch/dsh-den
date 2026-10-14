@@ -53,6 +53,7 @@ export function makeTaskTools({ path, text = (value) => JSON.stringify(value) } 
         type: 'object',
         properties: {
           goal: { type: 'string', description: 'the goal, in the user\u2019s own words' },
+          sessionId: { type: 'string', description: 'the conversation this task belongs to; the den speaks there when a step comes due. Optional: a task without one is still created, and the heartbeat will say so instead of guessing a conversation' },
           steps: {
             type: 'array',
             description: 'ordered steps; each is {title, mode?}',
@@ -71,9 +72,9 @@ export function makeTaskTools({ path, text = (value) => JSON.stringify(value) } 
         additionalProperties: false,
       },
       output: { schema: { type: 'object' }, render },
-      async execute({ goal, steps } = {}) {
+      async execute({ goal, steps, sessionId } = {}) {
         try {
-          const saved = addTask(path, { goal, steps })
+          const saved = addTask(path, { goal, steps, sessionId })
           const task = saved.tasks[saved.tasks.length - 1]
           return ok({
             taskId: task.id,

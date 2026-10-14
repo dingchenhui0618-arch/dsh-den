@@ -40,7 +40,7 @@ function pendingSteps(task) {
  * Build a task. Throws on input that would produce a task nobody could act on — a task with no
  * goal or no steps is not a small task, it is an empty object that would look like progress.
  */
-export function createTask({ goal, steps, now = Date.now(), id } = {}) {
+export function createTask({ goal, steps, sessionId = '', now = Date.now(), id } = {}) {
   const text = String(goal ?? '').trim()
   if (!text) throw new TypeError('a task needs a goal in plain words')
   if (!Array.isArray(steps) || steps.length === 0) throw new TypeError('a task needs at least one step')
@@ -60,6 +60,7 @@ export function createTask({ goal, steps, now = Date.now(), id } = {}) {
 
   return {
     id: id || makeId('task', now, 0),
+    sessionId: String(sessionId ?? ''),
     goal: text,
     state: 'active',
     createdAt: now,
