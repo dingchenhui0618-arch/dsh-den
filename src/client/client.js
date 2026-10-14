@@ -1169,8 +1169,11 @@ window.__ModuleLoader__.load({
        * So the dot is not decoration — it is the one place the shell will show a state without a
        * click, which is the whole point of a resident: glance, do not open.
        *
-       * It reads the same `status` action the panel does, on a timer, so it cannot disagree with the
-       * panel. Colour carries the meaning (green = resident and heartbeat fine, amber = something is
+       * It reads the same `status` action the panel does, on its own timer. Note what that does and
+       * does not buy: the two poll independently (the panel at 15s, this at 20s), so they can
+       * disagree for a few seconds after a change — sharing one request would remove that, and until
+       * then the honest claim is "same action, same source", not "cannot disagree". Colour carries the
+       * meaning (green = resident and heartbeat fine, amber = something is
        * waiting for the human or the process is running older code, red = it stopped), and the
        * accessible name is the existing resident copy rather than new wording.
        */
