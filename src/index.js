@@ -38,7 +38,7 @@
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { denHome, listJsonFiles, reapStaleTempFiles, readJson, toLosslessJson, writeJsonAtomic } from './atom.js'
+import { denHome, denPath, listJsonFiles, reapStaleTempFiles, readJson, toLosslessJson, writeJsonAtomic } from './atom.js'
 import { currentGrant, recordGrant, sessionEvents } from './grant.js'
 import { ackNotice as markNoticeDelivered, allNotices, isExpired, pendingNotices, queueNotice, sweepExpiredNotices } from './notices.js'
 import { installGate, RISK, classifyCall, recordAudit, auditPath } from './gate.js'
@@ -48,6 +48,8 @@ import { deleteTrigger, dueTriggers, listTriggers, nextTriggerAt, normalizeTrigg
 import { ENTRY_KINDS, forget, recall, remember, scenarios } from './memory.js'
 import { collectSourceEdits, judgeFreshness, newestSourceEdit } from './freshness.js'
 import { mountPanelRoute } from './panel-route.js'
+import { TASKS_FILE } from './tasks-store.js'
+import { registerTaskTools } from './tasks-tools.js'
 
 export const name = 'dsh-den'
 export const inject = ['agents', 'tools', 'webServer']
@@ -761,6 +763,10 @@ export function registerTools(tools, service) {
   }
 
   const text = (value) => [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }]
+
+  // The task tools (DESIGN 7) live in their own module so their behaviour can be tested on a temp
+  // file; the path is decided here, at the one place that already resolves den's data directory.
+  registerTaskTools({ register, path: denPath(TASKS_FILE), text })
 
   register({
     name: 'den_status',

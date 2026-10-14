@@ -373,6 +373,10 @@ export const OWNED_TOOLS = {
   den_forget: 'deletes one entry the den itself stored, in one scenario',
   den_schedule_check:
     'stores a self-check that cannot act until a human grants standing autonomy, so scheduling is not doing',
+  den_task_create: 'turns a request into a local task file; it schedules nothing and reaches nothing outside this machine',
+  den_task_advance: 'advances one step of a local task; an ask step refuses without the human words, enforced by the tool itself',
+  den_task_block: 'records that a local task is stuck, or resumes it; local bookkeeping only',
+  den_task_list: 'reads the local task file and the three counts the panel shows',
   den_configure: "changes the den's own pacing — daily budget, quiet hours, cadence — and nothing else",
   den_set_autonomy:
     'changes authority, and refuses unless the panel minted a request and a human message quotes its token',

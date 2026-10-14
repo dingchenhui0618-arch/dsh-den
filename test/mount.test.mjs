@@ -146,6 +146,10 @@ test('activation registers every model-facing tool with an explicit schema', () 
     'den_schedule_list',
     'den_set_autonomy',
     'den_status',
+    'den_task_advance',
+    'den_task_block',
+    'den_task_create',
+    'den_task_list',
   ])
   for (const tool of state.tools) {
     assert.equal(typeof tool.description, 'string', `${tool.name} needs a description`)
@@ -170,7 +174,7 @@ test('the heartbeat starts when a delivery path exists and stops on disposal', (
 test('activation is fully reversible', () => {
   const { ctx, state } = fakeHost()
   const dispose = apply(ctx)
-  assert.equal(state.tools.length, 11)
+  assert.equal(state.tools.length, 15)
   dispose()
   assert.equal(state.tools.length, 0, 'disposal must unregister every tool')
   assert.equal(state.guards.length, 0, 'disposal must remove the guard')
@@ -573,10 +577,10 @@ test('registering tools twice does not duplicate them', () => {
   const service = new DenService(ctx)
   const disposeA = registerTools(state.toolsApi, service)
   const disposeB = registerTools(state.toolsApi, service)
-  assert.equal(state.tools.length, 22, 'the registry itself allows two sets; disposal must be exact')
+  assert.equal(state.tools.length, 30, 'the registry itself allows two sets; disposal must be exact')
 
   disposeA()
-  assert.equal(state.tools.length, 11)
+  assert.equal(state.tools.length, 15)
   disposeB()
   assert.equal(state.tools.length, 0)
 })

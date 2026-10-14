@@ -3,7 +3,7 @@
  *
  * This repository keeps finding "a public claim with no command under it" — a README count edited
  * by hand while the thing it counted had moved on. The numbers below are all cheaply measurable,
- * so they are measured rather than maintained: the README says eleven model-facing tools and six
+ * so they are measured rather than maintained: the README says fifteen model-facing tools and six
  * panel actions and no dependencies at all, and each of those is compared against the code.
  *
  * The suite's own count is deliberately **not** here. A test cannot count the tests it is part of
@@ -22,7 +22,7 @@ const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8')
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 
 /** The number words the README actually uses, so a claim is not skipped for being spelled out. */
-const WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 }
+const WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20 }
 
 /** Every number a README sentence claims for `thing`, e.g. "11 model-facing tools" / "six …". */
 function claimedCounts(thing) {
@@ -49,12 +49,12 @@ function claimedCounts(thing) {
 test('the README count of model-facing tools matches what activation registers', () => {
   const registered = []
   registerTools({ register: (definition) => registered.push(definition) }, {})
-  assert.equal(registered.length, 11, 'activation registers eleven tools')
+  assert.equal(registered.length, 15, 'activation registers fifteen tools')
   const claimed = claimedCounts('model-facing tools')
   assert.ok(claimed.length >= 1, 'the README still makes the claim (it is in the Status line)')
   assert.deepEqual(
     [...new Set(claimed)],
-    [11],
+    [15],
     `the README claims ${claimed.join('/')} model-facing tools and the plugin registers ${registered.length}`,
   )
 })

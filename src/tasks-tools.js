@@ -27,8 +27,6 @@ import {
   resumeTaskOn,
 } from './tasks-store.js'
 
-const OBJECT = { type: 'object', properties: {}, additionalProperties: false }
-
 function ok(value) {
   return { ok: true, ...value }
 }
@@ -92,7 +90,7 @@ export function makeTaskTools({ path, text = (value) => JSON.stringify(value) } 
       name: 'den_task_list',
       description:
         'What is in progress. Returns the tasks and three numbers: active, blocked, and waiting (steps that are due and marked ask — the ones that need the human).',
-      parameters: OBJECT,
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
       output: { schema: { type: 'object' }, render },
       async execute() {
         const list = loadTasks(path)
@@ -121,7 +119,7 @@ export function makeTaskTools({ path, text = (value) => JSON.stringify(value) } 
       parameters: {
         type: 'object',
         properties: {
-          taskId: { type: 'string' },
+          taskId: { type: 'string', description: 'the task id returned by den_task_create' },
           stepId: { type: 'string', description: 'defaults to the first due step' },
           note: { type: 'string', description: 'what happened, in one line' },
           approval: {
@@ -162,7 +160,7 @@ export function makeTaskTools({ path, text = (value) => JSON.stringify(value) } 
       parameters: {
         type: 'object',
         properties: {
-          taskId: { type: 'string' },
+          taskId: { type: 'string', description: 'the task id returned by den_task_create' },
           reason: { type: 'string', description: 'what it is waiting for, in one line' },
           resume: { type: 'boolean', description: 'set true to resume instead of blocking' },
         },
