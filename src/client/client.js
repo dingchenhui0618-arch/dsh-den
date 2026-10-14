@@ -89,6 +89,7 @@ window.__ModuleLoader__.load({
         saySend: 'Send',
         sayEmpty: 'no conversation yet — say something to start one',
         sayTail: 'only the latest messages are shown; the rest are still in the transcript',
+        sayHostOld: 'the host has not loaded this half yet — restart DSH and this becomes the conversation',
         grantDockGranted: 'granted for this conversation',
         grantDockNotGranted: 'not granted for this conversation',
         grantDockUnknown: 'state unknown',
@@ -174,6 +175,7 @@ window.__ModuleLoader__.load({
         saySend: '发送',
         sayEmpty: '还没有对话 —— 说一句就开始',
         sayTail: '只显示最近的消息，更早的都还在转录里',
+        sayHostOld: '宿主还没加载会话这一半 —— 重启 DSH 后这里就是对话',
         noticesOwed: '你不在的时候：',
         noticeReadIt: '读过了',
         residentOn: '常驻中 · 心跳运行中',
@@ -1316,7 +1318,12 @@ window.__ModuleLoader__.load({
             if (value && typeof value === 'object') setView({ phase: 'ready', data: value, error: null })
           })
           .catch(function (error) {
-            setView({ phase: 'error', data: null, error: String((error && error.message) || error) })
+            var message = String((error && error.message) || error)
+            // An older Host answers every action it has never heard of with `unknown action`. That
+            // is not the conversation failing: it is the host half not having been reloaded, and it
+            // has a remedy a human can act on. Printing the host's error text teaches nothing.
+            var older = /unknown action|not implemented|DEN_ACTION_FAILED/i.test(message)
+            setView({ phase: older ? 'older' : 'error', data: null, error: message })
           })
       }
 
@@ -1381,6 +1388,9 @@ window.__ModuleLoader__.load({
         { style: { padding: '2px 10px 8px' } },
         // The transcript accumulates; the model's context does not. This says so in the one place a
         // reader would otherwise assume they are looking at everything.
+        view.phase === 'older'
+          ? React.createElement('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary)', margin: '6px 0' } }, t('sayHostOld'))
+          : null,
         data.truncated
           ? React.createElement('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)', margin: '2px 0' } }, t('sayTail'))
           : null,
@@ -1399,7 +1409,8 @@ window.__ModuleLoader__.load({
           { style: { display: 'flex', gap: 6, alignItems: 'center', marginTop: 6 } },
           React.createElement('input', {
             value: typed,
-            placeholder: t('sayPlaceholder'),
+            placeholder: view.phase === 'older' ? t('sayHostOld') : t('sayPlaceholder'),
+            disabled: view.phase === 'older',
             onChange: function (event) { setTyped(event.target.value) },
             onKeyDown: function (event) { if (event.key === 'Enter') submit() },
             style: {
@@ -1415,7 +1426,7 @@ window.__ModuleLoader__.load({
           }),
           React.createElement(Button, {
             primary: true,
-            disabled: busy || !String(typed || '').trim(),
+            disabled: busy || view.phase === 'older' || !String(typed || '').trim(),
             onClick: submit,
           }, t('saySend')),
         ),
@@ -1579,7 +1590,15 @@ window.__ModuleLoader__.load({
               var spent = Number(status.ledger && status.ledger.turns) || 0
               // What den is allowed to start by itself today, and how much of it is gone. This is
               // the number that makes an autonomous assistant accountable rather than mysterious.
-              bits.push(Number.isFinite(cap) && cap > 0 ? t('budgetShort') + ' ' + String(spent) + '/' + String(cap) : t('budgetOff'))
+              if (!Number.isFinite(cap)) {
+                // An older host reports no budget at all. Saying nothing is honest; saying
+                // "proactivity off" is a claim about a field that was never sent, while the ledger
+                // on the same payload may show turns being spent.
+              } else if (cap > 0) {
+                bits.push(t('budgetShort') + ' ' + String(spent) + '/' + String(cap))
+              } else {
+                bits.push(t('budgetOff'))
+              }
               bits.push(t('owedShort') + ' ' + String(status.notices && status.notices.pending ? status.notices.pending.length : 0))
               if (status.tasks && Number(status.tasks.total) > 0) {
                 bits.push(t('tasksShort') + ' ' + String(status.tasks.active))

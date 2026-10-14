@@ -948,6 +948,36 @@ await panelPillDeferred.settle()
 check(panelPillDeferred.text().includes('等待投递'), 'a pill whose heartbeat is waiting says so instead of claiming to run')
 check(!panelPillDeferred.text().includes('心跳运行中'), 'and does not claim the heartbeat is fine')
 
+/* --- a host that has not been reloaded: say so, and disable what cannot work --- */
+
+fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false }))
+
+const panelOldHost = mount(
+  bootWindow({
+    scripted: {
+      status: healthyStatus(),
+      'conversation/read': {
+        ok: false,
+        error: { code: 'DEN_ACTION_FAILED', message: 'unknown action "conversation/read"; known actions: status' },
+      },
+    },
+  }).component,
+  {},
+)
+await panelOldHost.settle()
+check(panelOldHost.text().includes('重启 DSH'), 'a window whose host half is older says what to do about it')
+check(!panelOldHost.text().includes('unknown action'), "and does not print the host's error text as if den were broken")
+const oldHostSend = panelOldHost.buttons().find((button) => textOf(button).trim() === '发送')
+check(oldHostSend?.props?.disabled === true, 'and the send button it still shows cannot be pressed')
+
+fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: true }))
+
+// `healthyStatus()` sends no `dailyTurnBudget`, which is exactly what the live older host sends.
+const panelPillNoBudget = mount(bootWindow({ scripted: { status: healthyStatus() } }).component, {})
+await panelPillNoBudget.settle()
+check(!panelPillNoBudget.text().includes('自治已关'), 'a host that reports no budget is not described as proactivity being off')
+check(!panelPillNoBudget.text().includes('回合'), 'and no budget number is invented for it')
+
 /* --- the floating window can be moved, and remembers where ----------------- */
 
 // Storage is the window's own preference blob, so the check reads what a browser would keep.
