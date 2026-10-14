@@ -98,6 +98,8 @@ window.__ModuleLoader__.load({
         residentOff: 'resident · not running',
         wokeShort: 'woke itself today',
         owedShort: 'to read',
+        tasksShort: 'in progress',
+        tasksStuck: 'stuck',
         details: 'details',
         scheduleNone: 'none — say "check CI every 30 minutes" in the conversation and the den will add it',
         scheduleNew: 'New',
@@ -159,6 +161,8 @@ window.__ModuleLoader__.load({
         residentOff: '常驻中 · 已停',
         wokeShort: '自己醒来',
         owedShort: '待读',
+        tasksShort: '进行中',
+        tasksStuck: '卡住',
         details: '详情',
         grantDockGranted: '本会话已授予',
         grantDockNotGranted: '本会话未授予',
@@ -874,6 +878,16 @@ window.__ModuleLoader__.load({
             ),
             ' · ' + t('wokeShort') + ' ' + String((d && d.ledger && d.ledger.turns) || 0),
             ' · ' + t('owedShort') + ' ' + String(owedCount),
+            // Tasks (DESIGN 7.4). Same row, not a new one, and only when there is something to
+            // say: with no tasks this line stays byte-identical to what it was, because a permanent
+            // "in progress 0" is exactly the kind of always-there furniture the default view is
+            // supposed to be free of. When there is work, the stuck count rides along — never
+            // folded behind `details`, because a step that cannot move on is the one thing a person
+            // must not have to go looking for.
+            d && d.tasks && Number(d.tasks.total) > 0 && Number.isFinite(d.tasks.active)
+              ? ' · ' + t('tasksShort') + ' ' + String(d.tasks.active) +
+                (Number(d.tasks.blocked) > 0 ? ' · ' + t('tasksStuck') + ' ' + String(d.tasks.blocked) : '')
+              : '',
             ' · ' + autonomyText,
             '  ',
             React.createElement(
