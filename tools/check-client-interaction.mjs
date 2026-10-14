@@ -591,7 +591,7 @@ check(registersSlot('sidebar.toggle.badge'), 'and a dot in the seat the shell re
 // checks drive, because a hand-written preview drifts: the checks keep passing while the file on disk
 // quietly shows the previous design.
 if (process.argv.includes('--demo')) {
-  const demoPath = process.argv[process.argv.indexOf('--demo') + 1]
+  const demoPath = process.argv[process.argv.indexOf('--demo') + 1] || 'docs/demo.html'
   const { mkdirSync, writeFileSync } = await import('node:fs')
   const { demoPage } = await import('./panel-tree.mjs')
   const demoMain = mount(component, {})
@@ -599,7 +599,7 @@ if (process.argv.includes('--demo')) {
 
   const page = demoPage({
     title: 'dsh-den 面板预览',
-    generatedBy: '由 tools/check-client-interaction.mjs 生成：结构由同一个渲染器导出，不是手抄的 HTML',
+    generatedBy: '由 tools/check-client-interaction.mjs 生成',
     sections: [
       {
         label: '对话输入框上方那条（dock）：常驻、授权、一键自检都在这一条上',
