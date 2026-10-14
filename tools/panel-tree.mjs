@@ -150,20 +150,22 @@ export function toHtml(tree) {
  *
  * Honesty is built into the shape of this page, not bolted on: the markup is the panel's own (it
  * comes from the same renderer the checks use, so it cannot drift), the *data* is demo data, and
- * the page says so. The colours are the DSH semantic variables with preview fallbacks, because the
- * real values are injected by the host and are not available to a file on disk; the fallbacks are
- * chosen to be readable in both themes, not to pass as the host's palette.
+ * the page says so. The colours are the host's real palette: the twenty values below were extracted
+ * from DSH's own tokens by the user's phone client (`dsh-in-hand-ui/lib/tokens.css`) and are copied
+ * here rather than eyeballed, so the preview is not showing an approximation of the product's
+ * colours. Only `--demo-page` is the preview's own canvas — the host sets that outside a component's
+ * reach — and it is named separately so it cannot be mistaken for a token.
  */
 export function demoPage({ title, note, sections, generatedBy }) {
   const styles = `
-:root{--dsw-alias-bg-layer-1:#ffffff;--dsw-alias-bg-layer-2:#f4f5f7;--dsw-alias-bg-layer-3:#e9ebef;
---dsw-alias-border-l2:#dcdfe6;--dsw-alias-label-primary:#1f2329;--dsw-alias-label-secondary:#5a6069;
---dsw-alias-label-tertiary:#8f959e;--dsw-alias-state-success-primary:#1f9254;--dsw-alias-state-warn-primary:#a86b00;
---dsw-alias-state-error-primary:#c4342b;--demo-page:#f7f8fa}
-:root[data-theme=dark]{--dsw-alias-bg-layer-1:#1f2126;--dsw-alias-bg-layer-2:#272a30;--dsw-alias-bg-layer-3:#333740;
---dsw-alias-border-l2:#3c414b;--dsw-alias-label-primary:#e8eaed;--dsw-alias-label-secondary:#a8aeb8;
---dsw-alias-label-tertiary:#767d88;--dsw-alias-state-success-primary:#4fc07e;--dsw-alias-state-warn-primary:#e0a63c;
---dsw-alias-state-error-primary:#f0736a;--demo-page:#16181c}
+:root{--dsw-alias-bg-layer-1:#fff;--dsw-alias-bg-layer-2:#fff;--dsw-alias-bg-layer-3:#fff;
+--dsw-alias-border-l2:#0000001a;--dsw-alias-label-primary:#0f1115;--dsw-alias-label-secondary:#61666b;
+--dsw-alias-label-tertiary:#81858c;--dsw-alias-state-success-primary:#22c55e;--dsw-alias-state-warn-primary:#f59e0b;
+--dsw-alias-state-error-primary:#ec1313;--demo-page:#f7f8f9}
+:root[data-theme=dark]{--dsw-alias-bg-layer-1:#232324;--dsw-alias-bg-layer-2:#2c2c2e;--dsw-alias-bg-layer-3:#353638;
+--dsw-alias-border-l2:#ffffff1f;--dsw-alias-label-primary:#f9fafb;--dsw-alias-label-secondary:#cfd3d6;
+--dsw-alias-label-tertiary:#adb2b8;--dsw-alias-state-success-primary:#22c55e;--dsw-alias-state-warn-primary:#f59e0b;
+--dsw-alias-state-error-primary:#f25a5a;--demo-page:#1a1a1b}
 *{box-sizing:border-box}
 body{margin:0;padding:28px;background:var(--demo-page);color:var(--dsw-alias-label-primary);
 font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif}
