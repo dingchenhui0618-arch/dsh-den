@@ -657,8 +657,12 @@ window.__ModuleLoader__.load({
             : React.createElement(
                 'div',
                 { style: { fontSize: 12, color: 'var(--dsw-alias-state-warn-primary)' } },
-                t('howToAsk'),
-                t('scheduleAddElsewhere'),
+                React.createElement('div', null, t('howToAsk')),
+                React.createElement(
+                  'div',
+                  { style: { marginTop: 4, color: 'var(--dsw-alias-label-tertiary)' } },
+                  t('scheduleAddElsewhere'),
+                ),
               ),
         )
       }
