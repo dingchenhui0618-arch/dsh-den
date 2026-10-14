@@ -108,7 +108,8 @@ window.__ModuleLoader__.load({
         schedulePrompt: 'What to check',
         scheduleMinutes: 'Every (minutes)',
         scheduleAdd: 'Add self-check',
-        scheduleAddElsewhere: 'creating one needs a conversation — say it in the message box',
+        howToAsk: 'How to ask: just say it in the message box below — for example a request to handle something, or a question about what I remember.',
+        scheduleAddElsewhere: 'Creating one works the same way — say it in the message box.',
         scheduleRemove: 'remove',
         scheduleCreateHint: 'Not a permission grant: each run still re-checks autonomy, budget and quiet hours.',
         dueNow: 'due now',
@@ -117,7 +118,7 @@ window.__ModuleLoader__.load({
         kernelGaveUp: 'gave up after',
         attempts: 'attempts',
         footNote:
-          'Granting is per conversation, so it can only be done from the control above the message box.',
+          'Granting is per conversation — do it from the control above the message box.',
       },
       zh: {
         nav: 'den',
@@ -182,7 +183,8 @@ window.__ModuleLoader__.load({
         schedulePrompt: '检查什么',
         scheduleMinutes: '每（分钟）',
         scheduleAdd: '新建自检',
-        scheduleAddElsewhere: '创建自检需要会话 —— 在消息框里说一句就行',
+        howToAsk: '怎么用：在下面的消息框里直接说一句就行 —— 比如「帮我办 X」或「你记得我什么」。',
+        scheduleAddElsewhere: '创建自检也是在消息框里说一句 —— 比如「每 30 分钟看一眼 CI」。',
         scheduleRemove: '删除',
         scheduleCreateHint: '这不是权限授予：每次运行仍会重新检查授权、预算与免打扰时段。',
         dueNow: '待触发',
@@ -191,7 +193,7 @@ window.__ModuleLoader__.load({
         kernelGaveUp: '已放弃，尝试',
         attempts: '次',
         footNote:
-          '授予是按会话进行的，所以只能在消息框上方那条控件里做。',
+          '授予是按会话进行的 —— 在消息框上方那条控件里做。',
       },
     }
 
