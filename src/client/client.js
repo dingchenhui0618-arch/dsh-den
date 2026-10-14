@@ -115,7 +115,7 @@ window.__ModuleLoader__.load({
         kernelGaveUp: 'gave up after',
         attempts: 'attempts',
         footNote:
-          'Granting autonomy needs human evidence, and it is granted per conversation — so the control sits above the message box, where the shell hands the panel a real session id. This page is registered into `main`, which the shell documents as giving no Session binding to any key but the reserved `conversation`, so it cannot mint a token for a conversation it cannot name.',
+          'Granting is per conversation, so it can only be done from the control above the message box.',
       },
       zh: {
         nav: 'Den',
@@ -187,7 +187,7 @@ window.__ModuleLoader__.load({
         kernelGaveUp: '已放弃，尝试',
         attempts: '次',
         footNote:
-          '授予授权需要人类证据，而且是按会话授予的 —— 所以控件挂在输入框上方，那里壳会把真实的会话 id 交给面板。本页注册在 `main` 上，而壳自己写明：除保留键 `conversation` 外，其它键都不带会话绑定，所以它无法为一个自己叫不出名字的会话 mint 令牌。',
+          '授予是按会话进行的，所以只能在消息框上方那条控件里做。',
       },
     }
 
