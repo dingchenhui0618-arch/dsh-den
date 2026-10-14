@@ -194,9 +194,9 @@ check(applyError === null, `apply() runs against a stand-in context${applyError 
 
 const sidebar = registrations.find((r) => r.options?.name === 'sidebar.panellist')
 const main = registrations.find((r) => r.options?.name === 'main')
-check(Boolean(sidebar), 'registers a sidebar.panellist entry')
+check(!sidebar, 'keeps out of the sidebar panel list: one surface, not a tab and a window')
 check(Boolean(main), 'registers a main panel')
-check(injections.includes('sidebar.panellist') && injections.includes('main'), 'waits for both slots via inject()')
+check(injections.includes('shell.overlay') && injections.includes('main'), 'waits for the window and the page via inject()')
 
 if (sidebar && main) {
   check(

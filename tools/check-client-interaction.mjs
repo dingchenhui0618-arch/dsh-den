@@ -630,8 +630,8 @@ function registersSlot(name) {
   exportsValue.apply(probe)
   return probe.slots.entries.some((entry) => entry.options && entry.options.name === name)
 }
-check(registersSlot('sidebar.panellist'), 'the resident owns a row in the sidebar panel list')
-check(registersSlot('sidebar.toggle.badge'), 'and a dot in the seat the shell reserves for one')
+check(!registersSlot('sidebar.panellist'), 'den keeps out of the sidebar panel list: one surface, not a tab plus a window')
+check(!registersSlot('sidebar.toggle.badge'), 'and puts no dot in the sidebar toggle either')
 check(registersSlot('shell.overlay'), 'and a floating window in the shell overlay, outside every conversation frame')
 /* --- shut, the floating window still has to report ---------------------------- */
 
