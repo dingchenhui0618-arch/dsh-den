@@ -149,3 +149,41 @@ test('a conversation recorded somewhere else is not silently adopted', async () 
     assert.equal(outcome.value.sessionId, null)
   })
 })
+
+test('den keeps the conversation\'s id, not a copy of its transcript', async () => {
+  await tempConversation(async ({ path }) => {
+    const sent = []
+    let live = null
+    const ctx = {
+      agents: {
+        // Live after the first message, so the second one is an ordinary turn rather than a resume.
+        get: () => live,
+        create: async (options) => {
+          live = {
+            id: options.sessionId,
+            session: { snapshotEvents: () => [] },
+            followup: (message) => sent.push(message),
+          }
+          return { agent: live }
+        },
+      },
+      sessions: { get: () => null },
+    }
+    const service = serviceWith(ctx, path)
+    const first = await invokeAction(service, 'conversation/say', { text: 'are you awake?' }, {})
+    assert.equal(first.ok, true, JSON.stringify(first))
+    const written = readFileSync(path, 'utf8')
+    const record = JSON.parse(written)
+    assert.deepEqual(
+      Object.keys(record).sort(),
+      ['createdAt', 'sessionId'],
+      'the record is an id and a date, which is all den needs to come back to it',
+    )
+    assert.ok(!written.includes('are you awake?'), 'and the message itself is nowhere in den\'s file')
+
+    const second = await invokeAction(service, 'conversation/say', { text: 'and again' }, {})
+    assert.equal(second.ok, true, JSON.stringify(second))
+    assert.equal(sent.length, 2, 'the second message went to the same conversation')
+    assert.equal(readFileSync(path, 'utf8'), written, 'the record is written once, when it is created')
+  })
+})
