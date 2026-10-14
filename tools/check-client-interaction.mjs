@@ -524,7 +524,7 @@ check(
 const grantPanel = mount(dock.component, { sessionId: 'session-active' })
 await grantPanel.settle()
 const grantText = grantPanel.text()
-check(grantText.includes('授予') && grantText.includes('撤销'), 'the dock renders the autonomy controls')
+check(grantText.includes('本会话已授予'), 'a granted conversation says so in the dock, in one line')
 check(grantText.includes('已授予'), 'and reports the conversation it was told about as granted')
 const dockStatus = calls.find((entry) => (entry.body?.action ?? 'status') === 'status')
 check(
@@ -540,7 +540,33 @@ check(text.includes('消息框里说一句'), 'and creating one is described as 
 const revokeCalls = () => calls.filter((entry) => entry.body?.action === 'autonomy/request')
 check(revokeCalls().length === 0, 'no autonomy action is sent before a click')
 
-await grantPanel.click('授予')
+// Granted, the dock is one line and nothing else: the buttons are gone, not merely quiet.
+const grantedDockText = grantPanel.text()
+check(
+  grantedDockText.includes('常驻自治') && grantedDockText.includes('已授予'),
+  'a granted conversation shows the composer dock as one line',
+)
+check(
+  !grantedDockText.includes('撤销'),
+  'and carries no revoke control, because revoking belongs where it cannot sit in the way',
+)
+
+// The grant button has to be exercised in a conversation that has not been granted: there,
+// and only there, the buttons are the work still to do.
+const freshDock = bootDock({
+  scripted: {
+    status: healthyStatus(),
+    'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } },
+    // The click below must be answered here. A request left hanging belongs to the next scenario,
+    // because the scripted replies are whoever booted last - which is how a check two screens
+    // further down lost its own data and read as a defect in this change.
+    'autonomy/request': { ok: true, value: { token: 'tok-fresh-1', autonomy: true, expiresAt: Date.now() + 600000, ttlMs: 600000 } },
+  },
+})
+const freshPanel = mount(freshDock.component, { sessionId: 'session-active' })
+await freshPanel.settle()
+check(freshPanel.text().includes('授予') && freshPanel.text().includes('撤销'), 'an ungranted conversation renders both autonomy controls')
+await freshPanel.click('授予')
 
 const grantCall = calls.find((entry) => entry.body?.action === 'autonomy/request')
 check(Boolean(grantCall), 'clicking Grant sends an autonomy/request')
@@ -577,7 +603,10 @@ check(panel2.text().includes('tok-abc123'), 'the minted token is displayed for t
 const presetPanel = mount(
   bootDock({
     scripted: {
-      status: healthyStatus({ autonomy: 'session-active', autonomyKnown: true }),
+      // Granted, this dock is one line by design, so the empty-schedule state below it is not on
+      // screen at all. The preset is for a person who is still setting things up, which is the
+      // ungranted conversation - so that is the state this check has to look at.
+      status: healthyStatus(),
       'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } },
     },
   }).component,

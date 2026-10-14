@@ -747,6 +747,22 @@ window.__ModuleLoader__.load({
       if (compact) {
         var known = Boolean(d) && d.autonomyKnown !== false
         var granted = known && Boolean(d.autonomy)
+        /**
+         * Granted, this strip shrinks to one line and keeps no controls at all.
+         *
+         * It sits directly above the composer in every conversation, so a strip that keeps
+         * offering buttons after the decision is already made is not a control any more - it is the
+         * furniture the person has to look past every time they type. Revoking stays one click away:
+         * the floating window and the main view both live outside any single conversation and carry
+         * the full controls, so nothing is lost by taking them off this row.
+         */
+        if (granted) {
+          return React.createElement(
+            'div',
+            { style: { padding: '6px 10px', fontSize: 12, color: 'var(--dsw-alias-label-secondary)' } },
+            React.createElement('span', null, t('grantDock') + ' ' + String.fromCharCode(183) + ' ' + t('grantDockGranted')),
+          )
+        }
         return React.createElement(
           'div',
           null,
