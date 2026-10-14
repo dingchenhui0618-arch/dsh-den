@@ -11,11 +11,13 @@ const { invokeAction } = await import('../src/panel-api.js')
  * handed in. An environment variable would not do: `denPath()` resolves den's home once when the
  * module is imported, so redirecting `DSH_HOME` afterwards still reads the real home.
  */
-function tempConversation(run) {
+async function tempConversation(run) {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-den-route-'))
   const path = join(dir, 'conversation.json')
   try {
-    return run({ dir, path })
+    // Awaiting here is the whole point: without it the finally below deletes the temp directory while
+    // the body is still running, and every test in this file reads a file that is already gone.
+    return await run({ dir, path })
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -177,8 +179,8 @@ test('den keeps the conversation\'s id, not a copy of its transcript', async () 
     const record = JSON.parse(written)
     assert.deepEqual(
       Object.keys(record).sort(),
-      ['createdAt', 'sessionId'],
-      'the record is an id and a date, which is all den needs to come back to it',
+      ['agentPreset', 'createdAt', 'sessionId'],
+      'the record is an id, a date and the preset it was created with — still no transcript',
     )
     assert.ok(!written.includes('are you awake?'), 'and the message itself is nowhere in den\'s file')
 

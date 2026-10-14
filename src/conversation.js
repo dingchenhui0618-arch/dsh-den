@@ -100,9 +100,10 @@ export function readStandingConversation(ctx, { limit = DEFAULT_READ_LIMIT, path
 /**
  * Put a message in the standing conversation, and wake den to answer it.
  *
- * This is the mechanism the host documents for exactly this: "`followup()` queues an ordinary
- * next-turn prompt and wakes the driver". It is a human turn, not a self-initiated one, so it is not
- * charged against the daily budget — the budget exists to ration what den starts by itself.
+ * The delivery is the admission call below, not a per-agent followup: `Agent` declares only `id`.
+ * An earlier comment here credited one anyway, and believing it cost an empty transcript.
+ * This is a human turn, not a self-initiated one, so it is not charged against the daily budget —
+ * the budget exists to ration what den starts by itself.
  */
 /**
  * Say something into the standing conversation the way the GUI says something into any session.
@@ -174,21 +175,59 @@ export function appendToSession(session, message) {
 }
 
 /**
+ * The preset a standing conversation should be created with: the host's own default.
+ *
+ * Not a hardcoded name. A session created without a preset has no model to assemble a prompt with —
+ * the host ends each turn with 'prompt variable "{{model}}" has no value for this assembly' — so the
+ * preset is what makes the conversation capable of answering at all. `agentPresets.list()` is read
+ * here, the default is preferred, activation failures are skipped, and an empty string is returned
+ * when this host offers no preset service, so the caller can tell no-preset from preset-named-empty.
+ */
+export async function resolveAgentPreset(ctx) {
+  const service = ctx && ctx.agentPresets
+  if (!service || typeof service.list !== 'function') return ''
+  let presets
+  try {
+    presets = await service.list()
+  } catch (error) {
+    return ''
+  }
+  if (!Array.isArray(presets)) return ''
+  const usable = presets.filter((preset) => preset && typeof preset.id === 'string' && preset.id && !preset.broken)
+  const chosen = usable.find((preset) => preset.isDefault) || usable[0]
+  return chosen ? chosen.id : ''
+}
+
+/**
  * Get the standing conversation, creating it on first use.
  *
- * `state` reports which of the three things happened, because they are not the same event:
- * `live` (already running), `resumed` (loaded from disk by the host), `created` (born now).
+ * `state` reports which of them happened, because they are not the same event: `live` (already
+ * running), `resumed` (loaded from disk by the host), `created` (born now, possibly replacing a
+ * record that could never work — see `replaced`).
  */
 export async function ensureConversation(ctx, { cwd = '', path = conversationPath() } = {}) {
+  const preset = await resolveAgentPreset(ctx)
   const record = readConversationRecord(path)
+  // A session created before this plugin knew about presets cannot assemble a prompt at all: the host
+  // ends every turn with 'prompt variable "{{model}}" has no value for this assembly'. Resuming it
+  // reproduces that failure forever, so it is replaced — but only when this host offers a preset,
+  // otherwise a recreate would produce an equally dead session on every single call.
+  const unusable = Boolean(record && preset && !record.agentPreset)
   if (record) {
     const live = typeof ctx?.agents?.get === 'function' ? ctx.agents.get(record.sessionId) : undefined
-    if (live) return { agent: live, sessionId: record.sessionId, state: 'live', handle: null }
-    if (typeof ctx?.agents?.resume !== 'function') {
-      throw new Error('dsh-den: this host cannot resume the standing conversation')
+    // A live agent is proof enough, whatever the record says about presets.
+    if (live) {
+      return { agent: live, sessionId: record.sessionId, state: 'live', handle: null, agentPreset: record.agentPreset || preset || null, replaced: null }
     }
-    const handle = await ctx.agents.resume({ resumeSessionId: record.sessionId })
-    return { agent: handle.agent, sessionId: record.sessionId, state: 'resumed', handle }
+    if (unusable) {
+      // Fall through to creation below.
+    } else {
+      if (typeof ctx?.agents?.resume !== 'function') {
+        throw new Error('dsh-den: this host cannot resume the standing conversation')
+      }
+      const handle = await ctx.agents.resume({ resumeSessionId: record.sessionId })
+      return { agent: handle.agent, sessionId: record.sessionId, state: 'resumed', handle, agentPreset: record.agentPreset || preset || null, replaced: null }
+    }
   }
 
   if (typeof ctx?.agents?.create !== 'function') {
@@ -197,7 +236,22 @@ export async function ensureConversation(ctx, { cwd = '', path = conversationPat
   // The id is generated here and written before the turn is used, so a crash between the two leaves
   // either no conversation or one that is resumed — never a second, silently different one.
   const sessionId = randomUUID()
-  const handle = await ctx.agents.create({ sessionId, meta: cwd ? { cwd } : undefined })
-  writeJsonAtomic(path, { sessionId, createdAt: Date.now() })
-  return { agent: handle.agent, sessionId, state: 'created', handle }
+  const meta = {}
+  if (cwd) meta.cwd = cwd
+  if (preset) meta.agentPreset = preset
+  const handle = await ctx.agents.create({ sessionId, meta: Object.keys(meta).length ? meta : undefined })
+  writeJsonAtomic(path, {
+    sessionId,
+    createdAt: Date.now(),
+    agentPreset: preset || null,
+    replacedSessionId: unusable ? record.sessionId : undefined,
+  })
+  return {
+    agent: handle.agent,
+    sessionId,
+    state: 'created',
+    handle,
+    agentPreset: preset || null,
+    replaced: unusable ? record.sessionId : null,
+  }
 }
