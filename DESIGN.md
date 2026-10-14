@@ -1558,3 +1558,25 @@ dock、页面座位的默认视图）序列化成 `docs/demo.html`：亮/暗切�
 **隐私边界（硬）**：画像内容**只存本机**（`~/.dsh/den/`），**永不进仓库**——本仓库是公开的。DESIGN 只写形态、不写内容；提交信息里也不贴内容。可以公开的只有一句：画像是存在的、有多少条、来源于上面哪三类。
 
 **可读性的验收**：随便问一句"你记得我什么"，答案要能逐条指回来源；指不回去的，就是编的。
+
+## The floating window and the one-line dock
+
+Two decisions about where den reports its own state, both made for the same reason: the state was
+sitting where the person was trying to work.
+
+- **The status lives in `shell.overlay`.** That is the shell frame-wide layer: above every column,
+  outside their scroll containers, and click-through until an occupant opts into pointer events. A
+  resident that reports from inside a conversation frame reports in the one place the person is
+  already looking past.
+- **Shut, it still reports.** The window collapses to a pill carrying the same facts - whether it is
+  running, how many things it has for the person, how much work is in progress - and polls every
+  2000ms instead of the open panel 280ms. The polling moves rather than doubles. A pill that went
+  quiet would answer nothing, which is the one thing a shut state must not do.
+- **Granted, the composer dock is one line.** The dock sits directly above the message box in every
+  conversation, and after the decision is made its buttons are not a control any more, they are
+  furniture. The controls stay in the floating window and the main view - neither belongs to a single
+  conversation - so revoking is still one click away, it is simply no longer in the way.
+- **Both are pinned, not asserted.** `tools/check-client-interaction.mjs` drives the shut pill with a
+  fake `localStorage` and requires the granted dock to carry no revoke control; and the committed
+  preview page (`docs/demo.html`) is a byte-for-byte render of the client, so the smaller dock is
+  visible in the repository itself rather than only in a sentence here.
