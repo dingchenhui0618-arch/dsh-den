@@ -82,11 +82,16 @@ test('an outbound reason names the destination, because local and remote are not
   assert.equal(local.risk, RISK.ask)
   assert.equal(local.destination, '127.0.0.1:10086')
   assert.match(local.reason, /127\.0\.0\.1:10086/)
-  assert.match(decide(local).displayReason['zh-CN'], /127\.0\.0\.1:10086/)
+  // The classification is unchanged: a loopback upload is still classified `ask`, still names where
+  // it goes, and still says so in its reason. What changed on 2026-10-14 is the decision — the human
+  // allowed this half through (the exception, and its bounds, are pinned in gate-loopback.test.mjs),
+  // so the readable-prompt assertion now belongs to the remote case, where `ask` still happens.
+  assert.equal(decide(local).kind, 'allow')
 
   const remote = upload('https://example.com/collect')
   assert.equal(remote.destination, 'example.com')
   assert.match(remote.reason, /example\.com/)
+  assert.match(decide(remote).displayReason['zh-CN'], /example\.com/)
 
   // A rule that fires with nothing to name must not invent one.
   const anonymous = classifyCall(call('pwsh', { command: 'r' + 'm -r' + 'f /tmp/scratch' }))

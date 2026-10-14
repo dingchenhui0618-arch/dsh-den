@@ -505,6 +505,27 @@ export function flattenArgs(value, depth = 0) {
 }
 
 /**
+ * Loopback uploads pass, and that is a stated exception rather than a change of mind.
+ *
+ * `destinationOf` already separates an HTTP POST carrying a body to a public host from the same
+ * POST aimed at 127.0.0.1, and the rule deliberately fires on both because a loopback service can
+ * relay. On 2026-10-14 the human allowed the loopback half ("只放行本机"), so it is honoured here
+ * with the scope kept as narrow as the permission itself: an `outbound:` rule, a destination that
+ * is actually named, and a destination that is loopback. A missing or unparsable destination stays
+ * `ask` — which is what keeps text that merely *mentions* an upload (a commit message, say) from
+ * travelling as permission. The relay argument has not been disproved; it is simply the human's
+ * call, and this is where their call is recorded.
+ */
+const LOOPBACK_DESTINATION = /^(?:127(?:\.\d{1,3}){3}|localhost|\[::1\]|::1)(?::\d+)?$/i
+
+function isLoopbackUpload(classification) {
+  if (!String(classification?.rule ?? '').startsWith('outbound:')) return false
+  const destination = String(classification?.destination ?? '')
+  if (!destination) return false
+  return LOOPBACK_DESTINATION.test(destination)
+}
+
+/**
  * Convert a classification into a `PreToolDecision`.
  *
  * `ask` is only meaningful when the Host has approval support; the Host's own
@@ -520,6 +541,10 @@ export function decide(classification) {
       info: { name: 'DenOutboundGate', code: classification.rule, reason: classification.reason },
     }
   }
+  // After the deny branch on purpose: an allowed destination must never rescue a denied action.
+  // `decide` has no logger, so the audit trail this produces is the decision kind itself plus the
+  // rule name it was classified under — which is why the exception does not rename the rule.
+  if (isLoopbackUpload(classification)) return { kind: 'allow' }
   if (classification.risk >= RISK.ask) {
     return {
       kind: 'ask',
