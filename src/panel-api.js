@@ -11,6 +11,7 @@
 import { randomBytes } from 'node:crypto'
 
 import { denPath } from './atom.js'
+import { ensureConversation, readStandingConversation, sayInConversation } from './conversation.js'
 import { summarizeFromDisk, TASKS_FILE } from './tasks-store.js'
 
 export const PANEL_ACTIONS = [
@@ -21,6 +22,8 @@ export const PANEL_ACTIONS = [
   'schedules/create',
   'schedules/delete',
   'notices/ack',
+  'conversation/read',
+  'conversation/say',
 ]
 
 /** How long a minted autonomy token stays usable. */
@@ -178,6 +181,11 @@ export async function invokeAction(service, action, payload = {}, { sessionId, n
   const input = payload && typeof payload === 'object' ? payload : {}
   const liveSessionId = typeof input.sessionId === 'string' && input.sessionId ? input.sessionId : sessionId
 
+  // Where the standing conversation is kept. `denPath()` resolves den's home once at import
+  // time, so a test that redirected the environment still read the real home; handing the path
+  // in is the same point-to-point injection the grants directory already uses.
+  const standingPath =
+    typeof service.conversationPath === 'string' && service.conversationPath ? service.conversationPath : undefined
   switch (action) {
     case 'status':
       return { ok: true, value: statusSnapshot(service, { sessionId: liveSessionId, nextTriggerAt }) }
@@ -230,6 +238,31 @@ export async function invokeAction(service, action, payload = {}, { sessionId, n
         service.panelAutonomyRequest = null
         service.noteEvent({ type: 'panel-autonomy-confirmed', autonomy: record.autonomy })
         return { ok: true, value: { autonomy: record.autonomy, boundToMessage: record.humanMessageId } }
+      } catch (error) {
+        return { ok: false, error: String(error?.message ?? error) }
+      }
+    }
+
+
+    case 'conversation/read': {
+      // Read only. Opening the window must not create a conversation or charge a turn, so this
+      // case never calls `ensureConversation`.
+      const limit = Number(input.limit)
+      const readOptions = Number.isFinite(limit) && limit > 0 ? { limit } : {}
+      if (standingPath) readOptions.path = standingPath
+      const read = readStandingConversation(service.ctx, readOptions)
+      return { ok: true, value: read }
+    }
+
+    case 'conversation/say': {
+      const text = String(input.text ?? '')
+      if (!text.trim()) return { ok: false, error: 'there is nothing to say' }
+      try {
+        // A human turn, so it is not charged against the daily budget: that budget rations what
+        // den starts on its own. The host picks the working directory, so none is invented here.
+        const standing = await ensureConversation(service.ctx, standingPath ? { path: standingPath } : {})
+        const messageId = sayInConversation(standing.agent, text)
+        return { ok: true, value: { messageId, sessionId: standing.sessionId, state: standing.state } }
       } catch (error) {
         return { ok: false, error: String(error?.message ?? error) }
       }

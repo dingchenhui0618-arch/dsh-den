@@ -65,9 +65,9 @@ test('the README count of panel actions matches the action list', () => {
   // failed on a claim that was there all along.
   const claimed = claimedCounts('named actions')
   assert.ok(claimed.length >= 1, 'the README still makes the claim')
-  assert.deepEqual([...new Set(claimed)], [7], 'the panel exposes seven actions')
-  assert.equal(PANEL_ACTIONS.length, 7, 'and the exported list agrees')
-  assert.equal(new Set(PANEL_ACTIONS).size, 7, 'with no duplicates hiding a missing one')
+  assert.deepEqual([...new Set(claimed)], [9], 'the panel exposes nine actions')
+  assert.equal(PANEL_ACTIONS.length, 9, 'and the exported list agrees')
+  assert.equal(new Set(PANEL_ACTIONS).size, 9, 'with no duplicates hiding a missing one')
 })
 
 test('"no dependencies at all" is a claim about a file anyone can read', () => {
