@@ -47,7 +47,7 @@ window.__ModuleLoader__.load({
     var STRINGS = {
       en: {
         nav: 'den',
-        title: 'Den — resident assistant',
+        title: 'den — resident assistant',
         refreshing: 'refreshing…',
         refresh: 'Refresh',
         autonomy: 'Standing autonomy',
@@ -119,7 +119,7 @@ window.__ModuleLoader__.load({
       },
       zh: {
         nav: 'den',
-        title: 'Den —— 常驻助理',
+        title: 'den —— 常驻助理',
         refreshing: '刷新中…',
         refresh: '刷新',
         autonomy: '常驻授权',

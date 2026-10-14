@@ -421,7 +421,7 @@ if (process.env.DEN_DEBUG) {
 /* --- the panel renders the real state ------------------------------------- */
 
 const text = panel.text()
-check(text.includes('Den'), 'the panel renders its title')
+check(text.includes('常驻助理') && !text.includes('Den ——'), 'the panel renders its title, lowercase to match the nav entry')
 // Looking for the *string* would pass on the copy that says where the control is, so this looks for a
 // button: an affordance the page would have to render to be clickable.
 check(
