@@ -954,6 +954,13 @@ check(!panelPillDeferred.text().includes('心跳运行中'), 'and does not claim
 const scrollArea = findAll(panelTalk.tree, (n) => n.props?.style?.overflowY === 'auto')
 check(scrollArea.length === 1, 'the transcript has exactly one scrolling area of its own')
 check(Number(scrollArea[0]?.props?.style?.maxHeight) > 0, 'and that area is bounded, so the window cannot grow with the transcript')
+/* --- the window places and paints itself, because the layer gives it neither --- */
+
+const cardNodes = findAll(panelTalk.tree, (n) => n.props?.style?.position === 'absolute' && n.props?.style?.width === 420)
+check(cardNodes.length === 1, 'the open window places and sizes itself instead of becoming a strip across the top')
+check(cardNodes[0]?.props?.style?.right === 24 && cardNodes[0]?.props?.style?.bottom === 24, 'and anchors itself off the header and the tabs until it is moved')
+check(String(cardNodes[0]?.props?.style?.background || '').includes('--dsw-alias-bg-overlay'), 'and paints a surface rather than reading as page furniture')
+check(cardNodes[0]?.props?.style?.zIndex === 60, 'and sits above the page it floats over')
 /* --- a host that has not been reloaded: say so, and disable what cannot work --- */
 
 fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false }))
@@ -984,6 +991,8 @@ await panelPillNoBudget.settle()
 check(panelPillNoBudget.text().includes('宿主待重启'), 'a host that sends no budget is named as older, not left unexplained')
 check(!panelPillNoBudget.text().includes('自治已关'), 'a host that reports no budget is not described as proactivity being off')
 check(!panelPillNoBudget.text().includes('回合'), 'and no budget number is invented for it')
+const pillPlaced = findAll(panelPillNoBudget.tree, (n) => n.props?.style?.position === 'absolute' && n.props?.style?.bottom === 24)
+check(pillPlaced.length >= 1, 'and the shut pill places itself too, rather than sitting in the page flow')
 
 /* --- the floating window can be moved, and remembers where ----------------- */
 
@@ -1010,7 +1019,10 @@ await dragWindow.settle()
 const keptPreference = JSON.parse(fakeStorage.getItem('dsh-den.mini') || '{}')
 check(measured === 1, 'the window measures where it already is before the first movement, so it does not jump')
 check(keptPreference.x === 520 && keptPreference.y === 260, `the window stays where it was put (${keptPreference.x}, ${keptPreference.y})`)
-const placedTree = findAll(dragWindow.tree, (node) => Boolean(node.props && node.props.style && node.props.style.position === 'fixed'))
+const placedTree = findAll(
+  dragWindow.tree,
+  (node) => node.props?.style?.left === 520 && node.props?.style?.top === 260 && node.props?.style?.right === 'auto',
+)
 check(placedTree.length >= 1, 'and the remembered place is applied, rather than only stored')
 fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false }))
 

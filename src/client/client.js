@@ -1450,8 +1450,8 @@ window.__ModuleLoader__.load({
           { name: 'shell.overlay', id: 'den-mini', order: 40 },
           function DenMini(props) {
             void props
-            // Where the human last put it. Unset until they move it, so the default placement the
-            // shell gives an overlay occupant is left exactly as it was.
+            // Where the human last put it. Unset until they move it: the overlay layer gives an
+            // occupant no placement of its own, so the window anchors itself rather than trust
             var placeState = React.useState(function () {
               var x = miniPref('x')
               var y = miniPref('y')
@@ -1464,8 +1464,8 @@ window.__ModuleLoader__.load({
             var setDragging = dragState[1]
 
             function placedStyle(current) {
-              if (!current) return {}
-              return { position: 'fixed', left: current.x, top: current.y, right: 'auto', bottom: 'auto', zIndex: 60 }
+              if (!current) return { position: 'absolute', right: 24, bottom: 24, zIndex: 60 }
+              return { position: 'absolute', left: current.x, top: current.y, right: 'auto', bottom: 'auto', zIndex: 60 }
             }
 
             function onDragStart(event) {
@@ -1537,7 +1537,27 @@ window.__ModuleLoader__.load({
             if (open) {
               return React.createElement(
                 'div',
-                { style: Object.assign({ pointerEvents: 'auto' }, placedStyle(place)) },
+                {
+                  style: Object.assign(
+                    {
+                      pointerEvents: 'auto',
+                      // A fixed width, because a shrink-to-fit card behind a message stream
+                      // collapses to whatever the last message happened to be.
+                      width: 420,
+                      maxWidth: 'calc(100vw - 32px)',
+                      maxHeight: '72vh',
+                      overflow: 'hidden',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      background: 'var(--dsw-alias-bg-overlay)',
+                      color: 'var(--dsw-alias-label-primary)',
+                      border: '1px solid var(--dsw-alias-border-l1)',
+                      borderRadius: 12,
+                      boxShadow: '0 18px 44px rgba(0,0,0,.24), 0 2px 6px rgba(0,0,0,.10)',
+                    },
+                    placedStyle(place),
+                  ),
+                },
                 // The bar is the grab area: it holds no text of its own, so the window still reads
                 // as the panel and nothing else, and the only control on it is the collapse button.
                 React.createElement(
