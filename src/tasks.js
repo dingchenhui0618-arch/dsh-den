@@ -158,3 +158,41 @@ export function summarize(tasks = [], now = Date.now()) {
     total: open.length,
   }
 }
+/**
+ * Which piece of task work may the heartbeat take on by itself — and when must it stop.
+ *
+ * DESIGN §7.3 asks the heartbeat to pick out "the due next step". Three different things get
+ * confused by a single boolean, so this returns four:
+ *
+ *   'step'    — an `auto` step is due in a task that knows which conversation it belongs to.
+ *               The heartbeat may advance it and report back.
+ *   'waiting' — the next step is `ask`. Nothing is wrong: this is the case the panel counts as
+ *               「等你 N」, and the only mover is the person. It must NOT be reported as a fault,
+ *               or every task with a human checkpoint would look broken.
+ *   'blocked' — the task cannot move on for a reason only a person can fix: there is nowhere to
+ *               speak (no conversation recorded). Silent skipping is what this exists to prevent —
+ *               a step that cannot move on is the one thing a person must not have to go looking for.
+ *   'idle'    — nothing to do.
+ *
+ * Only the *first* pending step of a task is ever considered, which is `nextDueStep`'s existing
+ * rule: a later step must never overtake an earlier one.
+ */
+export function pickTaskWork(tasks = [], now = Date.now()) {
+  for (const task of openTasks(tasks)) {
+    const step = nextDueStep(task, now)
+    if (!step) continue
+    if (!String(task.sessionId ?? '').trim()) {
+      return {
+        kind: 'blocked',
+        task,
+        step,
+        reason: 'this task has no conversation to speak in, so its next step cannot be started',
+      }
+    }
+    if (step.mode !== 'auto') {
+      return { kind: 'waiting', task, step }
+    }
+    return { kind: 'step', task, step }
+  }
+  return { kind: 'idle' }
+}
