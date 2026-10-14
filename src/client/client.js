@@ -1325,6 +1325,25 @@ window.__ModuleLoader__.load({
           },
         )
       })
+      /**
+       * The floating window, in the shell overlay layer.
+       *
+       * The dock above stays: it is session-scoped because a minted token has to be pasted
+       * somewhere near the message box, and a root-scoped seat is handed no conversation at all.
+       * What it must not do is be the ONLY place the status is visible, which is what made a
+       * status strip follow the person into every conversation and take a line from what they
+       * were doing. This seat is frame-wide, outside every column and click-through: it is there
+       * when looked at and cannot block what is underneath.
+       */
+      ctx.slots.inject('shell.overlay', function () {
+        return ctx.slots.register(
+          { name: 'shell.overlay', id: 'den-mini', order: 40 },
+          function DenMini(props) {
+            void props
+            return React.createElement(DenPanel, { t: t, act: act, sessionId: null, compact: true })
+          },
+        )
+      })
 
       ctx.slots.inject('main', function () {
         return ctx.slots.register({ name: 'main', key: PANEL_KEY }, function Bound(props) {

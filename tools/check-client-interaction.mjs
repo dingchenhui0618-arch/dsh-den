@@ -587,6 +587,7 @@ function registersSlot(name) {
 }
 check(registersSlot('sidebar.panellist'), 'the resident owns a row in the sidebar panel list')
 check(registersSlot('sidebar.toggle.badge'), 'and a dot in the seat the shell reserves for one')
+check(registersSlot('shell.overlay'), 'and a floating window in the shell overlay, outside every conversation frame')
 
 // --- the static preview page --------------------------------------------------------------------
 //
