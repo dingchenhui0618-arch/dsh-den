@@ -22,6 +22,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { isAbsolute } from 'node:path'
 import { denPath, readJson, writeJsonAtomic } from './atom.js'
 import { sessionEvents } from './grant.js'
 
@@ -237,7 +238,11 @@ export async function ensureConversation(ctx, { cwd = '', path = conversationPat
   // either no conversation or one that is resumed — never a second, silently different one.
   const sessionId = randomUUID()
   const meta = {}
-  if (cwd) meta.cwd = cwd
+  // The session store validates meta.cwd and throws on a non-absolute path — it keys storage
+  // directories off it — so a relative one from configuration is dropped here rather than turning
+  // every creation into a host error. The preset is what makes the conversation able to answer at
+  // all; the cwd is only where it does it.
+  if (cwd && isAbsolute(cwd)) meta.cwd = cwd
   if (preset) meta.agentPreset = preset
   const handle = await ctx.agents.create({ sessionId, meta: Object.keys(meta).length ? meta : undefined })
   writeJsonAtomic(path, {

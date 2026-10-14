@@ -45,6 +45,16 @@ test('the preset is the host default, and a broken one is never chosen', async (
   assert.equal(await resolveAgentPreset(onlyBroken), '', 'a broken preset is not a preset')
 })
 
+test('a relative cwd from configuration is dropped, not sent to a store that would throw', async () => {
+  await tempPath(async (path) => {
+    const ctx = fakeCtx()
+    const result = await ensureConversation(ctx, { cwd: 'relative/project', path })
+    assert.equal(ctx.calls.create[0].meta.cwd, undefined, 'the store rejects a non-absolute cwd')
+    assert.equal(ctx.calls.create[0].meta.agentPreset, 'cordis', 'and the preset still goes')
+    assert.equal(result.agentPreset, 'cordis')
+  })
+})
+
 test('a host with no preset service is not an error, it is an empty answer', async () => {
   assert.equal(await resolveAgentPreset(fakeCtx({ presets: null })), '')
   assert.equal(await resolveAgentPreset({}), '')
