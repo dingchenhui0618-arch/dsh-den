@@ -52,6 +52,7 @@ import { TASKS_FILE } from './tasks-store.js'
 import { PROFILE_FILE } from './profile.js'
 import { registerProfileTools } from './profile-tools.js'
 import { registerTaskTools } from './tasks-tools.js'
+import { ensureConversation } from './conversation.js'
 
 export const name = 'dsh-den'
 export const inject = ['agents', 'tools', 'webServer']
@@ -641,7 +642,33 @@ export function createDeliver(ctx, service) {
     // The kernel resolves (and releases) the driver, because it needs one *before* the
     // authority gate can be evaluated. Delivering to that same driver keeps one
     // resolution per wake instead of two that could disagree.
-    if (!agent || typeof agent.followup !== 'function') {
+    /**
+     * A trigger belongs to the conversation it was created in, and that conversation can be gone by
+     * the time the check comes due — which is precisely the unattended case a resident assistant
+     * exists for. So a wake with no driver of its own runs in den's standing conversation: that
+     * session is created through the agent lifecycle, so it persists, and the daily budget and quiet
+     * hours have already been consulted by the kernel before this call.
+     */
+    let wake = agent
+    let wakeSessionId = trigger.sessionId
+    if (!wake || typeof wake.followup !== 'function') {
+      try {
+        const standing = await ensureConversation(
+          ctx,
+          service?.conversationPath ? { path: service.conversationPath } : {},
+        )
+        if (standing && typeof standing.agent?.followup === 'function') {
+          wake = standing.agent
+          wakeSessionId = standing.sessionId
+          // Recorded, not silent: "the check ran in den's own conversation" is a different fact
+          // from "the check ran where it was scheduled", and only one of them is the norm.
+          service.noteEvent({ type: 'wake-standing', triggerId: trigger.id, sessionId: standing.sessionId })
+        }
+      } catch {
+        /* the block below reports it, in the words it already used */
+      }
+    }
+    if (!wake || typeof wake.followup !== 'function') {
       service.noteEvent({ type: 'wake-unavailable', triggerId: trigger.id })
       // Throwing, not returning empty.
       //
@@ -673,7 +700,7 @@ export function createDeliver(ctx, service) {
      * reply is distinguishable from everything the human said earlier.
      */
     const sessions = ctx.get?.('sessions')
-    const before = sessionEvents(agent.session)
+    const before = sessionEvents(wake.session)
     const baselineSeq = before.length ? Number(before[before.length - 1].seq) || 0 : 0
     // The turn the splice happens *into* is not the wake's turn. See `awaitWakeReply`.
     const baselineTurn = highestTurn(before)
@@ -703,17 +730,17 @@ export function createDeliver(ctx, service) {
      * The id is derived from the trigger and the moment so that a redelivery after a crash
      * is a distinct message rather than a duplicate the inbox projection would reject.
      */
-    if (typeof agent.followup !== 'function') {
+    if (typeof wake.followup !== 'function') {
       throw new Error('dsh-den: the resolved agent cannot accept a followup message')
     }
-    agent.followup({
+    wake.followup({
       id: `den-wake-${trigger.id}-${baselineSeq}`,
       role: 'user',
       source: { kind: 'user' },
       content: [{ type: 'text', text }],
     })
 
-    const reply = await awaitWakeReply(sessions, trigger.sessionId, baselineSeq, baselineTurn)
+    const reply = await awaitWakeReply(sessions, wakeSessionId, baselineSeq, baselineTurn)
     if (reply === null) {
       // The wake ran but its reply could not be read. Recording it as "nothing to
       // say" would be a lie in the direction that hides breakage, so say what
@@ -721,7 +748,7 @@ export function createDeliver(ctx, service) {
       service.noteEvent({
         type: 'wake-reply-unreadable',
         triggerId: trigger.id,
-        sessionId: trigger.sessionId,
+        sessionId: wakeSessionId,
       })
       return ''
     }
