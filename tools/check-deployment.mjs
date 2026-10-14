@@ -249,7 +249,7 @@ console.log(
 const source = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8')
 const names = [...source.matchAll(/name: '(den_[a-z_]+)'/g)].map((match) => match[1])
 console.log(`       this file's text names ${names.length} tools written inline in index.js: ${names.join(', ')}`)
-console.log('       that is NOT the tree''s tool count: the scrape above reads one file, so tools defined in')
+console.log('       that is NOT the tool count for this tree: the scrape reads one file, so tools defined in')
 console.log('       other modules (tasks-tools.js, profile-tools.js) are invisible to it. The real number comes')
 console.log('       from an actual registration, printed by `npm run check:install`.')
 console.log(
