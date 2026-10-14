@@ -549,6 +549,24 @@ if (process.env.DEN_DEBUG) {
 }
 check(panel2.text().includes('tok-abc123'), 'the minted token is displayed for the human to carry to the conversation')
 
+/* --- a preset is one click, and asks for nothing -------------------------------------------------- */
+
+// DESIGN §2.39 acceptance 1. The old empty state pointed at a form that wanted a title, a prompt and
+// a number of seconds; "one tap" is the claim, so the check is that the panel offers it *and* that no
+// input is on screen waiting to be filled — a preset that still needs typing is the form again.
+const presetPanel = mount(
+  bootDock({
+    scripted: {
+      status: healthyStatus({ autonomy: 'session-active', autonomyKnown: true }),
+      'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } },
+    },
+  }).component,
+  { sessionId: 'session-active' },
+)
+await presetPanel.settle()
+check(presetPanel.text().includes('每天看一眼 CI 失败'), 'the empty state offers a preset instead of only a form')
+check(presetPanel.inputs().length === 0, 'and it asks for nothing to be typed before anything happens')
+
 /* --- the resident is visible without opening anything -------------------------------------------- */
 
 // The user's reference shows the resident as a sidebar row with a status dot beside it. The row is
