@@ -84,6 +84,7 @@ window.__ModuleLoader__.load({
         residentDeferred: 'waiting for a way to speak',
         budgetShort: 'turns',
         budgetOff: 'proactivity off',
+        hostOlder: 'host needs a restart',
         sayDen: 'den',
         sayPlaceholder: 'say something to den…',
         saySend: 'Send',
@@ -170,6 +171,7 @@ window.__ModuleLoader__.load({
         residentDeferred: '等待投递',
         budgetShort: '回合',
         budgetOff: '自治已关',
+        hostOlder: '宿主待重启',
         sayDen: 'den',
         sayPlaceholder: '直接跟 den 说一句…',
         saySend: '发送',
@@ -1591,10 +1593,12 @@ window.__ModuleLoader__.load({
               // What den is allowed to start by itself today, and how much of it is gone. This is
               // the number that makes an autonomous assistant accountable rather than mysterious.
               if (!Number.isFinite(cap)) {
-                // An older host reports no budget at all. Saying nothing is honest; saying
-                // "proactivity off" is a claim about a field that was never sent, while the ledger
-                // on the same payload may show turns being spent.
-              } else if (cap > 0) {
+                // Every host half that has the daily budget sends that field, so its absence is a
+                // version signal rather than a policy: this host is older than this window. Naming it
+                // is the most useful thing the shut pill can say, because it explains why the window
+                // still cannot hold a conversation.
+                bits.push(t('hostOlder'))
+                            } else if (cap > 0) {
                 bits.push(t('budgetShort') + ' ' + String(spent) + '/' + String(cap))
               } else {
                 bits.push(t('budgetOff'))

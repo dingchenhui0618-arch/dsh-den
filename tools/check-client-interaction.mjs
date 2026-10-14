@@ -929,6 +929,7 @@ await panelPill.settle()
 // check passed while the pill was reporting the wrong side. Assert the half that decides.
 check(panelPill.text().includes('心跳运行中'), 'the shut pill reports the kernel it was actually given, not the absence of a field')
 check(!panelPill.text().includes('已停'), 'and does not also report it as stopped')
+check(!panelPill.text().includes('宿主待重启'), 'a host that sends the budget is not called older')
 check(panelPill.text().includes('回合 2/24'), "and how much of today's self-initiated budget is spent")
 
 const panelPillDeferred = mount(
@@ -975,6 +976,7 @@ fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: true }))
 // `healthyStatus()` sends no `dailyTurnBudget`, which is exactly what the live older host sends.
 const panelPillNoBudget = mount(bootWindow({ scripted: { status: healthyStatus() } }).component, {})
 await panelPillNoBudget.settle()
+check(panelPillNoBudget.text().includes('宿主待重启'), 'a host that sends no budget is named as older, not left unexplained')
 check(!panelPillNoBudget.text().includes('自治已关'), 'a host that reports no budget is not described as proactivity being off')
 check(!panelPillNoBudget.text().includes('回合'), 'and no budget number is invented for it')
 
