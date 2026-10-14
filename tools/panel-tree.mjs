@@ -159,11 +159,11 @@ export function toHtml(tree) {
 export function demoPage({ title, note, sections, generatedBy }) {
   const styles = `
 :root{--dsw-alias-bg-layer-1:#fff;--dsw-alias-bg-layer-2:#fff;--dsw-alias-bg-layer-3:#fff;
---dsw-alias-border-l2:#0000001a;--dsw-alias-label-primary:#0f1115;--dsw-alias-label-secondary:#61666b;
+--dsw-alias-border-l2:#0000001a;--dsw-alias-bg-overlay:#e9ecf2;--dsw-alias-border-l1:#0000000a;--dsw-alias-label-primary:#0f1115;--dsw-alias-label-secondary:#61666b;
 --dsw-alias-label-tertiary:#81858c;--dsw-alias-state-success-primary:#22c55e;--dsw-alias-state-warn-primary:#f59e0b;
 --dsw-alias-state-error-primary:#ec1313;--demo-page:#f7f8f9}
 :root[data-theme=dark]{--dsw-alias-bg-layer-1:#232324;--dsw-alias-bg-layer-2:#2c2c2e;--dsw-alias-bg-layer-3:#353638;
---dsw-alias-border-l2:#ffffff1f;--dsw-alias-label-primary:#f9fafb;--dsw-alias-label-secondary:#cfd3d6;
+--dsw-alias-border-l2:#ffffff1f;--dsw-alias-bg-overlay:#61666b;--dsw-alias-border-l1:#ffffff0f;--dsw-alias-label-primary:#f9fafb;--dsw-alias-label-secondary:#cfd3d6;
 --dsw-alias-label-tertiary:#adb2b8;--dsw-alias-state-success-primary:#22c55e;--dsw-alias-state-warn-primary:#f59e0b;
 --dsw-alias-state-error-primary:#f25a5a;--demo-page:#1a1a1b}
 *{box-sizing:border-box}
