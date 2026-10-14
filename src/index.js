@@ -570,6 +570,16 @@ function textOfAssistantEvent(event) {
   return parts.join('\n').trim()
 }
 
+/** The highest `turn` number in a set of session events, or `null` when none carries one. */
+function highestTurn(events) {
+  let highest = null
+  for (const event of events) {
+    const turn = Number(event?.data?.turn)
+    if (Number.isSafeInteger(turn) && (highest === null || turn > highest)) highest = turn
+  }
+  return highest
+}
+
 /**
  * Wait for the reply the wake turn produces, and return it.
  *
@@ -584,9 +594,23 @@ function textOfAssistantEvent(event) {
  * after `baselineSeq`. The timeout is the turn timeout, so a wake that never answers
  * is reported as unreadable rather than mistaken for a deliberate silence.
  *
+ * ## Why the turn number is not optional (measured on a live host, 2026-10-14)
+ *
+ * The first version accepted "the newest `assistant/message` after `baselineSeq`". On the running
+ * host that rule handed back **the human's own reply**. A wake fires on a timer, so if the human's
+ * turn is still in flight when the instruction is spliced in, that turn's assistant message lands
+ * after the baseline and nothing later exists yet to compare against. The mistake was visible to
+ * the user: the panel's queued notice carried a *previous chat message* as the den's own words.
+ *
+ * A turn is the unit that consumes a message, so the reply belongs to the turn that consumed the
+ * wake instruction. The in-flight human turn has already *started* when the splice happens, which
+ * is why it is counted in `baselineTurn`; the wake's own turn is therefore the first turn strictly
+ * above it. When no event carries a turn number at all (a host that does not report them), the
+ * filter is skipped rather than failing a wake that would otherwise have worked.
+ *
  * @returns the reply text, or `null` when none could be read in time.
  */
-async function awaitWakeReply(sessions, sessionId, baselineSeq, timeoutMs = wakeReplyTimeoutMs()) {
+async function awaitWakeReply(sessions, sessionId, baselineSeq, baselineTurn = null, timeoutMs = wakeReplyTimeoutMs()) {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     // Prefer the live session; fall back to the agent's own transcript when the store
@@ -597,6 +621,9 @@ async function awaitWakeReply(sessions, sessionId, baselineSeq, timeoutMs = wake
       const event = events[index]
       if (Number(event?.seq) <= baselineSeq) break
       if (event?.type !== 'assistant/message') continue
+      // A turn that was already running when the wake was spliced in is not the wake's turn,
+      // and its assistant message is the human's, not the den's.
+      if (baselineTurn !== null && !(Number(event?.data?.turn) > baselineTurn)) continue
       const text = textOfAssistantEvent(event)
       if (text) return text
     }
@@ -644,6 +671,8 @@ export function createDeliver(ctx, service) {
     const sessions = ctx.get?.('sessions')
     const before = sessionEvents(agent.session)
     const baselineSeq = before.length ? Number(before[before.length - 1].seq) || 0 : 0
+    // The turn the splice happens *into* is not the wake's turn. See `awaitWakeReply`.
+    const baselineTurn = highestTurn(before)
 
     /**
      * Deliver into the conversation through the agent's own inbox.
@@ -680,7 +709,7 @@ export function createDeliver(ctx, service) {
       content: [{ type: 'text', text }],
     })
 
-    const reply = await awaitWakeReply(sessions, trigger.sessionId, baselineSeq)
+    const reply = await awaitWakeReply(sessions, trigger.sessionId, baselineSeq, baselineTurn)
     if (reply === null) {
       // The wake ran but its reply could not be read. Recording it as "nothing to
       // say" would be a lie in the direction that hides breakage, so say what
