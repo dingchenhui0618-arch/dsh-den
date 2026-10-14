@@ -98,6 +98,7 @@ window.__ModuleLoader__.load({
         residentOff: 'resident · not running',
         wokeShort: 'woke itself today',
         owedShort: 'things to tell you',
+        collapse: 'shut it',
         tasksShort: 'in progress',
         tasksStuck: 'stuck',
         tasksWaiting: 'waiting on you',
@@ -163,6 +164,7 @@ window.__ModuleLoader__.load({
         residentOff: '常驻中 · 已停',
         wokeShort: '自己醒来',
         owedShort: '有话想跟你说',
+        collapse: '收起',
         tasksShort: '进行中',
         tasksStuck: '卡住',
         tasksWaiting: '等你',
@@ -353,6 +355,32 @@ window.__ModuleLoader__.load({
         },
         props.children,
       )
+    }
+
+/** How often the shut pill refreshes itself: slower than the open panel, never stopped. */
+    var MINI_POLL_MS = 2000
+
+    /**
+     * Where the floating window remembers that it was shut.
+     *
+     * Storage is best-effort. A browser that refuses it leaves the window open, which is the
+     * harmless direction: being shut is a preference, and nothing depends on it.
+     */
+    function miniPref(key) {
+      try {
+        var raw = window.localStorage.getItem('dsh-den.mini')
+        if (!raw) return undefined
+        return JSON.parse(raw)[key]
+      } catch (e) { return undefined }
+    }
+
+    function setMiniPref(key, value) {
+      try {
+        var raw = window.localStorage.getItem('dsh-den.mini')
+        var prefs = raw ? JSON.parse(raw) : {}
+        prefs[key] = value
+        window.localStorage.setItem('dsh-den.mini', JSON.stringify(prefs))
+      } catch (e) { void e }
     }
 
     function DenPanel(props) {
@@ -1336,11 +1364,103 @@ window.__ModuleLoader__.load({
        * when looked at and cannot block what is underneath.
        */
       ctx.slots.inject('shell.overlay', function () {
+        /**
+         * The floating window: a panel when open, one line of information when shut.
+         *
+         * Shut is not the same as hidden. A pill that keeps polling on a slower cadence still
+         * answers the two questions worth asking at a glance - is it awake, and does it have
+         * anything for me - which is why the numbers stay on it instead of it shrinking to a dot.
+         *
+         * The polling moves rather than doubles: open, the panel owns it; shut, this owns it.
+         * The numbers come from the same fields and the same translated strings either way.
+         */
         return ctx.slots.register(
           { name: 'shell.overlay', id: 'den-mini', order: 40 },
           function DenMini(props) {
             void props
-            return React.createElement(DenPanel, { t: t, act: act, sessionId: null, compact: true })
+            var openState = React.useState(miniPref('collapsed') !== true)
+            var open = openState[0]
+            var setOpen = openState[1]
+            var snapshot = React.useState(null)
+            var status = snapshot[0]
+            var setStatus = snapshot[1]
+
+            React.useEffect(function () {
+              if (open) {
+                setStatus(null)
+                return undefined
+              }
+              var alive = true
+              function pull() {
+                act('status', {}).then(function (res) {
+                  if (alive && res && res.ok) setStatus(res.value)
+                }).catch(function () {})
+              }
+              pull()
+              var timer = setInterval(pull, MINI_POLL_MS)
+              return function () {
+                alive = false
+                clearInterval(timer)
+              }
+            }, [open])
+
+            if (open) {
+              return React.createElement(
+                'div',
+                { style: { pointerEvents: 'auto' } },
+                React.createElement(
+                  'button',
+                  {
+                    type: 'button',
+                    onClick: function () { setOpen(false); setMiniPref('collapsed', true) },
+                    style: {
+                      float: 'right',
+                      border: 'none',
+                      background: 'transparent',
+                      color: 'var(--dsw-alias-label-secondary)',
+                      cursor: 'pointer',
+                      fontSize: 14,
+                      padding: '0 6px',
+                    },
+                    title: t('collapse'),
+                  },
+                  '–',
+                ),
+                React.createElement(DenPanel, { t: t, act: act, sessionId: null, compact: true }),
+              )
+            }
+
+            var bits = []
+            if (status) {
+              bits.push(status.running ? t('residentOn') : t('residentOff'))
+              bits.push(t('owedShort') + ' ' + String(status.notices && status.notices.pending ? status.notices.pending.length : 0))
+              if (status.tasks && Number(status.tasks.total) > 0) {
+                bits.push(t('tasksShort') + ' ' + String(status.tasks.active))
+                if (Number(status.tasks.blocked) > 0) bits.push(t('tasksStuck') + ' ' + String(status.tasks.blocked))
+                if (Number(status.tasks.waiting) > 0) bits.push(t('tasksWaiting') + ' ' + String(status.tasks.waiting))
+              }
+            } else {
+              bits.push(t('residentOn'))
+            }
+            return React.createElement(
+              'button',
+              {
+                type: 'button',
+                onClick: function () { setOpen(true); setMiniPref('collapsed', false) },
+                style: {
+                  pointerEvents: 'auto',
+                  border: '1px solid var(--dsw-alias-border-l2)',
+                  borderRadius: 999,
+                  background: 'var(--dsw-alias-bg-base)',
+                  color: 'var(--dsw-alias-label-secondary)',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  padding: '4px 10px',
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
+                },
+              },
+              bits.join(' · '),
+            )
           },
         )
       })
