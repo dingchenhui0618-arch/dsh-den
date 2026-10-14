@@ -40,3 +40,20 @@
 
 **备注**：它与本项目同属作者本人的仓库；此处一并写明，是因为"从开源仓库找到的灵感必须在发布
 内容里提及"这条约定不区分作者是谁 —— 对自己也适用。
+
+## dsh-holdem
+
+Three practices, taken from watching a plugin whose floating window already works:
+
+- **The seat.** `shell.overlay` is the shell frame-wide layer: above every column, outside their
+  scroll containers, and click-through until an occupant opts into pointer events. den moved its
+  status here after `dsh-holdem` `holdem-mini` showed that a status strip does not have to live
+  inside a conversation frame.
+- **A minimisable pill that keeps reporting.** A collapsed panel keeps polling on a slower cadence
+  (expanded 280ms, collapsed 2000ms) instead of going silent, so the small state still answers
+  "is it awake, and does it have anything for me".
+- **An entry that needs no build step.** `dsh-holdem` builds `lib/client.js` and commits it, so a UI
+  change is only half-made until the build runs; den advertises `src/client/client.js` itself and
+  does not inherit that trap.
+
+Code copied: none. The seat id, the registration shape and the wording above are den own.
