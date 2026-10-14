@@ -24,7 +24,7 @@
  */
 
 import { denPath, digest, readJson, writeJsonAtomic } from './atom.js'
-import { hasAutonomyForSession } from './grant.js'
+import { hasAnyGrant, hasAutonomyForSession } from './grant.js'
 import { queueNotice } from './notices.js'
 import { dueTriggers, markAttemptFailed, markFired } from './triggers.js'
 import { pickTaskWork } from './tasks.js'
@@ -147,9 +147,29 @@ export function recordSpoke(at = Date.now()) {
  * @param {object} [options.agent] a live driver, used for its session when given
  * @returns {{ allowed: true } | { allowed: false, gate: string, reason: string }}
  */
-export function evaluateGates({ state, session, agent, now = Date.now() }) {
+export function evaluateGates({ state, session, agent, now = Date.now(), grantsDir = null, sessionId = '' }) {
   const authoritySession = session ?? agent?.session
-  if (!hasAutonomyForSession(authoritySession)) {
+  /**
+   * The conversation this wake is for, from whichever source can still name it: the resolved
+   * session, the agent carrying one, or the trigger/task that scheduled the wake. An agent-less
+   * wake has no session object at all, and without this it could not tell its own grant apart
+   * from another conversation's - which is how a grant whose proof is gone got laundered.
+   */
+  const askingId = authoritySession?.id || sessionId
+  /**
+   * Standing autonomy is asked for once and covers the den, not one string.
+   *
+   * It used to be per-conversation: a grant proved in conversation A left the den unable to wake
+   * in conversation B, and the person who had already granted it once was asked again. The
+   * attestation is unchanged — `hasAutonomyForSession` still re-reads the transcript and still
+   * refuses a grant whose binding human message is gone — and `hasAnyGrant` only widens *where*
+   * that proved grant applies.
+   *
+   * The other three gates are untouched on purpose. They stop the den from being a nuisance
+   * (budget, quiet hours, cadence); this one was never about being a nuisance, it was about who
+   * may start the work.
+   */
+  if (!hasAutonomyForSession(authoritySession) && !hasAnyGrant(askingId, grantsDir)) {
     return {
       allowed: false,
       gate: 'authority',
@@ -223,6 +243,7 @@ export class DenKernel {
     service,
     deliver,
     taskPath = '',
+    grantsDir = null,
     onEvent,
     tickSeconds = 60,
     resolveAgent = null,
@@ -232,6 +253,7 @@ export class DenKernel {
     this.service = service
     this.deliver = deliver
     this.taskPath = taskPath
+    this.grantsDir = grantsDir
     this.onEvent = onEvent ?? (() => {})
     this.resolveAgent = resolveAgent
     this.resolveSession = resolveSession
@@ -350,7 +372,7 @@ export class DenKernel {
     let resolved = agent ?? null
     let release = null
 
-    const verdict = evaluateGates({ state: this.service.state(), session, agent: resolved, now })
+    const verdict = evaluateGates({ state: this.service.state(), session, agent: resolved, now, grantsDir: this.grantsDir, sessionId: task.sessionId })
     if (!verdict.allowed) {
       // Same instrument as the trigger path: a permanent condition must not be re-asked forever.
       this.onEvent({
@@ -470,7 +492,7 @@ export class DenKernel {
       let release = null
 
       try {
-        const verdict = evaluateGates({ state, session, agent: resolved, now })
+        const verdict = evaluateGates({ state, session, agent: resolved, now, grantsDir: this.grantsDir, sessionId: trigger.sessionId })
         if (!verdict.allowed) {
           // A refused wake is recorded, not silently dropped. The budget gate in
           // particular must be auditable, otherwise "why did it stop working?"

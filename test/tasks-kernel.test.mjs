@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DenKernel } from '../src/kernel.js'
@@ -18,6 +18,17 @@ import { addTask, loadTasks, TASKS_FILE } from '../src/tasks-store.js'
  */
 const state = () => ({ dailyTurnBudget: 50, cooldownSeconds: 0, quietHours: null })
 const fresh = () => join(mkdtempSync(join(tmpdir(), 'den-task-tick-')), TASKS_FILE)
+// A record the validator accepts: `isValidRecord` in src/grant.js requires every field below.
+const record = (sessionId) =>
+  JSON.stringify({
+    version: 1,
+    sessionId,
+    autonomy: true,
+    humanMessageId: 'm1',
+    humanSeq: 1,
+    recordedAfterSeq: 0,
+  })
+const noGrants = mkdtempSync(join(tmpdir(), 'den-no-grants-'))
 const tasksOn = (path) => {
   const doc = loadTasks(path)
   return Array.isArray(doc) ? doc : (doc && doc.tasks) || []
@@ -36,6 +47,7 @@ test('a task with nowhere to speak is blocked by the heartbeat itself, with the 
     },
     onEvent: (event) => events.push(event),
     taskPath: path,
+    grantsDir: noGrants,
   })
 
   const out = await kernel.tick({ now: Date.now() })
@@ -64,6 +76,7 @@ test('an ask step is waiting on the person, so a quiet heartbeat changes nothing
       return 'ok'
     },
     taskPath: path,
+    grantsDir: noGrants,
   })
 
   await kernel.tick({ now: Date.now() })
@@ -86,6 +99,7 @@ test('without a grant the step is refused and stays pending, so nothing advances
     },
     onEvent: (event) => events.push(event),
     taskPath: path,
+    grantsDir: noGrants,
   })
 
   const out = await kernel.tick({ now: Date.now() })
@@ -100,4 +114,26 @@ test('without a grant the step is refused and stays pending, so nothing advances
     events.some((event) => event.type === 'task-refused' || event.type === 'task-unresolved'),
     'a refusal on this path is recorded like every other refusal',
   )
+})
+test('a grant proved in another conversation is enough to take the step here', async () => {
+  const path = fresh()
+  addTask(path, { goal: '自动那步', steps: [{ title: '跑测试', mode: 'auto' }], sessionId: 'session-1' })
+  const grantedDir = mkdtempSync(join(tmpdir(), 'den-grants-'))
+  writeFileSync(join(grantedDir, 'elsewhere.json'), record('elsewhere'))
+  const delivered = []
+  const kernel = new DenKernel({
+    service: { state },
+    deliver: async (wake) => {
+      delivered.push(wake)
+      return 'ok'
+    },
+    taskPath: path,
+    grantsDir: grantedDir,
+  })
+
+  const out = await kernel.tick({ now: Date.now() })
+
+  assert.equal(delivered.length, 1, 'a grant proved anywhere lets the den wake here')
+  assert.equal(out.results[0].outcome, 'spoke')
+  assert.equal(tasksOn(path)[0].steps[0].state, 'done')
 })

@@ -940,6 +940,10 @@ test('an idle tick answers with the same shape as a busy one', async () => {
 })
 
 test('an unreadable transcript refuses without cold-resuming the conversation', async () => {
+  // Nothing is granted anywhere, in this sandbox included: an earlier test in this file writes
+  // real grant records under the same DSH_HOME, and this test is about having no authority at
+  // all - which is exactly the case the cheap gate exists for.
+  rmSync(join(sandboxHome, 'den', 'grants'), { recursive: true, force: true })
   const first = coldHost()
   mountHost(first)
   await callTool(first.state, 'den_schedule_check', {

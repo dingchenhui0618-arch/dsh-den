@@ -13,6 +13,8 @@
  * recoverable.
  */
 
+import { readdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { denPath, digest, readJsonChecked, writeJsonAtomic } from './atom.js'
 
 const SCHEMA_VERSION = 1
@@ -231,6 +233,47 @@ export function currentGrantForSession(session) {
 }
 
 /** Convenience predicate; anything other than a verified `true` is not autonomy. */
+/**
+ * Whether the den has been granted standing autonomy *anywhere*.
+ *
+ * A grant used to wake the den only in the one conversation it was proved in. That is the wrong
+ * unit: a person who grants standing autonomy once has granted it to the den, not to a string.
+ * The per-conversation attestation stays exactly as it is — it is still how a grant is *proved* —
+ * and this answers the other half: has one been proved anywhere.
+ *
+ * Read off the grants directory rather than kept as a second flag, so revoking the last grant
+ * turns this false again with nothing to synchronise.
+ *
+ * The directory is an argument with the real path as its default because a function that can only
+ * read one global location cannot be tested without writing to the machine's real den — and a test
+ * that touches the thing it is testing is not a test.
+ */
+export function hasAnyGrant(sessionId = '', grantsDir = null) {
+
+  // Three states, because the caller knows which one it is in and this function cannot:
+  //
+  //   null      no conversation at all (a scheduled wake), so any proved grant applies;
+  //   ''        a conversation exists but cannot be named, so no record can be told apart from
+  //             its own failed attestation - it gets the cheap refusal, not laundered authority;
+  //   a name    skip that conversation's own record and count the others.
+  if (sessionId !== null && !sessionId) return false
+  try {
+    const dir = grantsDir ?? denPath('grants')
+    return readdirSync(dir).some(function (name) {
+      if (!name.endsWith('.json')) return false
+      const result = readJsonChecked(join(dir, name), isValidRecord)
+      if (!result.ok) return false
+      // A record naming the conversation that is asking has already been through attestation -
+      // and failed it, or this would not be called. Finding it again here would launder a grant
+      // whose proof is gone into one that works, which is the one thing the attestation exists to
+      // prevent. Records naming *other* conversations are what this function is for.
+      if (sessionId && result.value.sessionId === sessionId) return false
+      return true
+    })
+  } catch {
+    return false
+  }
+}
 export function hasAutonomyForSession(session) {
   return currentGrantForSession(session) === true
 }

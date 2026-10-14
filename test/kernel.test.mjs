@@ -526,6 +526,7 @@ test('a record younger than the grace is not taken over on a liveness answer alo
   )
 })
 
+const noGrantsLedger = mkdtempSync(join(tmpdir(), 'den-no-grants-'))
 test('a refused wake is recorded in the ledger, never silently dropped', async () => {
   const agent = { id: 'agent-n', status: 'running', session: { id: 'session-noauth', events: [] } }
   const trigger = normalizeTrigger({
@@ -541,7 +542,7 @@ test('a refused wake is recorded in the ledger, never silently dropped', async (
     state: () => ({ dailyTurnBudget: 50, cooldownSeconds: 0, quietHours: null }),
   }
   let delivered = 0
-  const kernel = new DenKernel({
+  const kernel = new DenKernel({ grantsDir: noGrantsLedger, 
     service,
     deliver: async () => {
       delivered += 1
