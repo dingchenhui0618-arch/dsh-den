@@ -42,3 +42,19 @@ test('a conversation with no name of its own gets no grant from the directory', 
   assert.equal(hasAnyGrant(null, dir), true, 'but a wake with no conversation at all may act on one')
   assert.equal(hasAnyGrant('session-b', dir), true, 'while a named conversation still may act')
 })
+
+test('a revocation in one conversation does not authorize another', async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { hasAnyGrant } = await import('../src/grant.js')
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-den-revoked-'))
+  try {
+    writeFileSync(join(dir, 'revoked.json'), "{\"version\":1,\"sessionId\":\"session-a\",\"autonomy\":false,\"humanMessageId\":\"m1\",\"humanSeq\":1,\"recordedAfterSeq\":0}")
+    assert.equal(hasAnyGrant('session-b', dir), false, 'a revocation is not a grant to lend out')
+    writeFileSync(join(dir, 'granted.json'), "{\"version\":1,\"sessionId\":\"session-c\",\"autonomy\":true,\"humanMessageId\":\"m2\",\"humanSeq\":2,\"recordedAfterSeq\":0}")
+    assert.equal(hasAnyGrant('session-b', dir), true, 'but a real grant elsewhere still counts')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

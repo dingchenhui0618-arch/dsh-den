@@ -267,6 +267,9 @@ export function hasAnyGrant(sessionId = '', grantsDir = null) {
       // and failed it, or this would not be called. Finding it again here would launder a grant
       // whose proof is gone into one that works, which is the one thing the attestation exists to
       // prevent. Records naming *other* conversations are what this function is for.
+      // A record of a revocation is a valid record, but it is not a grant: without this line,
+      // revoking in one conversation would still leave the den authorized in every other one.
+      if (result.value.autonomy !== true) return false
       if (sessionId && result.value.sessionId === sessionId) return false
       return true
     })
