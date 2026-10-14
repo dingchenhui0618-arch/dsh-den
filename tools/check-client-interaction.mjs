@@ -512,8 +512,8 @@ check(
   'the dock carries the session the shell handed it, rather than discovering one',
 )
 
-check(text.includes('助理不会自己醒来'), 'an empty schedule list is called out, not left blank')
-check(text.includes('输入框上方'), 'and adding one is pointed at the seat that has a conversation')
+check(text.includes('在对话里说'), 'an empty schedule list is called out, and names the cheaper path: saying it')
+check(text.includes('消息框里说一句'), 'and creating one is described as something said, not a form to go and find')
 
 /* --- clicking Grant mints a token and does NOT claim authority ------------- */
 
@@ -579,6 +579,17 @@ const panel3 = mount(
   { sessionId: 'session-active' },
 )
 await panel3.settle()
+
+// The dock sits in the conversation, so it must cost one line by default. This was measured the
+// other way first: the whole creation form — three labelled inputs and a button — rendered
+// permanently above the message box and took most of a screen. The capability still has to be
+// reachable from here, because `schedules/create` refuses without a conversation, so the form is
+// behind a disclosure rather than gone.
+check(panel3.inputs().length === 0, `the dock renders no inputs until asked; saw ${panel3.inputs().length}`)
+check(!panel3.text().includes('新建自检'), 'and does not show the submit button either')
+check(panel3.text().includes('在对话里说'), 'the empty state points at the conversation, which is the cheaper path')
+
+await panel3.click('新建')
 const inputs = panel3.inputs()
 check(inputs.length === 3, `the form renders three fields (title, prompt, minutes); saw ${inputs.length}`)
 
@@ -603,6 +614,7 @@ const panel4 = mount(
   { sessionId: 'session-active' },
 )
 await panel4.settle()
+await panel4.click('新建')
 await panel4.type(0, 'too often')
 await panel4.type(1, 'x')
 await panel4.type(2, '1')

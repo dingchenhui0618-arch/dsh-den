@@ -92,12 +92,14 @@ window.__ModuleLoader__.load({
         autonomyCopyDone: 'copied — paste it as your next message',
         autonomyCopyFailed: 'copy failed — select the token above by hand',
         schedules: 'Self-checks',
-        scheduleNone: 'none — the den will not wake on its own',
+        scheduleNone: 'none — say "check CI every 30 minutes" in the conversation and the den will add it',
+        scheduleNew: 'New',
+        scheduleClose: 'Close',
         scheduleTitle: 'Title',
         schedulePrompt: 'What to check',
         scheduleMinutes: 'Every (minutes)',
         scheduleAdd: 'Add self-check',
-        scheduleAddElsewhere: 'add one from the control above the message box',
+        scheduleAddElsewhere: 'creating one needs a conversation — say it in the message box',
         scheduleRemove: 'remove',
         scheduleCreateHint: 'Not a permission grant: each run still re-checks autonomy, budget and quiet hours.',
         dueNow: 'due now',
@@ -155,12 +157,14 @@ window.__ModuleLoader__.load({
         autonomyCopyDone: '已复制 —— 粘贴到下面的输入框发送',
         autonomyCopyFailed: '复制失败 —— 请手动选中上面的令牌',
         schedules: '自检',
-        scheduleNone: '无 —— 助理不会自己醒来',
+        scheduleNone: '无 —— 在对话里说「每 30 分钟看一眼 CI」，助理就会加上',
+        scheduleNew: '新建',
+        scheduleClose: '收起',
         scheduleTitle: '名称',
         schedulePrompt: '检查什么',
         scheduleMinutes: '每（分钟）',
         scheduleAdd: '新建自检',
-        scheduleAddElsewhere: '请到输入框上方的控件里新建',
+        scheduleAddElsewhere: '创建自检需要会话 —— 在消息框里说一句就行',
         scheduleRemove: '删除',
         scheduleCreateHint: '这不是权限授予：每次运行仍会重新检查授权、预算与免打扰时段。',
         dueNow: '待触发',
@@ -349,6 +353,17 @@ window.__ModuleLoader__.load({
       var form = formState[0]
       var setForm = formState[1]
 
+      /* Whether the self-check form is open in the dock.
+       *
+       * Collapsed by default, and that is a correction rather than a preference. The dock sits
+       * in the conversation, directly above the message box, and a permanently open form — three
+       * labelled inputs and a button — is what made this panel cost the human half the screen.
+       * The state is declared here rather than inside `schedulesBlock` so the hook is
+       * unconditional: that block is called from both seats, and only the dock can create. */
+      var schedOpenState = React.useState(false)
+      var schedOpen = schedOpenState[0]
+      var setSchedOpen = schedOpenState[1]
+
       var sessionId = props.sessionId
       var act = props.act
       /**
@@ -504,32 +519,46 @@ window.__ModuleLoader__.load({
             ? React.createElement(
                 'div',
                 null,
-                React.createElement(Field, {
-                  label: t('scheduleTitle'),
-                  value: form.title,
-                  onChange: function (value) { setForm({ title: value, prompt: form.prompt, minutes: form.minutes }) },
-                }),
-                React.createElement(Field, {
-                  label: t('schedulePrompt'),
-                  value: form.prompt,
-                  onChange: function (value) { setForm({ title: form.title, prompt: value, minutes: form.minutes }) },
-                }),
-                React.createElement(Field, {
-                  label: t('scheduleMinutes'),
-                  type: 'number',
-                  value: form.minutes,
-                  onChange: function (value) { setForm({ title: form.title, prompt: form.prompt, minutes: value }) },
-                }),
+                // One row by default. The form is behind a disclosure because the dock lives in
+                // the conversation: the human came here to talk, not to fill in a form, and the
+                // capability does not need to be on screen to exist. Asking in the message box
+                // works too, which is what the empty-state line says.
                 React.createElement(Button, {
-                  primary: true,
                   disabled: busy || !sessionId,
-                  onClick: onAddSchedule,
-                }, t('scheduleAdd')),
-                React.createElement(
-                  'div',
-                  { style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)', marginTop: 4 } },
-                  t('scheduleCreateHint'),
-                ),
+                  onClick: function () { setSchedOpen(!schedOpen) },
+                }, t(schedOpen ? 'scheduleClose' : 'scheduleNew')),
+                schedOpen
+                  ? React.createElement(
+                      'div',
+                      null,
+                      React.createElement(Field, {
+                        label: t('scheduleTitle'),
+                        value: form.title,
+                        onChange: function (value) { setForm({ title: value, prompt: form.prompt, minutes: form.minutes }) },
+                      }),
+                      React.createElement(Field, {
+                        label: t('schedulePrompt'),
+                        value: form.prompt,
+                        onChange: function (value) { setForm({ title: form.title, prompt: value, minutes: form.minutes }) },
+                      }),
+                      React.createElement(Field, {
+                        label: t('scheduleMinutes'),
+                        type: 'number',
+                        value: form.minutes,
+                        onChange: function (value) { setForm({ title: form.title, prompt: form.prompt, minutes: value }) },
+                      }),
+                      React.createElement(Button, {
+                        primary: true,
+                        disabled: busy || !sessionId,
+                        onClick: onAddSchedule,
+                      }, t('scheduleAdd')),
+                      React.createElement(
+                        'div',
+                        { style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)', marginTop: 4 } },
+                        t('scheduleCreateHint'),
+                      ),
+                    )
+                  : null,
               )
             : React.createElement(
                 'div',
