@@ -602,26 +602,17 @@ if (process.argv.includes('--demo')) {
     generatedBy: '由 tools/check-client-interaction.mjs 生成：结构由同一个渲染器导出，不是手抄的 HTML',
     sections: [
       {
-        label: '对话输入框上方那条（dock）',
+        label: '对话输入框上方那条（dock）：常驻、授权、一键自检都在这一条上',
         // `dock` is the `bootDock()` descriptor — a component plus its options, never mounted — so
         // `dock.tree` was always undefined and this section rendered an empty box. `grantPanel` is the
         // same seat mounted with the session the shell hands over, which is the real case.
-        hint: '常驻与授权都在这一条上，默认只占一行',
+        hint: '默认只占一行；点了预设就建好，不需要打字',
         tree: grantPanel.tree,
       },
       {
         label: '页面座位（默认视图，按下 [详情] 之前）',
         hint: '一行状态白话；八行技术指标收在 [详情] 里；异常状态自动展开',
         tree: demoMain.tree,
-      },
-      {
-        // The same dock as above, but with a conversation and an empty schedule list — the state in
-        // which the one-tap presets appear. Without this section the preview would keep showing a
-        // panel from before they existed, and the preview is the only view of the UI a reader gets
-        // without restarting the host.
-        label: '空状态里的一键预设（有会话时）',
-        hint: '点一下就建好，不需要打字',
-        tree: presetPanel.tree,
       },
     ],
   })
