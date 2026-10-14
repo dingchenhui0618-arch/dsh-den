@@ -94,6 +94,11 @@ window.__ModuleLoader__.load({
         schedules: 'Self-checks',
         noticesOwed: 'while you were away:',
         noticeReadIt: 'read it',
+        residentOn: 'resident · heartbeat fine',
+        residentOff: 'resident · not running',
+        wokeShort: 'woke itself today',
+        owedShort: 'to read',
+        details: 'details',
         scheduleNone: 'none — say "check CI every 30 minutes" in the conversation and the den will add it',
         scheduleNew: 'New',
         scheduleClose: 'Close',
@@ -150,6 +155,11 @@ window.__ModuleLoader__.load({
         grantDock: '常驻自治 · 本会话',
         noticesOwed: '你不在的时候：',
         noticeReadIt: '读过了',
+        residentOn: '常驻中 · 心跳运行中',
+        residentOff: '常驻中 · 已停',
+        wokeShort: '自己醒来',
+        owedShort: '待读',
+        details: '详情',
         grantDockGranted: '本会话已授予',
         grantDockNotGranted: '本会话未授予',
         grantDockUnknown: '状态未知',
@@ -367,6 +377,18 @@ window.__ModuleLoader__.load({
       var schedOpenState = React.useState(false)
       var schedOpen = schedOpenState[0]
       var setSchedOpen = schedOpenState[1]
+
+      /**
+       * The technical half of the panel, folded away by default.
+       *
+       * The user's report: "你这个 den 的状态有点复杂了". The rows were all true and none of them
+       * were readable at a glance — residency, ledger, approval gate and memory scenarios are the
+       * words of this plugin's insides, not of a person deciding whether to let it act. Folding them
+       * is not hiding them: the measurements are one press away, for whoever wants to audit.
+       */
+      var detailOpenState = React.useState(false)
+      var detailOpen = detailOpenState[0]
+      var setDetailOpen = detailOpenState[1]
 
       var sessionId = props.sessionId
       var act = props.act
@@ -771,30 +793,78 @@ window.__ModuleLoader__.load({
           kernelValue = t('kernelOff')
         }
 
+        var owedCount = d && d.notices && d.notices.pending ? d.notices.pending.length : 0
+        var running = Boolean(d && d.kernel && d.kernel.running)
+
+        /**
+         * Anything other than "fine" opens the measurements by itself.
+         *
+         * Folding the rows must not hide a fault: a stopped heartbeat, a deferred wake, a host that
+         * stood down or a process older than the code it serves are exactly the states a person has
+         * to see without knowing to look. Only the healthy case stays collapsed.
+         */
+        var abnormal =
+          !running ||
+          Boolean(d && d.kernelDeferred) ||
+          Boolean(d && d.residency && d.residency.held === false) ||
+          Boolean(d && d.freshness && d.freshness.stale)
+
+        /**
+         * One line a person can read in a second; the measured rows only if asked for.
+         *
+         * The user's own panel on their phone puts a single `label value · label value` row above the
+         * composer. This is the same shape and the same argument: the default view answers the three
+         * questions a person actually has — is it on, has it done anything, is anything waiting for
+         * me — and the measurements move behind `details`.
+         */
         children.push(
           React.createElement(
             'div',
-            { key: 'rows', style: { marginTop: 6 } },
-            React.createElement(Row, { label: t('autonomy'), value: autonomyText, tone: autonomyTone }),
-            React.createElement(Row, { label: t('nextCheck'), value: fmtTime(d.nextCheckAt, t) }),
-            React.createElement(Row, { label: t('turns'), value: String((d.ledger && d.ledger.turns) || 0) }),
-            React.createElement(Row, {
-              label: t('notices'),
-              value: (d.notices ? d.notices.deliverable : 0) + ' / ' + (d.notices ? d.notices.total : 0),
-            }),
-            React.createElement(Row, {
-              label: t('gate'),
-              value: d.gate && d.gate.mounted ? t('gateMounted') : t('gateUnmounted'),
-              tone: d.gate && d.gate.mounted ? 'success' : 'error',
-            }),
-            React.createElement(Row, {
-              label: t('kernel'),
-              value: kernelValue,
-              tone: kernelTone,
-            }),
-            React.createElement(Row, { label: t('scenarios'), value: scenarios.length ? scenarios.join(', ') : t('none') }),
+            { key: 'plain', style: { margin: '6px 0 2px', color: 'var(--dsw-alias-label-secondary)' } },
+            React.createElement(
+              'span',
+              { style: { color: 'var(--dsw-alias-label-primary)' } },
+              running ? t('residentOn') : t('residentOff'),
+            ),
+            ' · ' + t('wokeShort') + ' ' + String((d && d.ledger && d.ledger.turns) || 0),
+            ' · ' + t('owedShort') + ' ' + String(owedCount),
+            ' · ' + autonomyText,
+            '  ',
+            React.createElement(
+              Button,
+              { onClick: function () { setDetailOpen(!detailOpen) } },
+              detailOpen ? t('scheduleClose') : t('details'),
+            ),
           ),
+          noticesBlock(),
         )
+
+        if (detailOpen || abnormal) {
+          children.push(
+            React.createElement(
+              'div',
+              { key: 'rows', style: { marginTop: 6 } },
+              React.createElement(Row, { label: t('autonomy'), value: autonomyText, tone: autonomyTone }),
+              React.createElement(Row, { label: t('nextCheck'), value: fmtTime(d.nextCheckAt, t) }),
+              React.createElement(Row, { label: t('turns'), value: String((d.ledger && d.ledger.turns) || 0) }),
+              React.createElement(Row, {
+                label: t('notices'),
+                value: (d.notices ? d.notices.deliverable : 0) + ' / ' + (d.notices ? d.notices.total : 0),
+              }),
+              React.createElement(Row, {
+                label: t('gate'),
+                value: d.gate && d.gate.mounted ? t('gateMounted') : t('gateUnmounted'),
+                tone: d.gate && d.gate.mounted ? 'success' : 'error',
+              }),
+              React.createElement(Row, {
+                label: t('kernel'),
+                value: kernelValue,
+                tone: kernelTone,
+              }),
+              React.createElement(Row, { label: t('scenarios'), value: scenarios.length ? scenarios.join(', ') : t('none') }),
+            ),
+          )
+        }
 
         /**
          * Whether the process drawing this panel loaded the code it is drawn from.
