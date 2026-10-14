@@ -9,6 +9,7 @@ import {
   readConversation,
   readConversationRecord,
   readStandingConversation,
+  appendToSession,
   sayInConversation,
   textOfMessage,
 } from '../src/conversation.js'
@@ -191,4 +192,42 @@ test('a block that is not text contributes nothing, whatever shape it arrives in
   assert.equal(textOfMessage(null), '')
   assert.equal(textOfMessage({ content: 'not an array' }), '')
   assert.equal(textOfMessage({ content: [{ type: 'image' }, { type: 'text', text: 'kept' }] }), 'kept')
+})
+
+test('a message is appended to the session log, not only queued for the agent', () => {
+  const appended = []
+  const delivered = []
+  const agent = {
+    session: {
+      append(type, data, opts) {
+        appended.push({ type, data, opts })
+      },
+    },
+    followup(message) {
+      delivered.push(message)
+    },
+  }
+  const id = sayInConversation(agent, '  hello  ', { id: 'm-1', now: 5 })
+  assert.equal(id, 'm-1')
+  assert.equal(appended.length, 1, 'the transcript is the log: a queued prompt writes no event')
+  assert.equal(appended[0].type, 'user/message')
+  assert.deepEqual(appended[0].opts, { surfaceOp: 'append' }, 'a surface event is appended, not replaced')
+  assert.equal(appended[0].data.content[0].text, 'hello', 'trimmed, and this text is what den reads')
+  assert.equal(appended[0].data.role, 'user')
+  assert.equal(delivered.length, 1)
+  assert.equal(delivered[0], appended[0].data, 'one message, logged and queued — not two that can drift')
+})
+
+test('a session that cannot take an append still receives the turn', () => {
+  const delivered = []
+  const agent = { session: { snapshotEvents: () => [] }, followup: (message) => delivered.push(message) }
+  sayInConversation(agent, 'hi')
+  assert.equal(delivered.length, 1, 'delivery must not depend on the session shape')
+  assert.equal(appendToSession(agent.session, {}), false, 'and it says so rather than pretending')
+})
+
+test('a conversation with no session at all is still spoken into', () => {
+  const delivered = []
+  sayInConversation({ followup: (message) => delivered.push(message) }, 'hi')
+  assert.equal(delivered.length, 1)
 })

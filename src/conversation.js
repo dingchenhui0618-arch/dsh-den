@@ -110,14 +110,33 @@ export function sayInConversation(agent, text, { id = '', now = Date.now() } = {
   if (!agent || typeof agent.followup !== 'function') {
     throw new Error('dsh-den: the standing conversation has no live agent to speak into')
   }
-  const messageId = id || `den-say-${now}-${randomUUID().slice(0, 8)}`
-  agent.followup({
-    id: messageId,
+  const message = {
+    id: id || `den-say-${now}-${randomUUID().slice(0, 8)}`,
     role: 'user',
     source: { kind: 'user' },
     content: [{ type: 'text', text: body }],
-  })
-  return messageId
+  }
+  // Both halves, and the order matters to nobody but the transcript does. `followup` queues an
+  // ordinary next-turn prompt and wakes the driver; it does NOT write a session event. The append
+  // is what makes the message part of the conversation at all — the log the window reads, the log
+  // that survives a restart, the log ④ promises accumulates. Without it the first real message left
+  // a live agent, a stored id and an empty transcript, which is exactly what 2026-10-14 produced.
+  appendToSession(agent.session, message)
+  agent.followup(message)
+  return message.id
+}
+
+/**
+ * Append one user message to the session log, when the host handed us a session that can take it.
+ *
+ * Deliberately tolerant: an older host, or a session stand-in, may have no `append`. Delivery must
+ * not depend on it — a conversation with no transcript is still better than a human whose message
+ * was silently dropped.
+ */
+export function appendToSession(session, message) {
+  if (!session || typeof session.append !== 'function') return false
+  session.append('user/message', message, { surfaceOp: 'append' })
+  return true
 }
 
 /**
