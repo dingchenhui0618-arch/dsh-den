@@ -49,12 +49,12 @@ function claimedCounts(thing) {
 test('the README count of model-facing tools matches what activation registers', () => {
   const registered = []
   registerTools({ register: (definition) => registered.push(definition) }, {})
-  assert.equal(registered.length, 15, 'activation registers fifteen tools')
+  assert.equal(registered.length, 16, 'activation registers sixteen tools')
   const claimed = claimedCounts('model-facing tools')
   assert.ok(claimed.length >= 1, 'the README still makes the claim (it is in the Status line)')
   assert.deepEqual(
     [...new Set(claimed)],
-    [15],
+    [16],
     `the README claims ${claimed.join('/')} model-facing tools and the plugin registers ${registered.length}`,
   )
 })

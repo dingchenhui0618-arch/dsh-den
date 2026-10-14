@@ -49,6 +49,8 @@ import { ENTRY_KINDS, forget, recall, remember, scenarios } from './memory.js'
 import { collectSourceEdits, judgeFreshness, newestSourceEdit } from './freshness.js'
 import { mountPanelRoute } from './panel-route.js'
 import { TASKS_FILE } from './tasks-store.js'
+import { PROFILE_FILE } from './profile.js'
+import { registerProfileTools } from './profile-tools.js'
 import { registerTaskTools } from './tasks-tools.js'
 
 export const name = 'dsh-den'
@@ -767,6 +769,7 @@ export function registerTools(tools, service) {
   // The task tools (DESIGN 7) live in their own module so their behaviour can be tested on a temp
   // file; the path is decided here, at the one place that already resolves den's data directory.
   registerTaskTools({ register, path: denPath(TASKS_FILE), text })
+  registerProfileTools({ register, path: denPath(PROFILE_FILE), text })
 
   register({
     name: 'den_status',
