@@ -548,6 +548,40 @@ if (process.env.DEN_DEBUG) {
   console.log('PANEL2 sink:', JSON.stringify(sinkLog))
 }
 check(panel2.text().includes('tok-abc123'), 'the minted token is displayed for the human to carry to the conversation')
+
+// --- the static preview page --------------------------------------------------------------------
+//
+// How the panel *looks* is decided by a human, not by an assertion, so the harness can emit the very
+// trees it just rendered as a standalone page. It is generated here, from the same components the
+// checks drive, because a hand-written preview drifts: the checks keep passing while the file on disk
+// quietly shows the previous design.
+if (process.argv.includes('--demo')) {
+  const demoPath = process.argv[process.argv.indexOf('--demo') + 1]
+  const { mkdirSync, writeFileSync } = await import('node:fs')
+  const { demoPage } = await import('./panel-tree.mjs')
+  const demoMain = mount(component, {})
+  await demoMain.settle()
+
+  const page = demoPage({
+    title: 'dsh-den 面板预览',
+    generatedBy: '由 tools/check-client-interaction.mjs 生成：结构由同一个渲染器导出，不是手抄的 HTML',
+    sections: [
+      {
+        label: '对话输入框上方那条（dock）',
+        hint: '常驻时你只看见这一条：一句白话 + 待读通知 + 一个「读过了」',
+        tree: dock && dock.tree ? dock.tree : [],
+      },
+      {
+        label: '页面座位（默认视图，按下 [详情] 之前）',
+        hint: '一行状态白话；八行技术指标收在 [详情] 里；异常状态自动展开',
+        tree: demoMain.tree,
+      },
+    ],
+  })
+  mkdirSync('docs', { recursive: true })
+  writeFileSync(demoPath, page, 'utf8')
+  console.log('demo written:', demoPath, page.length, 'bytes')
+}
 check(panel2.text().includes('一次性'), 'the panel explains the token is single-use')
 
 /* --- carrying the token is one click, and a copy that did not happen says so --- */
