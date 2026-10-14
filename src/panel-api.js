@@ -11,7 +11,7 @@
 import { randomBytes } from 'node:crypto'
 
 import { denPath } from './atom.js'
-import { ensureConversation, readStandingConversation, sayInConversation } from './conversation.js'
+import { ensureConversation, promptConversation, readStandingConversation, sayInConversation } from './conversation.js'
 import { summarizeFromDisk, TASKS_FILE } from './tasks-store.js'
 
 export const PANEL_ACTIONS = [
@@ -263,8 +263,11 @@ export async function invokeAction(service, action, payload = {}, { sessionId, n
         // A human turn, so it is not charged against the daily budget: that budget rations what
         // den starts on its own. The host picks the working directory, so none is invented here.
         const standing = await ensureConversation(service.ctx, standingPath ? { path: standingPath } : {})
-        const messageId = sayInConversation(standing.agent, text)
-        return { ok: true, value: { messageId, sessionId: standing.sessionId, state: standing.state } }
+        const admitted = await promptConversation(service.ctx, standing.sessionId, text)
+        // Admitted by the host when it can be; queued on the agent when it cannot, and the answer
+        // says which, so a window that shows nothing can be told apart from a window that failed.
+        const messageId = admitted ? null : sayInConversation(standing.agent, text)
+        return { ok: true, value: { messageId, delivery: admitted || 'followup', sessionId: standing.sessionId, state: standing.state } }
       } catch (error) {
         return { ok: false, error: String(error?.message ?? error) }
       }

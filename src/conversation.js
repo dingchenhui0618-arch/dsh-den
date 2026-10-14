@@ -104,6 +104,40 @@ export function readStandingConversation(ctx, { limit = DEFAULT_READ_LIMIT, path
  * next-turn prompt and wakes the driver". It is a human turn, not a self-initiated one, so it is not
  * charged against the daily budget — the budget exists to ration what den starts by itself.
  */
+/**
+ * Say something into the standing conversation the way the GUI says something into any session.
+ *
+ * `sessionController.prompt` is the host's admission path — "Admit one prompt after explicitly
+ * resuming its Session" — and it is the same call the human's own composer makes, so the sentence
+ * becomes a `user/message` event AND starts a turn. Returns the name of the path it used, or null
+ * when this host has no session controller, so the caller can fall back deliberately.
+ */
+export async function promptConversation(ctx, sessionId, text, { requestId = '', now = Date.now(), signal = null } = {}) {
+  const body = String(text ?? '').trim()
+  if (!body) throw new Error('dsh-den: there is nothing to say')
+  if (typeof ctx?.sessionController?.prompt !== 'function') return null
+  if (!sessionId) throw new Error('dsh-den: the standing conversation has no id to speak into')
+  const abort = signal || (typeof AbortController === 'function' ? new AbortController().signal : undefined)
+  await ctx.sessionController.prompt(
+    {
+      requestId: requestId || `den-say-${now}-${randomUUID().slice(0, 8)}`,
+      sessionId,
+      mode: 'queue',
+      content: [{ type: 'text', text: body }],
+    },
+    abort,
+  )
+  return 'prompt'
+}
+
+/**
+ * The fallback: queue the turn on a live agent and write the event ourselves.
+ *
+ * Kept because it is the only delivery this plugin can attempt when the host exposes no session
+ * controller, but it is NOT the documented path: `Agent` declares only `id`, so `followup` may not
+ * exist at all, and a queued prompt writes no session event by itself. That is why the append is
+ * here and not on the admitted path — there, the host owns the transcript write.
+ */
 export function sayInConversation(agent, text, { id = '', now = Date.now() } = {}) {
   const body = String(text ?? '').trim()
   if (!body) throw new Error('dsh-den: there is nothing to say')

@@ -10,6 +10,7 @@ import {
   readConversationRecord,
   readStandingConversation,
   appendToSession,
+  promptConversation,
   sayInConversation,
   textOfMessage,
 } from '../src/conversation.js'
@@ -194,7 +195,7 @@ test('a block that is not text contributes nothing, whatever shape it arrives in
   assert.equal(textOfMessage({ content: [{ type: 'image' }, { type: 'text', text: 'kept' }] }), 'kept')
 })
 
-test('a message is appended to the session log, not only queued for the agent', () => {
+test('the fallback queues the turn AND writes the event the queue cannot write', () => {
   const appended = []
   const delivered = []
   const agent = {
@@ -230,4 +231,32 @@ test('a conversation with no session at all is still spoken into', () => {
   const delivered = []
   sayInConversation({ followup: (message) => delivered.push(message) }, 'hi')
   assert.equal(delivered.length, 1)
+})
+
+test('the admitted path asks the host to take the prompt, and needs no agent at all', async () => {
+  const seen = []
+  const ctx = {
+    sessionController: {
+      async prompt(request, signal) {
+        seen.push({ request, signal })
+        return { accepted: true }
+      },
+    },
+  }
+  const used = await promptConversation(ctx, 'session-9', '  hello  ', { requestId: 'r-1' })
+  assert.equal(used, 'prompt')
+  assert.equal(seen.length, 1)
+  assert.deepEqual(seen[0].request, {
+    requestId: 'r-1',
+    sessionId: 'session-9',
+    mode: 'queue',
+    content: [{ type: 'text', text: 'hello' }],
+  })
+  assert.ok(seen[0].signal, 'the host requires a signal, so one is always passed')
+})
+
+test('a host with no session controller says so instead of pretending', async () => {
+  assert.equal(await promptConversation({}, 'session-9', 'hi'), null)
+  assert.equal(await promptConversation({ sessionController: {} }, 'session-9', 'hi'), null)
+  await assert.rejects(() => promptConversation({}, 'session-9', '   '), /nothing to say/)
 })
