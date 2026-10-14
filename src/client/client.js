@@ -46,7 +46,7 @@ window.__ModuleLoader__.load({
 
     var STRINGS = {
       en: {
-        nav: 'Den',
+        nav: 'den',
         title: 'Den — resident assistant',
         refreshing: 'refreshing…',
         refresh: 'Refresh',
@@ -118,7 +118,7 @@ window.__ModuleLoader__.load({
           'Granting is per conversation, so it can only be done from the control above the message box.',
       },
       zh: {
-        nav: 'Den',
+        nav: 'den',
         title: 'Den —— 常驻助理',
         refreshing: '刷新中…',
         refresh: '刷新',
