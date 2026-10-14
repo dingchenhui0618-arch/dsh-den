@@ -151,23 +151,34 @@ export async function promptConversation(ctx, sessionId, text, { requestId = '',
 export function sayInConversation(agent, text, { id = '', now = Date.now() } = {}) {
   const body = String(text ?? '').trim()
   if (!body) throw new Error('dsh-den: there is nothing to say')
-  if (!agent || typeof agent.followup !== 'function') {
-    throw new Error('dsh-den: the standing conversation has no live agent to speak into')
-  }
+  if (!agent) throw new Error('dsh-den: the standing conversation has no live agent to speak into')
   const message = {
     id: id || `den-say-${now}-${randomUUID().slice(0, 8)}`,
     role: 'user',
     source: { kind: 'user' },
     content: [{ type: 'text', text: body }],
   }
-  // Both halves, and the order matters to nobody but the transcript does. `followup` queues an
-  // ordinary next-turn prompt and wakes the driver; it does NOT write a session event. The append
-  // is what makes the message part of the conversation at all — the log the window reads, the log
-  // that survives a restart, the log ④ promises accumulates. Without it the first real message left
-  // a live agent, a stored id and an empty transcript, which is exactly what 2026-10-14 produced.
-  appendToSession(agent.session, message)
-  agent.followup(message)
-  return message.id
+  // The transcript first. Whatever happens after this, what the human said is part of the
+  // conversation: this is the log the window reads, the log that survives a restart, the log ④
+  // promises accumulates. Without it a real message once left a live agent, a stored id and an empty
+  // transcript.
+  const written = appendToSession(agent.session, message)
+  // Then the wake-up, and here the declaration is blunt: `Agent` is `{ readonly id }`. There is no
+  // documented way for a plugin to hand a message to a live agent, so if this host happens to expose
+  // a followup it is used, and if it does not, that is said out loud rather than dressed up as
+  // delivery. `ctx.subagents.sendMessage` is not the answer either: it steers only to a direct parent
+  // or a direct continuable child and rejects any other target, and the standing conversation is
+  // neither. The admitted path above is the one the host documents for this — the call the human's own
+  // composer makes.
+  if (typeof agent.followup === 'function') {
+    agent.followup(message)
+    return message.id
+  }
+  throw new Error(
+    written
+      ? 'dsh-den: the message is in the transcript, but this host exposes no way to wake the standing conversation'
+      : 'dsh-den: this host exposes no way to wake the standing conversation',
+  )
 }
 
 /**

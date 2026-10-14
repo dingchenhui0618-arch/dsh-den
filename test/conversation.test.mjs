@@ -186,7 +186,8 @@ test('speaking into the conversation is a human turn, delivered through the agen
 
   assert.throws(() => sayInConversation(agent, '   '), /nothing to say/)
   assert.throws(() => sayInConversation(null, 'hello'), /no live agent/)
-  assert.throws(() => sayInConversation({ id: 'x' }, 'hello'), /no live agent/)
+  // The agent is live; it is the DELIVERY this host has no way to make, and that is what it says.
+  assert.throws(() => sayInConversation({ id: 'x' }, 'hello'), /no way to wake the standing conversation/)
 })
 
 test('a block that is not text contributes nothing, whatever shape it arrives in', () => {

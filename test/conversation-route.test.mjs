@@ -229,6 +229,33 @@ test('den keeps the conversation\'s id, not a copy of its transcript', async () 
   })
 })
 
+test('with no session controller the words are still recorded, and the missing delivery is named', async () => {
+  await tempConversation(async ({ path }) => {
+    writeFileSync(path, JSON.stringify({ sessionId: 'sess-live', createdAt: 1, agentPreset: 'cordis' }))
+    const appended = []
+    const session = { append: (type, data) => appended.push({ type, data }), snapshotEvents: () => [] }
+    const ctx = { agents: { get: () => ({ id: 'sess-live', session }) } }
+    const outcome = await invokeAction(serviceWith(ctx, path), 'conversation/say', { text: 'hello' }, {})
+    assert.equal(outcome.ok, false)
+    assert.match(outcome.error, /no way to wake the standing conversation/)
+    assert.equal(appended.length, 1, 'the human\'s words are in the transcript even so')
+    assert.equal(appended[0].data.content[0].text, 'hello')
+  })
+})
+
+test('a host that does expose a followup is used, and the route says which delivery it was', async () => {
+  await tempConversation(async ({ path }) => {
+    writeFileSync(path, JSON.stringify({ sessionId: 'sess-live', createdAt: 1, agentPreset: 'cordis' }))
+    const delivered = []
+    const session = { append: () => {}, snapshotEvents: () => [] }
+    const ctx = { agents: { get: () => ({ id: 'sess-live', session, followup: (message) => delivered.push(message) }) } }
+    const outcome = await invokeAction(serviceWith(ctx, path), 'conversation/say', { text: 'hello' }, {})
+    assert.equal(outcome.ok, true)
+    assert.equal(outcome.value.delivery, 'followup')
+    assert.equal(delivered.length, 1)
+  })
+})
+
 test('a host with a session controller is asked to admit the prompt, and it says so', async () => {
   await tempConversation(async ({ path }) => {
     const prompts = []
