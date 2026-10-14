@@ -527,12 +527,58 @@ window.__ModuleLoader__.load({
        * form is; the dock above the message box shows both.
        */
       function schedulesBlock(withForm) {
+        /**
+         * One-tap presets — see DESIGN §2.39.
+         *
+         * The form asks for a title, a prompt and a number of seconds, which is three things to type
+         * before anything happens. Whoever wants a custom check still gets the form; whoever just
+         * wants the den to check on something should not have to write a prompt to do it.
+         *
+         * They go through `schedules/create`, the same action the form submits, so a preset cannot
+         * slip past a rule the form obeys (the five-minute floor included). A preset that created
+         * whatever it liked would be a second, quieter set of rules.
+         */
+        var presets = [
+          { title: '每天看一眼 CI 失败', prompt: '检查最近一次 CI 是否失败：失败就报告失败的那一步和链接；全绿就保持沉默，不要报喜。', everySeconds: 86400 },
+          { title: '每周一清点待办', prompt: '看一眼这周还没收尾的事（没做完的任务、挂着没人管的问题），只列出来，不要动手。', everySeconds: 604800 },
+        ]
+        function createPreset(preset) {
+          run('schedule-preset', act('schedules/create', {
+            kind: 'interval',
+            title: preset.title,
+            prompt: preset.prompt,
+            everySeconds: preset.everySeconds,
+            sessionId: sessionId,
+          }, sessionId)).then(function () { load() })
+        }
         return React.createElement(
           'div',
           { style: { marginTop: 14, paddingTop: 10, borderTop: '1px solid var(--dsw-alias-border-l2)' } },
           React.createElement('div', { style: { fontSize: 13, color: 'var(--dsw-alias-label-primary)', marginBottom: 4 } }, t('schedules')),
           sched.list.length === 0
-            ? React.createElement('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)' } }, t('scheduleNone'))
+            ? React.createElement(
+                'div',
+                null,
+                React.createElement('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)' } }, t('scheduleNone')),
+                // Only where a conversation is known: a preset has to say where to report back.
+                sessionId
+                  ? React.createElement(
+                      'div',
+                      { style: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 } },
+                      presets.map(function (preset) {
+                        return React.createElement(
+                          Button,
+                          {
+                            key: preset.title,
+                            disabled: busy,
+                            onClick: function () { createPreset(preset) },
+                          },
+                          preset.title,
+                        )
+                      }),
+                    )
+                  : null,
+              )
             : React.createElement(
                 'div',
                 null,
