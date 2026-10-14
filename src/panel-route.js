@@ -146,6 +146,55 @@ async function runAction(service, action, payload, options) {  // `invokeAction`
 }
 
 /**
+ * Whether a request to this route came from somewhere other than the panel.
+ *
+ * A loopback port is reachable from every page the browser has open, and this route can make
+ * den speak, so "it is only on 127.0.0.1" is not the whole answer. Two cheap facts separate the
+ * panel from the rest of the web: a browser marks a cross-site request with `Sec-Fetch-Site`,
+ * and it cannot send `application/json` without a preflight first. A request that fails either
+ * test is refused here — before its body is read.
+ *
+ * This is a check on where a request came from, not a login. A caller that is not a browser at
+ * all (a curl probe, a test) sends neither header and is still allowed, and any local process
+ * can still read `~/.dsh/den` directly. What it stops is a page the human happens to visit
+ * driving den through the port the panel uses.
+ *
+ * @returns {string|null} the reason to refuse, or null to carry on
+ */
+export function foreignRequest(req) {
+  const headers = req?.headers && typeof req.headers === 'object' ? req.headers : {}
+  const text = (name) => (typeof headers[name] === 'string' ? headers[name].trim() : '')
+
+  const site = text('sec-fetch-site').toLowerCase()
+  if (site === 'cross-site' || site === 'same-site') {
+    return `the request came from a ${site} page, not from the panel`
+  }
+
+  const origin = text('origin')
+  if (origin) {
+    let originHost
+    try {
+      originHost = new URL(origin).host
+    } catch {
+      return 'the request carried an Origin that cannot be read'
+    }
+    const host = text('host')
+    if (!host || originHost !== host) return 'the request came from another origin'
+  }
+
+  const method = String(req?.method || '').toUpperCase()
+  const type = text('content-type').toLowerCase()
+  // Only when a content type was declared: a browser always declares one on a POST, so this still
+  // blocks the `text/plain` simple request a foreign page would send, while a caller that is not a
+  // browser at all — the end-to-end route test, a curl probe — keeps working without the header.
+  if (method === 'POST' && type && !type.includes('application/json')) {
+    return 'a POST has to be JSON: a page cannot send that cross-site without a preflight'
+  }
+
+  return null
+}
+
+/**
  * Mount the panel route.
  *
  * @returns {{mounted: boolean, reason: string|null, message: string|null,
@@ -199,6 +248,11 @@ export function mountPanelRoute(ctx, { service, nextTriggerAt, route = ROUTE } =
             /* observability must never fail the request it is observing */
           }
 
+          // Before the body is read: a page that is not this panel has no business here.
+          const foreign = foreignRequest(req)
+          if (foreign) {
+            return writeJson(res, 403, { ok: false, error: { code: 'FOREIGN_REQUEST', message: foreign } })
+          }
           const segments = segmentsOf(req?.url, route)
           const method = String(req?.method || '').toUpperCase()
 
