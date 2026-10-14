@@ -874,6 +874,60 @@ await panelTalk.click('发送')
 const saidCall = calls.find((entry) => entry.body?.action === 'conversation/say')
 check(saidCall?.body?.text === 'look at the CI failures', 'sending posts exactly what was typed')
 check(panelTalk.text().includes('are you awake?'), 'and the conversation is still on screen afterwards')
+// The host admits a prompt before the log carries it, so the read that follows a send can honestly
+// come back without the sentence. What must never happen is the human watching it disappear.
+check(leafText(panelTalk.tree).includes('look at the CI failures'), 'what was just sent is shown at once, before the host has logged it')
+check(panelTalk.inputs()[0] && panelTalk.inputs()[0].props.value === '', 'and the box is cleared, so it cannot look unsent')
+
+/* --- a line the log already carries is not drawn twice --- */
+
+/*
+ * The text of one render tree, as the leaves that were actually drawn.
+ *
+ * `textOf` on every node double-counts, because a parent already contains its children, and the
+ * harness keeps the text of every frame it has seen — so a check that counts occurrences across
+ * `text()` is really counting frames. Counting leaf nodes in the tree judges the render in hand.
+ */
+function leafText(node, out = []) {
+  if (!node) return out
+  // `mount().tree` is an array of nodes, not one node: without this branch the walk finds nothing
+  // and a check that counts what was drawn reports zero instead of a count.
+  if (Array.isArray(node)) {
+    for (const child of node) leafText(child, out)
+    return out
+  }
+  if (node.kind === 'text') {
+    out.push(node.text)
+    return out
+  }
+  for (const child of node.children || []) leafText(child, out)
+  return out
+}
+
+const panelEcho = mount(
+  bootWindow({
+    scripted: {
+      'conversation/read': {
+        ok: true,
+        value: {
+          state: 'live',
+          sessionId: 'sess-echo',
+          total: 1,
+          truncated: false,
+          messages: [{ role: 'user', text: 'already logged', seq: 1, time: 1 }],
+        },
+      },
+      'conversation/say': { ok: true, value: { delivery: 'prompt', sessionId: 'sess-echo', state: 'live' } },
+    },
+  }).component,
+  {},
+)
+await panelEcho.settle()
+await panelEcho.type(0, 'already logged')
+await panelEcho.click('发送')
+await panelEcho.settle()
+const echoCount = leafText(panelEcho.tree).filter((text) => text === 'already logged').length
+check(echoCount === 1, 'a line the log already carries is not shown twice when it is sent again (drawn ' + String(echoCount) + ' times)')
 
 /* --- the shut pill is the monitor: budget, what is owed, and whether it can speak --- */
 

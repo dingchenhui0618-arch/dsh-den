@@ -90,6 +90,7 @@ window.__ModuleLoader__.load({
         saySend: 'Send',
         sayEmpty: 'no conversation yet — say something to start one',
         saySending: 'sending…',
+        saySending: 'sending…',
         sayTail: 'only the latest messages are shown; the rest are still in the transcript',
         sayHostOld: 'the host has not loaded this half yet — restart DSH and this becomes the conversation',
         grantDockGranted: 'granted for this conversation',
@@ -177,6 +178,7 @@ window.__ModuleLoader__.load({
         sayPlaceholder: '直接跟 den 说一句…',
         saySend: '发送',
         sayEmpty: '还没有对话 —— 说一句就开始',
+        saySending: '发送中…',
         saySending: '发送中…',
         sayTail: '只显示最近的消息，更早的都还在转录里',
         sayHostOld: '宿主还没加载会话这一半 —— 重启 DSH 后这里就是对话',
@@ -1318,12 +1320,31 @@ window.__ModuleLoader__.load({
       var sending = React.useState(false)
       var busy = sending[0]
       var setBusy = sending[1]
+      /**
+       * What was sent but is not in the transcript yet.
+       *
+       * The host admits a prompt and logs the message later, so a read taken immediately after
+       * sending can honestly come back without it. Without this, the window would show the human
+       * their own sentence vanish and reappear a poll interval later, which reads as a lost message.
+       */
+      var waiting = React.useState([])
+      var waitingText = waiting[0]
+      var setWaiting = waiting[1]
 
       function load() {
         return act('conversation/read', { limit: 60 })
           .then(function (res) {
             var value = res && res.value !== undefined ? res.value : res
             if (value && typeof value === 'object') setView({ phase: 'ready', data: value, error: null })
+            // The log is the authority: once it carries the sentence, the optimistic copy goes.
+            if (value && Array.isArray(value.messages)) {
+              var logged = value.messages
+                .filter(function (m) { return m && m.role === 'user' })
+                .map(function (m) { return String(m.text || '').trim() })
+              setWaiting(function (prev) {
+                return prev.filter(function (text) { return logged.indexOf(text) < 0 })
+              })
+            }
           })
           .catch(function (error) {
             var message = String((error && error.message) || error)
@@ -1355,6 +1376,10 @@ window.__ModuleLoader__.load({
         act('conversation/say', { text: body })
           .then(function () {
             setTyped('')
+            // Shown at once, because the read below may legitimately predate the log entry.
+            setWaiting(function (prev) {
+              return prev.indexOf(body) >= 0 ? prev : prev.concat([body])
+            })
             return load()
           })
           .catch(function (error) {
@@ -1365,6 +1390,12 @@ window.__ModuleLoader__.load({
 
       var data = (view.data && typeof view.data === 'object' ? view.data : {}) || {}
       var messages = Array.isArray(data.messages) ? data.messages : []
+      var loggedTexts = messages
+        .filter(function (message) { return message && message.role === 'user' })
+        .map(function (message) { return String(message.text || '').trim() })
+      // Belt and braces with the state above: a text the transcript already carries is never drawn
+      // from here as well, whatever the timing of the read happens to be.
+      var waitingTexts = waitingText.filter(function (text) { return loggedTexts.indexOf(text) < 0 })
       var rows = messages.map(function (message, index) {
         var mine = message.role === 'user'
         return React.createElement(
@@ -1391,6 +1422,16 @@ window.__ModuleLoader__.load({
         )
       })
 
+      var waitingRows = waitingTexts.map(function (text, index) {
+        return React.createElement(
+          'div',
+          { key: 'waiting-' + index, style: { margin: '6px 0', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', opacity: 0.72 } },
+          React.createElement('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)' } }, t('sayYou') + ' · ' + t('saySending')),
+          React.createElement('div', { style: { fontSize: 13, lineHeight: 1.45, color: 'var(--dsw-alias-label-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxWidth: '92%' } }, text),
+        )
+      })
+      var allRows = rows.concat(waitingRows)
+
       return React.createElement(
         'div',
         { style: { padding: '2px 10px 8px' } },
@@ -1405,8 +1446,8 @@ window.__ModuleLoader__.load({
         React.createElement(
           'div',
           { style: { maxHeight: 260, overflowY: 'auto' } },
-          rows.length
-            ? rows
+          allRows.length
+            ? allRows
             : React.createElement('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', margin: '6px 0' } }, t('sayEmpty')),
         ),
         view.phase === 'error' && view.error
