@@ -27,8 +27,21 @@ import { denPath, digest, readJson, writeJsonAtomic } from './atom.js'
 import { hasAutonomyForSession } from './grant.js'
 import { queueNotice } from './notices.js'
 import { dueTriggers, markAttemptFailed, markFired } from './triggers.js'
+import { pickTaskWork } from './tasks.js'
+import { loadTasks, advanceTask, blockTaskOn } from './tasks-store.js'
 
 /** Instruction handed to the den for a self-initiated turn. */
+/**
+ * What the den is told when the heartbeat takes a task step by itself.
+ *
+ * Deliberately not a claim of authorship: `deliver`'s own note says tool calls must never be
+ * handed to a person as if the den had said them out loud. This is the den being woken to work.
+ */
+export const TASK_STEP_INSTRUCTION = [
+  'The heartbeat has taken one step of a task you are responsible for.',
+  'Do that step now, then say in one or two plain sentences what happened.',
+  'If the step cannot be done, say why — a step that cannot move on is never hidden.',
+].join(' ')
 export const WAKE_INSTRUCTION = [
   'This turn was started by your own heartbeat, not by the human.',
   '',
@@ -209,6 +222,7 @@ export class DenKernel {
   constructor({
     service,
     deliver,
+    taskPath = '',
     onEvent,
     tickSeconds = 60,
     resolveAgent = null,
@@ -217,6 +231,7 @@ export class DenKernel {
   }) {
     this.service = service
     this.deliver = deliver
+    this.taskPath = taskPath
     this.onEvent = onEvent ?? (() => {})
     this.resolveAgent = resolveAgent
     this.resolveSession = resolveSession
@@ -322,6 +337,70 @@ export class DenKernel {
     }
   }
 
+  /**
+   * Take one due task step: same gates, same driver resolution, same delivery, different ledger.
+   *
+   * `advanceTask` replaces `markFired` because the step's completion *is* the record — there is no
+   * cadence to commit. When delivery throws, nothing is advanced, so the step stays due and is
+   * retried on a later heartbeat instead of being eaten.
+   */
+  async #runTaskStep({ pick, agent, now }) {
+    const { task, step } = pick
+    const session = agent?.session ?? this.lookupSession(task.sessionId)
+    let resolved = agent ?? null
+    let release = null
+
+    const verdict = evaluateGates({ state: this.service.state(), session, agent: resolved, now })
+    if (!verdict.allowed) {
+      // Same instrument as the trigger path: a permanent condition must not be re-asked forever.
+      this.onEvent({
+        type: 'task-refused',
+        taskId: task.id,
+        stepId: step.id,
+        gate: verdict.gate,
+        reason: verdict.reason,
+      })
+      return { triggerId: step.id, outcome: 'refused', reason: verdict.reason }
+    }
+
+    if (!resolved && this.resolveAgent) {
+      try {
+        const found = await this.resolveAgent(task.sessionId)
+        if (found) {
+          resolved = found.agent ?? found
+          release = found.dispose ?? null
+        }
+      } catch (error) {
+        this.onEvent({
+          type: 'task-unresolved',
+          taskId: task.id,
+          stepId: step.id,
+          message: String(error?.message ?? error),
+        })
+      }
+    }
+
+    const wake = { id: step.id, sessionId: task.sessionId, title: step.title, kind: 'task-step', goal: task.goal }
+    try {
+      await this.deliver({ trigger: wake, instruction: TASK_STEP_INSTRUCTION, agent: resolved })
+    } catch (error) {
+      this.lastError = String(error?.message ?? error)
+      this.onEvent({
+        type: 'task-failed',
+        taskId: task.id,
+        stepId: step.id,
+        message: this.lastError,
+        willRetry: true,
+      })
+      return { triggerId: step.id, outcome: 'failed', reason: this.lastError, willRetry: true }
+    } finally {
+      if (typeof release === 'function') release()
+    }
+
+    advanceTask(this.taskPath, { taskId: task.id, stepId: step.id, note: 'taken by the heartbeat', now })
+    this.onEvent({ type: 'task-step-taken', taskId: task.id, stepId: step.id })
+    return { triggerId: step.id, outcome: 'spoke' }
+  }
   async #runDue({ agent, now }) {
     const due = dueTriggers(now)
     // The empty case returns the same shape as the busy one, `results` included.
@@ -331,7 +410,38 @@ export class DenKernel {
     // `tick().results.length` — which is the obvious way to ask "what did this tick
     // decide?" — got a `TypeError` on exactly the ticks where nothing happened, and that
     // is the common case for a resident assistant. Found by writing that assertion.
-    if (due.length === 0) return { due: 0, woke: 0, spoke: 0, results: [] }
+    /**
+     * DESIGN §7.3: the same heartbeat picks out a due task step. This is a parallel channel, not a
+     * second system — the four gates and the delivery below are shared, and the only thing this
+     * path does differently is its bookkeeping. A task step does not live in the trigger store at
+     * all, which is exactly why it cannot become another `due` entry: `markFired` would be asked to
+     * write a record it does not know.
+     *
+     * It has to sit BEFORE the quiet-heartbeat return. `dueTriggers` is empty almost all the time
+     * for a resident assistant, so a channel placed after that return would compile, pass every
+     * test, and never once run — the shape of failure this file's history is made of.
+     *
+     * `blocked` is written back to disk with its reason rather than skipped: a step nobody can
+     * start is the one thing a person must not have to go looking for.
+     */
+    const taskPick = this.taskPath
+      ? pickTaskWork(loadTasks(this.taskPath).tasks, now)
+      : { kind: 'idle' }
+    if (taskPick.kind === 'blocked') {
+      blockTaskOn(this.taskPath, { taskId: taskPick.task.id, reason: taskPick.reason, now })
+      this.onEvent({ type: 'task-blocked', taskId: taskPick.task.id, reason: taskPick.reason })
+    }
+    const taskResult =
+      taskPick.kind === 'step' ? await this.#runTaskStep({ pick: taskPick, agent, now }) : null
+    const taskResults = taskResult ? [taskResult] : []
+    if (due.length === 0) {
+      return {
+        due: taskResults.length,
+        woke: taskResult && taskResult.outcome !== 'refused' ? 1 : 0,
+        spoke: taskResult && taskResult.outcome === 'spoke' ? 1 : 0,
+        results: taskResults,
+      }
+    }
 
     const state = this.service.state()
     const results = []

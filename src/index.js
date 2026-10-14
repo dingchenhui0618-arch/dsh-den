@@ -1224,6 +1224,7 @@ export function apply(ctx) {
       service.kernel = new DenKernel({
         service,
         deliver: createDeliver(ctx, service),
+        taskPath: denPath(TASKS_FILE),
         // Without these the heartbeat's own wakes are refused at the authority gate:
         // `start()` arms `setInterval(() => this.tick())`, so no agent is ever passed,
         // and authority is attested against a session rather than stored.
