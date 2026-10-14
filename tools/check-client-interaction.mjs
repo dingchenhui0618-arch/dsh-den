@@ -1157,6 +1157,12 @@ if (process.argv.includes('--demo')) {
         tree: panelTalk.tree,
       },
       {
+        label: '② 一回合没成话：窗口把宿主的原因原话报出来',
+        hint: '空窗口不再沉默 —— 上一回合的失败原文显示在输入框上方（这里演示 {{model}} 无值那次）',
+        tall: true,
+        tree: panelDead.tree,
+      },
+      {
         label: '① 收成胶囊：缩小不等于失明，胶囊上仍然报信息',
         hint: '常驻中 / 心跳 / 预算 / 待重启都在这一行白话里，点开回到卡片',
         tall: true,
