@@ -129,7 +129,10 @@ test('every live probe script is chained behind the guard', async () => {
   // probe takes. Chaining in `package.json` is what makes it inherited by every way of running a
   // probe, so this test pins the chaining rather than trusting the last person to add one.
   const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
-  const LIVE = /tools\/(check-live-[\w-]+|check-tools-live|check-wake-api)\.mjs/
+  // `drill-live-wake` is in here for the same reason as the probes: it asks a *running* host what
+  // its ledger says and draws the project's last conclusion from the answer, so a stale instance
+  // would let it certify a wake on code that is not on disk.
+  const LIVE = /tools\/(check-live-[\w-]+|check-tools-live|check-wake-api|drill-live-wake)\.mjs/
   const guarded = []
   const unguarded = []
   for (const [name, command] of Object.entries(pkg.scripts)) {
