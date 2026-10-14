@@ -675,31 +675,6 @@ export function createDeliver(ctx, service) {
     const text = `${instruction}\n\n## Scheduled check\n${trigger.title}\n${trigger.prompt}`
 
     /**
-     * Admit the wake through the host's own entry point.
-     *
-     * `sessionController.prompt` is "Admit one prompt after explicitly resuming its Session" — the
-     * same call the GUI composer makes — and it writes the `user/message` into the session log *and*
-     * starts the turn, which is exactly what the reply read-back below then waits for. The
-     * agent-handle path further down stays as the fallback, for a host that exposes no session
-     * controller: `Agent` declares only `readonly id: SessionId`, so `followup` is not part of the
-     * contract at all, and building delivery on it is what left the first standing message with a
-     * session header on disk and no turn to read a reply from.
-     */
-    let admitted = null
-    if (wakeSessionId) {
-      try {
-        admitted = await promptConversation(ctx, wakeSessionId, text)
-      } catch (error) {
-        service.noteEvent({
-          type: 'wake-admit-failed',
-          triggerId: trigger.id,
-          sessionId: wakeSessionId,
-          error: String(error?.message || error),
-        })
-      }
-    }
-
-    /**
      * Read the wake turn's own reply, which is what the "is this worth saying?"
      * decision is made on.
      *
@@ -748,6 +723,34 @@ export function createDeliver(ctx, service) {
      * The id is derived from the trigger and the moment so that a redelivery after a crash
      * is a distinct message rather than a duplicate the inbox projection would reject.
      */
+    /**
+     * Admit the wake through the host's own entry point — and only now, after the baseline sequence
+     * above was captured. The baseline is what makes this wake's reply distinguishable from
+     * everything already in the conversation, so admitting before capturing it folds the wake's own
+     * `user/message` into the baseline and makes the reply that follows unreadable. The first version
+     * of this patch did exactly that, and the test caught it: the reply came back empty.
+     *
+     * `sessionController.prompt` is "Admit one prompt after explicitly resuming its Session" — the same
+     * call the GUI composer makes — and it writes the `user/message` into the session log *and* starts
+     * the turn, which is exactly what the read-back below then waits for. The agent-handle path after
+     * it stays as the fallback, for a host that exposes no session controller: `Agent` declares only
+     * `readonly id: SessionId`, so `followup` is not part of the contract at all, and building
+     * delivery on it is what left the first standing message with a session header on disk and no
+     * turn to read a reply from.
+     */
+    let admitted = null
+    if (wakeSessionId) {
+      try {
+        admitted = await promptConversation(ctx, wakeSessionId, text)
+      } catch (error) {
+        service.noteEvent({
+          type: 'wake-admit-failed',
+          triggerId: trigger.id,
+          sessionId: wakeSessionId,
+          error: String(error?.message || error),
+        })
+      }
+    }
     if (!admitted) {
       // Throwing, not returning empty.
       //
