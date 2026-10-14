@@ -1393,7 +1393,7 @@ window.__ModuleLoader__.load({
               var alive = true
               function pull() {
                 act('status', {}).then(function (res) {
-                  if (alive && res && res.ok) setStatus(res.value)
+                  if (alive && res) setStatus(res.value ?? res)
                 }).catch(function () {})
               }
               pull()

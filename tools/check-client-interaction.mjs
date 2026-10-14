@@ -151,6 +151,21 @@ function fakeFetch(url, init) {
  */
 const fakeNavigator = { clipboard: undefined }
 
+/**
+ * A storage the floating window can shut itself into.
+ *
+ * Without it the harness only ever sees the open panel, and the shut pill - the one part that has
+ * to keep reporting while it is small - would be the only surface no check ever drove.
+ */
+const fakeStorage = (() => {
+  const items = new Map()
+  return {
+    getItem: (key) => (items.has(key) ? items.get(key) : null),
+    setItem: (key, value) => { items.set(key, String(value)) },
+    removeItem: (key) => { items.delete(key) },
+  }
+})()
+
 {
   const sandbox = {
     navigator: fakeNavigator,
@@ -159,6 +174,7 @@ const fakeNavigator = { clipboard: undefined }
       // The panel looks for this hook, so an offline harness can observe the
       // action state that no DOM would otherwise expose.
       __dshDenDebug: (event) => sinkLog.push(event),
+      localStorage: fakeStorage,
     },
     // The bundle reaches the host with the browser's own `fetch`, exactly like the
     // other client plugins. It is a global, not a `window` property, so it belongs
@@ -588,6 +604,40 @@ function registersSlot(name) {
 check(registersSlot('sidebar.panellist'), 'the resident owns a row in the sidebar panel list')
 check(registersSlot('sidebar.toggle.badge'), 'and a dot in the seat the shell reserves for one')
 check(registersSlot('shell.overlay'), 'and a floating window in the shell overlay, outside every conversation frame')
+/* --- shut, the floating window still has to report ---------------------------- */
+
+fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: true }))
+const shutWindow = boot(
+  { scripted: { status: healthyStatus(), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } } },
+  'shell.overlay',
+)
+const shutPanel = mount(shutWindow, {})
+await shutPanel.settle()
+// The pill fetches its numbers in an effect, so one settle is not enough: the poll needs a turn.
+await shutPanel.settle()
+const shutText = shutPanel.text()
+check(
+  shutText.includes('\u5e38\u9a7b\u4e2d'),
+  'the shut floating window still says whether the resident is running',
+)
+check(
+  shutText.includes('\u6709\u8bdd\u60f3\u8ddf\u4f60\u8bf4'),
+  'and still reports how many things it has for the person',
+)
+check(
+  shutText.split('\u00b7').length >= 3,
+  'and keeps more than one fact on the line, instead of shrinking to a dot',
+)
+fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false }))
+
+/* --- open again, because the pill is a control, not a dead end ---------------- */
+
+const openedPanel = mount(shutWindow, {})
+await openedPanel.settle()
+check(
+  !openedPanel.text().includes('\u6709\u8bdd\u60f3\u8ddf\u4f60\u8bf4 \u2014'),
+  'and opening it again shows the panel rather than the pill',
+)
 
 // --- the static preview page --------------------------------------------------------------------
 //
