@@ -879,6 +879,39 @@ check(panelTalk.text().includes('are you awake?'), 'and the conversation is stil
 check(leafText(panelTalk.tree).includes('look at the CI failures'), 'what was just sent is shown at once, before the host has logged it')
 check(panelTalk.inputs()[0] && panelTalk.inputs()[0].props.value === '', 'and the box is cleared, so it cannot look unsent')
 
+/* --- a dead turn explains itself, in the host's own words --------------- */
+
+// Three turns of this conversation ended in 'prompt variable "{{model}}" has no value', and every one
+// of them wrote no message, so the window was empty and silent. The host's reason travels with the read
+// result now: a person looking at an empty window can see which half is broken.
+const panelDead = mount(
+  bootWindow({
+    scripted: {
+      status: healthyStatus(),
+      'conversation/read': {
+        ok: true,
+        value: {
+          sessionId: 'sess-standing',
+          state: 'live',
+          total: 0,
+          truncated: false,
+          messages: [],
+          lastError: 'prompt variable "{{model}}" has no value for this assembly',
+        },
+      },
+    },
+  }).component,
+  {},
+)
+await panelDead.settle()
+check(panelDead.text().includes('上一回合没能完成'), 'an empty conversation says why it is empty')
+check(
+  panelDead.text().includes('has no value'),
+  'and quotes the host rather than smoothing it into "something went wrong"',
+)
+// The same line must not appear when the last turn was fine.
+check(!panelTalk.text().includes('上一回合没能完成'), 'a conversation that answered carries no failure line')
+
 /* --- a line the log already carries is not drawn twice --- */
 
 /*

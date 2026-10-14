@@ -40,6 +40,44 @@ function serviceWith(ctx, path, counters = {}) {
   }
 }
 
+test('a turn that ended in an error is reported to the window in the host\'s own words', async () => {
+  await tempConversation(async ({ path }) => {
+    writeFileSync(path, JSON.stringify({ sessionId: 'sess-live', createdAt: 1, agentPreset: 'cordis' }))
+    const session = {
+      snapshotEvents: () => [
+        { type: 'user/message', seq: 1, data: { role: 'user', content: [{ type: 'text', text: 'are you there' }] } },
+        {
+          type: 'turn/end',
+          seq: 2,
+          data: { turn: 1, reason: { kind: 'error', error: { message: 'prompt variable "{{model}}" has no value' } } },
+        },
+      ],
+    }
+    const ctx = { sessions: { get: () => session } }
+    const outcome = await invokeAction(serviceWith(ctx, path), 'conversation/read', {}, {})
+    assert.equal(outcome.ok, true)
+    assert.match(outcome.value.lastError, /no value/, 'the reason reaches the window')
+    assert.equal(outcome.value.total, 1, 'and the sentence that was said is still there')
+  })
+})
+
+test('a later turn that completed clears the failure, because it is the LAST turn that is reported', async () => {
+  await tempConversation(async ({ path }) => {
+    writeFileSync(path, JSON.stringify({ sessionId: 'sess-live', createdAt: 1, agentPreset: 'cordis' }))
+    const session = {
+      snapshotEvents: () => [
+        { type: 'turn/end', seq: 1, data: { turn: 1, reason: { kind: 'error', error: { message: 'boom' } } } },
+        { type: 'assistant/message', seq: 2, data: { turn: 2, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: 'here' }] } } },
+        { type: 'turn/end', seq: 3, data: { turn: 2, reason: { kind: 'completed' } } },
+      ],
+    }
+    const ctx = { sessions: { get: () => session } }
+    const outcome = await invokeAction(serviceWith(ctx, path), 'conversation/read', {}, {})
+    assert.equal(outcome.value.lastError, '')
+    assert.equal(outcome.value.messages.length, 1)
+  })
+})
+
 test('reading the window does not create a conversation or touch the host', async () => {
   await tempConversation(async ({ path }) => {
     const counters = {}

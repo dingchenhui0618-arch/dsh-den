@@ -89,6 +89,7 @@ window.__ModuleLoader__.load({
         sayPlaceholder: 'say something to den…',
         saySend: 'Send',
         sayEmpty: 'no conversation yet — say something to start one',
+        sayFailed: 'the last turn did not finish: ',
         saySending: 'sending…',
         saySending: 'sending…',
         sayTail: 'only the latest messages are shown; the rest are still in the transcript',
@@ -178,6 +179,7 @@ window.__ModuleLoader__.load({
         sayPlaceholder: '直接跟 den 说一句…',
         saySend: '发送',
         sayEmpty: '还没有对话 —— 说一句就开始',
+        sayFailed: '上一回合没能完成:',
         saySending: '发送中…',
         saySending: '发送中…',
         sayTail: '只显示最近的消息，更早的都还在转录里',
@@ -1450,6 +1452,15 @@ window.__ModuleLoader__.load({
             ? allRows
             : React.createElement('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', margin: '6px 0' } }, t('sayEmpty')),
         ),
+        // Said in the host's own words rather than smoothed into "something went wrong": the person can
+        // read the reason, and it is the same reason the diagnostic tool prints.
+        data.lastError
+          ? React.createElement(
+              'div',
+              { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)', margin: '2px 0', wordBreak: 'break-word' } },
+              t('sayFailed') + data.lastError,
+            )
+          : null,
         view.phase === 'error' && view.error
           ? React.createElement('div', { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)', margin: '2px 0' } }, view.error)
           : null,

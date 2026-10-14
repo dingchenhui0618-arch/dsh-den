@@ -65,7 +65,15 @@ export function textOfMessage(message) {
 export function readConversation(session, { limit = DEFAULT_READ_LIMIT } = {}) {
   const events = sessionEvents(session)
   const all = []
+  let lastError = ''
   for (const event of events) {
+    // A turn that ends in an error writes no message, so an empty window is otherwise
+    // indistinguishable from a conversation that never ran. This is the host's own words, kept short.
+    if (event?.type === 'turn/end') {
+      const reason = event.data?.reason
+      lastError =
+        reason?.kind === 'error' && typeof reason.error?.message === 'string' ? reason.error.message.slice(0, 200) : ''
+    }
     const role =
       event?.type === 'user/message' ? 'user' : event?.type === 'assistant/message' ? 'assistant' : ''
     if (!role) continue
@@ -76,7 +84,7 @@ export function readConversation(session, { limit = DEFAULT_READ_LIMIT } = {}) {
   }
   const wanted = Math.max(1, Number(limit) || DEFAULT_READ_LIMIT)
   const messages = all.slice(-wanted)
-  return { messages, total: all.length, truncated: messages.length < all.length }
+  return { messages, total: all.length, truncated: messages.length < all.length, lastError }
 }
 
 /**
@@ -90,10 +98,10 @@ export function readConversation(session, { limit = DEFAULT_READ_LIMIT } = {}) {
  */
 export function readStandingConversation(ctx, { limit = DEFAULT_READ_LIMIT, path = conversationPath() } = {}) {
   const record = readConversationRecord(path)
-  if (!record) return { sessionId: null, state: 'absent', messages: [], total: 0, truncated: false }
+  if (!record) return { sessionId: null, state: 'absent', messages: [], total: 0, truncated: false, lastError: '' }
   const live = typeof ctx?.agents?.get === 'function' ? ctx.agents.get(record.sessionId) : undefined
   const session = live?.session ?? (typeof ctx?.sessions?.get === 'function' ? ctx.sessions.get(record.sessionId) : null)
-  if (!session) return { sessionId: record.sessionId, state: 'unreadable', messages: [], total: 0, truncated: false }
+  if (!session) return { sessionId: record.sessionId, state: 'unreadable', messages: [], total: 0, truncated: false, lastError: '' }
   const read = readConversation(session, { limit })
   return Object.assign({ sessionId: record.sessionId, state: live ? 'live' : 'stored' }, read)
 }
@@ -176,15 +184,6 @@ export function appendToSession(session, message) {
 }
 
 /**
- * The preset a standing conversation should be created with: the host's own default.
- *
- * Not a hardcoded name. A session created without a preset has no model to assemble a prompt with —
- * the host ends each turn with 'prompt variable "{{model}}" has no value for this assembly' — so the
- * preset is what makes the conversation capable of answering at all. `agentPresets.list()` is read
- * here, the default is preferred, activation failures are skipped, and an empty string is returned
- * when this host offers no preset service, so the caller can tell no-preset from preset-named-empty.
- */
-/**
  * The model a standing conversation should run on: whatever the host is currently using.
  *
  * `agentPreset` alone is not enough, and this was learned by reading the host's own creation path,
@@ -209,6 +208,15 @@ export function resolveAgentOptions(ctx) {
   return { provider: selection.provider, model: selection.model }
 }
 
+/**
+ * The preset a standing conversation should be created with: the host's own default.
+ *
+ * Not a hardcoded name. A session created without a preset has no model to assemble a prompt with —
+ * the host ends each turn with 'prompt variable "{{model}}" has no value for this assembly' — so the
+ * preset is what makes the conversation capable of answering at all. `agentPresets.list()` is read
+ * here, the default is preferred, activation failures are skipped, and an empty string is returned
+ * when this host offers no preset service, so the caller can tell no-preset from preset-named-empty.
+ */
 export async function resolveAgentPreset(ctx) {
   const service = ctx && ctx.agentPresets
   if (!service || typeof service.list !== 'function') return ''
