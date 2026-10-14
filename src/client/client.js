@@ -100,6 +100,7 @@ window.__ModuleLoader__.load({
         owedShort: 'to read',
         tasksShort: 'in progress',
         tasksStuck: 'stuck',
+        tasksWaiting: 'waiting on you',
         details: 'details',
         scheduleNone: 'none — say "check CI every 30 minutes" in the conversation and the den will add it',
         scheduleNew: 'New',
@@ -164,6 +165,7 @@ window.__ModuleLoader__.load({
         owedShort: '待读',
         tasksShort: '进行中',
         tasksStuck: '卡住',
+        tasksWaiting: '等你',
         details: '详情',
         grantDockGranted: '本会话已授予',
         grantDockNotGranted: '本会话未授予',
@@ -898,7 +900,8 @@ window.__ModuleLoader__.load({
             // must not have to go looking for.
             d && d.tasks && Number(d.tasks.total) > 0 && Number.isFinite(d.tasks.active)
               ? ' · ' + t('tasksShort') + ' ' + String(d.tasks.active) +
-                (Number(d.tasks.blocked) > 0 ? ' · ' + t('tasksStuck') + ' ' + String(d.tasks.blocked) : '')
+                (Number(d.tasks.blocked) > 0 ? ' · ' + t('tasksStuck') + ' ' + String(d.tasks.blocked) : '') +
+                (Number(d.tasks.waiting) > 0 ? ' · ' + t('tasksWaiting') + ' ' + String(d.tasks.waiting) : '')
               : '',
             ' · ' + autonomyText,
             '  ',
