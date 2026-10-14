@@ -589,9 +589,11 @@ function highestTurn(events) {
  * Wait for the reply the wake turn produces, and return it.
  *
  * Polling is not the shape anyone wants here. It is used because the honest
- * alternative does not exist in this devkit: `Agent.followup` is synchronous and returns
- * `void` — it splices into the inbox and wakes the driver — and there is no completion
- * handle for a turn queued on an *existing* session. `startContinuable` does return a
+ * alternative does not exist in this devkit: a plugin has no documented way to hand a message to a
+ * live agent at all (`Agent` declares only `readonly id`), and even where a host does expose a
+ * `followup`, it is synchronous and returns `void` — it splices into the inbox and wakes the driver —
+ * so there is no completion handle for a turn queued on an *existing* session. `startContinuable`
+ * does return a
  * result promise, but that establishes a new child rather than waking the human's own
  * conversation.
  *
@@ -699,29 +701,27 @@ export function createDeliver(ctx, service) {
     const baselineTurn = highestTurn(before)
 
     /**
-     * Deliver into the conversation through the agent's own inbox.
+     * Deliver into the conversation.
      *
-     * This used to be `subagents.sendMessage(agent, trigger.sessionId, …)`, and that could
-     * never work. The host admits a send only when the sender is the target's **direct
-     * parent or direct continuable child** — `authorizeLineage` ends in
-     * `if (parentSession !== parent.id) throw UNAUTHORIZED`, which insists the addressed
-     * session is a child of the sender. Here the sender *is* the target conversation's
-     * driver, so the call asked a session to be its own parent and every admitted wake died
-     * with "delivery requires the exact live parent agent". Five tests covered this path and
-     * were green purely because the fake accepted any delivery at all.
+     * This used to be `subagents.sendMessage(agent, trigger.sessionId, …)`, and that could never
+     * work: the host admits a send only when the sender is the target's **direct parent or direct
+     * continuable child**. Its declaration says exactly that ("Steer one model-authored message to the
+     * sender's direct parent or direct continuable child") and lists "adjacency is rejected" among
+     * the ways it throws. Here the sender *is* the target conversation's driver, so the call asked a
+     * session to be its own parent and every admitted wake died with "delivery requires the exact live
+     * parent agent". Five tests covered this path and were green purely because the fake accepted any
+     * delivery at all.
      *
-     * `Agent.followup(message)` is the mechanism the host documents for exactly this:
+     * There is no documented plugin-facing way to hand a message to a live agent: `Agent` declares
+     * only `readonly id: SessionId`. The admission above — `sessionController.prompt`, the host's
+     * "Admit one prompt after explicitly resuming its Session", the call the human's own composer
+     * makes — is therefore the path, and `followup` below is used ONLY when a host happens to expose
+     * it. An earlier version of this comment quoted `followup()` as documented host behaviour. No such
+     * sentence exists in anything this plugin ships against, and inventing a contract is precisely how
+     * the delivery came to rest on a method that is not there.
      *
-     *   "`followup()` queues an ordinary next-turn prompt and wakes the driver"
-     *
-     * It is `send(message, 'next-turn', true)`: splice the message into the inbox, then open
-     * a turn boundary if the agent is idle, or latch the wake if a turn is already running.
-     * No lineage is involved, the message is visibly a queued turn in the human's chat, and
-     * it durably becomes a `user/message` in the transcript — which is what the reply
-     * read-back below then pairs with the assistant's answer.
-     *
-     * The id is derived from the trigger and the moment so that a redelivery after a crash
-     * is a distinct message rather than a duplicate the inbox projection would reject.
+     * The id is derived from the trigger and the moment, so a redelivery after a crash is a distinct
+     * message rather than a duplicate the inbox projection would reject.
      */
     /**
      * Admit the wake through the host's own entry point — and only now, after the baseline sequence
