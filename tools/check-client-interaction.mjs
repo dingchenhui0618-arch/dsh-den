@@ -620,7 +620,7 @@ const presetPanel = mount(
 await presetPanel.settle()
 check(!presetPanel.text().includes('每天看一眼 CI 失败'), 'without a conversation there is no form, so no preset to fill it')
 check(!presetPanel.buttons().some((button) => textOf(button).trim() === '新建'), 'and no control that would open one')
-check(presetPanel.inputs().length === 0, 'and it asks for nothing to be typed before anything happens')
+check(presetPanel.inputs().length === 1, 'and its only input is the message box, not a form')
 
 /* --- the resident is visible without opening anything -------------------------------------------- */
 
@@ -746,10 +746,11 @@ await panel3.settle()
 // refuses without one, and a schedule with nowhere to speak is not worth making. This was measured
 // the other way first — the whole form, three labelled inputs and a button, once rendered
 // permanently above the message box and took most of a screen.
-check(panel3.inputs().length === 0, `the window renders no inputs at all; saw ${panel3.inputs().length}`)
+check(panel3.inputs().length === 1, `the window has exactly one input, the message box; saw ${panel3.inputs().length}`)
+check(panel3.buttons().some((button) => textOf(button).trim() === '发送'), 'and one way to send what is typed')
 check(!panel3.text().includes('新建自检'), 'and no submit button')
 check(!panel3.buttons().some((button) => textOf(button).trim() === '新建'), 'and nothing that would open a form')
-check(panel3.text().includes('在对话里说'), 'the empty state points at the conversation, which is the cheaper path')
+check(panel3.text().includes('还没有对话'), 'an empty conversation says how to start one')
 
 check(
   !calls.some((entry) => entry.body?.action === 'schedules/create'),
@@ -776,9 +777,12 @@ const panel5 = mount(
         value: { schedules: [{ id: 'sch-1', kind: 'interval', title: 'CI watch', enabled: true, fireCount: 4, dueNow: true }], invalidCount: 0 },
       },
     },
-  }, 'shell.overlay'),
-  { sessionId: 'session-active' },
+  }),
+  {},
 )
+await panel5.settle()
+// The list belongs to den's page now: the window is the conversation.
+await panel5.click('详情')
 await panel5.settle()
 check(panel5.text().includes('CI watch'), 'an existing schedule is listed by title')
 check(panel5.text().includes('待触发'), 'a due schedule is marked as due')
@@ -865,6 +869,41 @@ const grantButton = panel8.buttons().find((button) => textOf(button).trim() === 
 check(grantButton?.props?.disabled !== true, 'grant needs no conversation, so it is not disabled')
 const revokeButton8 = panel8.buttons().find((button) => textOf(button).trim() === '撤销')
 check(revokeButton8?.props?.disabled === true, 'but revoke does, so it is disabled rather than silently doing nothing')
+
+/* --- the window is the conversation: what was said, and a way to say more --- */
+
+const panelTalk = mount(
+  bootWindow({
+    scripted: {
+      status: healthyStatus(),
+      'conversation/read': {
+        ok: true,
+        value: {
+          sessionId: 'sess-standing',
+          state: 'stored',
+          total: 12,
+          truncated: true,
+          messages: [
+            { role: 'user', text: 'are you awake?', seq: 11, time: 1 },
+            { role: 'assistant', text: 'awake, and nothing is on fire', seq: 12, time: 2 },
+          ],
+        },
+      },
+      'conversation/say': { ok: true, value: { messageId: 'den-say-1', sessionId: 'sess-standing', state: 'live' } },
+    },
+  }).component,
+  {},
+)
+await panelTalk.settle()
+check(panelTalk.text().includes('are you awake?'), 'the window shows what was said to den')
+check(panelTalk.text().includes('awake, and nothing is on fire'), 'and what den said back')
+check(panelTalk.text().includes('只显示最近的消息'), 'and says so when it is showing only a tail of the transcript')
+check(panelTalk.inputs().length === 1, 'there is one place to type')
+await panelTalk.type(0, 'look at the CI failures')
+await panelTalk.click('发送')
+const saidCall = calls.find((entry) => entry.body?.action === 'conversation/say')
+check(saidCall?.body?.text === 'look at the CI failures', 'sending posts exactly what was typed')
+check(panelTalk.text().includes('are you awake?'), 'and the conversation is still on screen afterwards')
 
 /* --- the floating window can be moved, and remembers where ----------------- */
 

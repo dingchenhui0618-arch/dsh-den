@@ -80,6 +80,12 @@ window.__ModuleLoader__.load({
         autonomyNoSession:
           'this page has no conversation bound to it — grant from the floating window; one grant covers every conversation',
         grantDock: 'Standing autonomy · this conversation',
+        sayYou: 'you',
+        sayDen: 'den',
+        sayPlaceholder: 'say something to den…',
+        saySend: 'Send',
+        sayEmpty: 'no conversation yet — say something to start one',
+        sayTail: 'only the latest messages are shown; the rest are still in the transcript',
         grantDockGranted: 'granted for this conversation',
         grantDockNotGranted: 'not granted for this conversation',
         grantDockUnknown: 'state unknown',
@@ -156,6 +162,12 @@ window.__ModuleLoader__.load({
         autonomyRevoke: '撤销',
         autonomyNoSession: '这个页面没有被绑定任何会话 —— 在右下角的浮窗里授予就行，一次授权对所有会话生效',
         grantDock: '常驻自治 · 本会话',
+        sayYou: '你',
+        sayDen: 'den',
+        sayPlaceholder: '直接跟 den 说一句…',
+        saySend: '发送',
+        sayEmpty: '还没有对话 —— 说一句就开始',
+        sayTail: '只显示最近的消息，更早的都还在转录里',
         noticesOwed: '你不在的时候：',
         noticeReadIt: '读过了',
         residentOn: '常驻中 · 心跳运行中',
@@ -439,6 +451,7 @@ window.__ModuleLoader__.load({
        * reason the control can work at all - a status page in `main` has no conversation to name.
        */
       var compact = !!props.compact
+      var stripOnly = !!props.stripOnly
 
       var load = React.useCallback(function () {
         setView(function (prev) {
@@ -825,8 +838,8 @@ window.__ModuleLoader__.load({
             ? React.createElement('span', { style: { flexBasis: '100%', color: 'var(--dsw-alias-state-warn-primary)' } }, action.error)
             : null,
           ),
-          noticesBlock(),
-          schedulesBlock(Boolean(sessionId)),
+          stripOnly ? null : noticesBlock(),
+          stripOnly ? null : schedulesBlock(Boolean(sessionId)),
         )
       }
 
@@ -1271,6 +1284,138 @@ window.__ModuleLoader__.load({
       })
 
 
+    /**
+     * The standing conversation, as the window shows it.
+     *
+     * This is what the window is for: den's own conversation, visible and talkable-to without opening
+     * anything. The numbers the panel reports live on den's page — a status board is not something a
+     * person talks to, and the window is the surface that is always on screen.
+     */
+    function DenConversation(props) {
+      var t = props.t
+      var state = React.useState({ phase: 'loading', data: null, error: null })
+      var view = state[0]
+      var setView = state[1]
+      var draft = React.useState('')
+      var typed = draft[0]
+      var setTyped = draft[1]
+      var sending = React.useState(false)
+      var busy = sending[0]
+      var setBusy = sending[1]
+
+      function load() {
+        return act('conversation/read', { limit: 60 })
+          .then(function (res) {
+            var value = res && res.value !== undefined ? res.value : res
+            if (value && typeof value === 'object') setView({ phase: 'ready', data: value, error: null })
+          })
+          .catch(function (error) {
+            setView({ phase: 'error', data: null, error: String((error && error.message) || error) })
+          })
+      }
+
+      React.useEffect(function () {
+        var alive = true
+        function pull() { if (alive) load() }
+        pull()
+        // Slower than the shut pill: while the window is open the human is reading it, and a
+        // conversation does not need to be re-fetched as often as a status light needs to be lit.
+        var timer = setInterval(pull, MINI_POLL_MS * 2)
+        return function () {
+          alive = false
+          clearInterval(timer)
+        }
+      }, [])
+
+      function submit() {
+        var body = String(typed || '').trim()
+        if (!body || busy) return
+        setBusy(true)
+        act('conversation/say', { text: body })
+          .then(function () {
+            setTyped('')
+            return load()
+          })
+          .catch(function (error) {
+            setView({ phase: 'error', data: view.data, error: String((error && error.message) || error) })
+          })
+          .then(function () { setBusy(false) })
+      }
+
+      var data = (view.data && typeof view.data === 'object' ? view.data : {}) || {}
+      var messages = Array.isArray(data.messages) ? data.messages : []
+      var rows = messages.map(function (message, index) {
+        var mine = message.role === 'user'
+        return React.createElement(
+          'div',
+          {
+            key: String(message.seq || index),
+            style: { margin: '6px 0', display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start' },
+          },
+          React.createElement('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)' } }, mine ? t('sayYou') : t('sayDen')),
+          React.createElement(
+            'div',
+            {
+              style: {
+                fontSize: 13,
+                lineHeight: 1.45,
+                color: 'var(--dsw-alias-label-primary)',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                maxWidth: '92%',
+              },
+            },
+            message.text,
+          ),
+        )
+      })
+
+      return React.createElement(
+        'div',
+        { style: { padding: '2px 10px 8px' } },
+        // The transcript accumulates; the model's context does not. This says so in the one place a
+        // reader would otherwise assume they are looking at everything.
+        data.truncated
+          ? React.createElement('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)', margin: '2px 0' } }, t('sayTail'))
+          : null,
+        React.createElement(
+          'div',
+          { style: { maxHeight: 260, overflowY: 'auto' } },
+          rows.length
+            ? rows
+            : React.createElement('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', margin: '6px 0' } }, t('sayEmpty')),
+        ),
+        view.phase === 'error' && view.error
+          ? React.createElement('div', { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)', margin: '2px 0' } }, view.error)
+          : null,
+        React.createElement(
+          'div',
+          { style: { display: 'flex', gap: 6, alignItems: 'center', marginTop: 6 } },
+          React.createElement('input', {
+            value: typed,
+            placeholder: t('sayPlaceholder'),
+            onChange: function (event) { setTyped(event.target.value) },
+            onKeyDown: function (event) { if (event.key === 'Enter') submit() },
+            style: {
+              flex: 1,
+              minWidth: 0,
+              fontSize: 12,
+              padding: '4px 6px',
+              borderRadius: 4,
+              border: '1px solid var(--dsw-alias-border-l2)',
+              background: 'var(--dsw-alias-bg-layer-1)',
+              color: 'var(--dsw-alias-label-primary)',
+            },
+          }),
+          React.createElement(Button, {
+            primary: true,
+            disabled: busy || !String(typed || '').trim(),
+            onClick: submit,
+          }, t('saySend')),
+        ),
+      )
+    }
+
       ctx.slots.inject('shell.overlay', function () {
         /**
          * The floating window: a panel when open, one line of information when shut.
@@ -1410,7 +1555,10 @@ window.__ModuleLoader__.load({
                     '–',
                   ),
                 ),
-                React.createElement(DenPanel, { t: t, act: act, sessionId: null, compact: true }),
+                React.createElement(DenConversation, { t: t, act: act }),
+                                // The strip, not the panel: the grant has to stay reachable from the surface that is
+                                // always on screen, but its numbers and schedules belong on den's page.
+                                React.createElement(DenPanel, { t: t, act: act, sessionId: null, compact: true, stripOnly: true }),
               )
             }
 
