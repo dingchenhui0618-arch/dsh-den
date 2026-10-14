@@ -454,11 +454,15 @@ window.__ModuleLoader__.load({
       var sessionId = props.sessionId
       var act = props.act
       /**
-       * Compact mode renders only what needs a conversation, for the dock above the message box.
+       * Compact mode renders only what needs a conversation, for the floating window.
        *
-       * The seat is `conversation.input.dock`: session-scoped, full width, `replaceRisk: none`, and
-       * its live catalog lists `sessionId: SessionId` among the standard props. That is the whole
-       * reason the control can work at all - a status page in `main` has no conversation to name.
+       * The seat is `shell.overlay`: session-scoped, outside every conversation frame, and its live
+       * catalog lists `sessionId: SessionId` among the standard props. That is the whole reason the
+       * control can work at all - a status page in `main` has no conversation to name.
+       *
+       * This used to say `conversation.input.dock`, a seat ① removed; the code moved and the comment
+       * did not. Left visible on purpose: a comment that explains a real decision is trusted, so a
+       * stale one is worse than none.
        */
       var compact = !!props.compact
       var stripOnly = !!props.stripOnly
