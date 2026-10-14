@@ -611,6 +611,15 @@ if (process.argv.includes('--demo')) {
         hint: '一行状态白话；八行技术指标收在 [详情] 里；异常状态自动展开',
         tree: demoMain.tree,
       },
+      {
+        // The same dock as above, but with a conversation and an empty schedule list — the state in
+        // which the one-tap presets appear. Without this section the preview would keep showing a
+        // panel from before they existed, and the preview is the only view of the UI a reader gets
+        // without restarting the host.
+        label: '空状态里的一键预设（有会话时）',
+        hint: '点一下就建好，不需要打字',
+        tree: presetPanel.tree,
+      },
     ],
   })
   mkdirSync('docs', { recursive: true })
