@@ -69,6 +69,8 @@ export function statusSnapshot(service, { sessionId, nextTriggerAt } = {}) {
     autonomyKnown: autonomy !== null,
     nextCheckAt,
     ledger: status.ledger,
+    /** How many self-initiated turns today, against the cap the host is enforcing. */
+    dailyTurnBudget: status.dailyTurnBudget ?? null,
     notices: status.notices,
     triggers: status.triggers,
     /** How much is in progress, stuck, or waiting on the human (DESIGN 7.4). One line, not a view. */

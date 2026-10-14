@@ -81,6 +81,9 @@ window.__ModuleLoader__.load({
           'this page has no conversation bound to it — grant from the floating window; one grant covers every conversation',
         grantDock: 'Standing autonomy · this conversation',
         sayYou: 'you',
+        residentDeferred: 'waiting for a way to speak',
+        budgetShort: 'turns',
+        budgetOff: 'proactivity off',
         sayDen: 'den',
         sayPlaceholder: 'say something to den…',
         saySend: 'Send',
@@ -163,6 +166,9 @@ window.__ModuleLoader__.load({
         autonomyNoSession: '这个页面没有被绑定任何会话 —— 在右下角的浮窗里授予就行，一次授权对所有会话生效',
         grantDock: '常驻自治 · 本会话',
         sayYou: '你',
+        residentDeferred: '等待投递',
+        budgetShort: '回合',
+        budgetOff: '自治已关',
         sayDen: 'den',
         sayPlaceholder: '直接跟 den 说一句…',
         saySend: '发送',
@@ -1564,7 +1570,16 @@ window.__ModuleLoader__.load({
 
             var bits = []
             if (status) {
-              bits.push(status.running ? t('residentOn') : t('residentOff'))
+              var kernel = status.kernel || {}
+              // Waiting for a way to speak is its own state, not a shade of running: the page
+              // said so while the pill claimed the heartbeat was fine, and the pill is the
+              // surface the human actually sees when the panel is shut.
+              bits.push(status.kernelDeferred ? t('residentDeferred') : kernel.running ? t('residentOn') : t('residentOff'))
+              var cap = Number(status.dailyTurnBudget)
+              var spent = Number(status.ledger && status.ledger.turns) || 0
+              // What den is allowed to start by itself today, and how much of it is gone. This is
+              // the number that makes an autonomous assistant accountable rather than mysterious.
+              bits.push(Number.isFinite(cap) && cap > 0 ? t('budgetShort') + ' ' + String(spent) + '/' + String(cap) : t('budgetOff'))
               bits.push(t('owedShort') + ' ' + String(status.notices && status.notices.pending ? status.notices.pending.length : 0))
               if (status.tasks && Number(status.tasks.total) > 0) {
                 bits.push(t('tasksShort') + ' ' + String(status.tasks.active))

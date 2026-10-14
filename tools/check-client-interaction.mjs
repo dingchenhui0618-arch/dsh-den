@@ -905,6 +905,49 @@ const saidCall = calls.find((entry) => entry.body?.action === 'conversation/say'
 check(saidCall?.body?.text === 'look at the CI failures', 'sending posts exactly what was typed')
 check(panelTalk.text().includes('are you awake?'), 'and the conversation is still on screen afterwards')
 
+/* --- the shut pill is the monitor: budget, what is owed, and whether it can speak --- */
+
+// Collapsed before boot, through the same storage the window writes. `setItem`, which is the API
+// the other scenarios already use; an earlier draft called `.set` and stopped the whole checker.
+fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: true }))
+
+const panelPill = mount(
+  bootWindow({
+    scripted: {
+      status: healthyStatus({
+        dailyTurnBudget: 24,
+        ledger: { turns: 2, spoken: 1, skipped: 1, refused: 0 },
+        kernel: { running: true, lastTickAt: 1, lastError: null },
+        kernelDeferred: null,
+      }),
+    },
+  }).component,
+  {},
+)
+await panelPill.settle()
+// '常驻中' is in both branches — the shut branch reads '常驻中 · 已停' — so the first version of this
+// check passed while the pill was reporting the wrong side. Assert the half that decides.
+check(panelPill.text().includes('心跳运行中'), 'the shut pill reports the kernel it was actually given, not the absence of a field')
+check(!panelPill.text().includes('已停'), 'and does not also report it as stopped')
+check(panelPill.text().includes('回合 2/24'), "and how much of today's self-initiated budget is spent")
+
+const panelPillDeferred = mount(
+  bootWindow({
+    scripted: {
+      status: healthyStatus({
+        dailyTurnBudget: 24,
+        ledger: { turns: 2, spoken: 1, skipped: 1, refused: 0 },
+        kernel: { running: false, lastTickAt: 1, lastError: null },
+        kernelDeferred: { reason: 'no delivery path available in this profile', attempts: 3, retrying: true },
+      }),
+    },
+  }).component,
+  {},
+)
+await panelPillDeferred.settle()
+check(panelPillDeferred.text().includes('等待投递'), 'a pill whose heartbeat is waiting says so instead of claiming to run')
+check(!panelPillDeferred.text().includes('心跳运行中'), 'and does not claim the heartbeat is fine')
+
 /* --- the floating window can be moved, and remembers where ----------------- */
 
 // Storage is the window's own preference blob, so the check reads what a browser would keep.
