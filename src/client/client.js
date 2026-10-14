@@ -197,7 +197,12 @@ window.__ModuleLoader__.load({
 
     function pick(locale) {
       var tag = String(locale || '').toLowerCase()
-      return tag.indexOf('zh') === 0 ? STRINGS.zh : STRINGS.en
+      // The den's own panel speaks Chinese by default and switches to English only when the host
+      // *explicitly* says English. The reason is the person rather than the framework: the profile's
+      // first line records that this user works in Chinese, so a panel that answers in English is a
+      // panel they have to translate before they can read it. A screenshot of the English panel is
+      // what produced this change.
+      return tag.indexOf('en') === 0 ? STRINGS.en : STRINGS.zh
     }
 
     /* ------------------------------------------------------------ helpers */
