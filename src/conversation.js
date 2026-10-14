@@ -184,6 +184,31 @@ export function appendToSession(session, message) {
  * here, the default is preferred, activation failures are skipped, and an empty string is returned
  * when this host offers no preset service, so the caller can tell no-preset from preset-named-empty.
  */
+/**
+ * The model a standing conversation should run on: whatever the host is currently using.
+ *
+ * `agentPreset` alone is not enough, and this was learned by reading the host's own creation path,
+ * which passes `agentOptions: { provider, model }` from `agentDefaultModel.currentSelection()` beside
+ * `meta.agentPreset` and a preset `setup`. The `{{model}}` a prompt is assembled with comes from
+ * those options: a session created with a preset and no options still has no model, and every turn
+ * ends in 'prompt variable "{{model}}" has no value for this assembly'. Reading the current selection
+ * rather than naming a model means den follows whatever the human has chosen, and follows it when
+ * they change it.
+ */
+export function resolveAgentOptions(ctx) {
+  const service = ctx && ctx.agentDefaultModel
+  if (!service || typeof service.currentSelection !== 'function') return undefined
+  let selection
+  try {
+    selection = service.currentSelection()
+  } catch (error) {
+    return undefined
+  }
+  if (!selection || typeof selection.provider !== 'string' || typeof selection.model !== 'string') return undefined
+  if (!selection.provider || !selection.model) return undefined
+  return { provider: selection.provider, model: selection.model }
+}
+
 export async function resolveAgentPreset(ctx) {
   const service = ctx && ctx.agentPresets
   if (!service || typeof service.list !== 'function') return ''
@@ -208,6 +233,7 @@ export async function resolveAgentPreset(ctx) {
  */
 export async function ensureConversation(ctx, { cwd = '', path = conversationPath() } = {}) {
   const preset = await resolveAgentPreset(ctx)
+  const agentOptions = resolveAgentOptions(ctx)
   const record = readConversationRecord(path)
   // A session created before this plugin knew about presets cannot assemble a prompt at all: the host
   // ends every turn with 'prompt variable "{{model}}" has no value for this assembly'. Resuming it
@@ -226,7 +252,12 @@ export async function ensureConversation(ctx, { cwd = '', path = conversationPat
       if (typeof ctx?.agents?.resume !== 'function') {
         throw new Error('dsh-den: this host cannot resume the standing conversation')
       }
-      const handle = await ctx.agents.resume({ resumeSessionId: record.sessionId })
+      // Carried on resume too: a resumed session assembles prompts like any other, and the options
+      // are the host's current selection, so a model change is picked up on the next start.
+      const handle = await ctx.agents.resume({
+        resumeSessionId: record.sessionId,
+        ...(agentOptions ? { agentOptions } : {}),
+      })
       return { agent: handle.agent, sessionId: record.sessionId, state: 'resumed', handle, agentPreset: record.agentPreset || preset || null, replaced: null }
     }
   }
@@ -244,7 +275,11 @@ export async function ensureConversation(ctx, { cwd = '', path = conversationPat
   // all; the cwd is only where it does it.
   if (cwd && isAbsolute(cwd)) meta.cwd = cwd
   if (preset) meta.agentPreset = preset
-  const handle = await ctx.agents.create({ sessionId, meta: Object.keys(meta).length ? meta : undefined })
+  const handle = await ctx.agents.create({
+    sessionId,
+    ...(agentOptions ? { agentOptions } : {}),
+    meta: Object.keys(meta).length ? meta : undefined,
+  })
   writeJsonAtomic(path, {
     sessionId,
     createdAt: Date.now(),

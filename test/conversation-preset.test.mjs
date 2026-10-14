@@ -21,6 +21,7 @@ function fakeCtx({ presets = [{ id: 'cordis', isDefault: true }], live = undefin
   return {
     calls,
     agentPresets: presets === null ? undefined : { list: async () => presets },
+    agentDefaultModel: presets === null ? undefined : { currentSelection: () => ({ provider: 'deepseek', model: 'deepseek-chat' }) },
     agents: {
       get: () => live,
       create: async (options) => {
@@ -43,6 +44,37 @@ test('the preset is the host default, and a broken one is never chosen', async (
   assert.equal(await resolveAgentPreset(noDefault), 'first')
   const onlyBroken = fakeCtx({ presets: [{ id: 'broken', broken: 'nope' }] })
   assert.equal(await resolveAgentPreset(onlyBroken), '', 'a broken preset is not a preset')
+})
+
+test('the model comes from the host\'s current selection, which is what makes {{model}} resolve', async () => {
+  await tempPath(async (path) => {
+    const ctx = fakeCtx()
+    const result = await ensureConversation(ctx, { path })
+    assert.deepEqual(ctx.calls.create[0].agentOptions, { provider: 'deepseek', model: 'deepseek-chat' })
+    assert.equal(result.state, 'created')
+  })
+})
+
+test('a host with no current selection still creates, and says so by sending no options', async () => {
+  await tempPath(async (path) => {
+    const ctx = fakeCtx()
+    delete ctx.agentDefaultModel
+    await ensureConversation(ctx, { path })
+    assert.equal(ctx.calls.create[0].agentOptions, undefined)
+  })
+})
+
+test('a resumed conversation is given the selection too, so a model change is picked up', async () => {
+  await tempPath(async (path) => {
+    writeFileSync(path, JSON.stringify({ sessionId: 'good-session', createdAt: 1, agentPreset: 'cordis' }))
+    const ctx = fakeCtx()
+    const result = await ensureConversation(ctx, { path })
+    assert.equal(result.state, 'resumed')
+    assert.deepEqual(ctx.calls.resume[0], {
+      resumeSessionId: 'good-session',
+      agentOptions: { provider: 'deepseek', model: 'deepseek-chat' },
+    })
+  })
 })
 
 test('a relative cwd from configuration is dropped, not sent to a store that would throw', async () => {
@@ -100,7 +132,9 @@ test('a record that already names a preset is resumed, and nothing is created', 
     const result = await ensureConversation(ctx, { path })
     assert.equal(result.state, 'resumed')
     assert.equal(ctx.calls.create.length, 0)
-    assert.deepEqual(ctx.calls.resume, [{ resumeSessionId: 'good-session' }])
+    assert.deepEqual(ctx.calls.resume, [
+      { resumeSessionId: 'good-session', agentOptions: { provider: 'deepseek', model: 'deepseek-chat' } },
+    ])
     assert.equal(result.replaced, null)
   })
 })
