@@ -100,6 +100,7 @@ test('a first message creates the conversation, delivers it, and writes the id d
     assert.equal(sent[0].content[0].text, 'are you awake?')
     assert.equal(sent[0].role, 'user')
     assert.match(outcome.value.messageId, /^den-say-/)
+    assert.equal(outcome.value.delivery, 'followup', 'a host with no session controller takes the fallback')
     const written = JSON.parse(readFileSync(path, 'utf8'))
     assert.equal(written.sessionId, outcome.value.sessionId, 'the id the host accepted is the one kept on disk')
   })
@@ -185,5 +186,60 @@ test('den keeps the conversation\'s id, not a copy of its transcript', async () 
     assert.equal(second.ok, true, JSON.stringify(second))
     assert.equal(sent.length, 2, 'the second message went to the same conversation')
     assert.equal(readFileSync(path, 'utf8'), written, 'the record is written once, when it is created')
+  })
+})
+
+test('a host with a session controller is asked to admit the prompt, and it says so', async () => {
+  await tempConversation(async ({ path }) => {
+    const prompts = []
+    const created = []
+    const ctx = {
+      agents: {
+        get: () => undefined,
+        // Not one method beyond the contract: the host's Agent declares only `id`. If the route fell
+        // back to the agent, this fake would make it throw, which is exactly the point.
+        create: async (options) => {
+          created.push(options.sessionId)
+          return { agent: { id: options.sessionId }, dispose: async () => {} }
+        },
+      },
+      sessions: { get: () => null },
+      sessionController: {
+        async prompt(request, signal) {
+          prompts.push({ request, signal })
+          return { accepted: true }
+        },
+      },
+    }
+    const outcome = await invokeAction(serviceWith(ctx, path), 'conversation/say', { text: ' are you awake? ' }, {})
+    assert.equal(outcome.ok, true, JSON.stringify(outcome))
+    assert.equal(outcome.value.delivery, 'prompt', 'the documented path is the one a real host takes')
+    assert.equal(outcome.value.messageId, null, 'and no id comes back — which the client never reads')
+    assert.deepEqual(created, [outcome.value.sessionId], 'the session is still created through the lifecycle')
+    assert.equal(prompts.length, 1, 'exactly one prompt, admitted once')
+    assert.equal(prompts[0].request.sessionId, outcome.value.sessionId)
+    assert.equal(prompts[0].request.mode, 'queue')
+    assert.equal(prompts[0].request.content[0].text, 'are you awake?', 'trimmed, and the text is what den reads')
+    assert.ok(prompts[0].signal, 'the host requires a signal, so one is always passed')
+    const written = JSON.parse(readFileSync(path, 'utf8'))
+    assert.equal(written.sessionId, outcome.value.sessionId, 'and the id the host accepted is the one kept on disk')
+  })
+})
+
+test('an admitted prompt that the host refuses is reported as an error, not as silence', async () => {
+  await tempConversation(async ({ path }) => {
+    writeFileSync(path, JSON.stringify({ sessionId: 'sess-live' }))
+    const ctx = {
+      agents: { get: () => undefined, resume: async () => ({ agent: { id: 'sess-live' }, dispose: async () => {} }) },
+      sessions: { get: () => null },
+      sessionController: {
+        prompt: async () => {
+          throw new Error('this session is archived')
+        },
+      },
+    }
+    const outcome = await invokeAction(serviceWith(ctx, path), 'conversation/say', { text: 'hello' }, {})
+    assert.equal(outcome.ok, false, 'a refused prompt must not read as a successful send')
+    assert.match(outcome.error, /archived/)
   })
 })
