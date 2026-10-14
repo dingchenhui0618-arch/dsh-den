@@ -198,20 +198,28 @@ check(!sidebar, 'keeps out of the sidebar panel list: one surface, not a tab and
 check(Boolean(main), 'registers a main panel')
 check(injections.includes('shell.overlay') && injections.includes('main'), 'waits for the window and the page via inject()')
 
-if (sidebar && main) {
-  check(
-    sidebar.options.id === main.options.key,
-    `sidebar id (${sidebar.options.id}) equals main key (${main.options.key}) — mismatched means clicking the icon throws`,
-  )
-  check(main.options.key !== 'conversation', 'does not shadow the shipped conversation panel')
-  check(typeof sidebar.options.label === 'function' || typeof sidebar.options.label === 'string', 'sidebar entry carries a label')
-}
+// The seats are enumerated rather than assumed. The claim is that den occupies one window plus its
+// page, so a third surface has to fail this file instead of quietly rendering somewhere else.
+const overlay = registrations.find((r) => r.options?.name === 'shell.overlay')
+const named = registrations.map((r) => r.options?.name).sort()
+check(
+  Boolean(overlay) && typeof overlay.component === 'function',
+  'registers the floating window in the shell overlay seat',
+)
+check(
+  named.join(', ') === 'conversation.input.dock, main, shell.overlay',
+  `registers into exactly these seats (${named.join(', ')})`,
+)
+check(main.options.key !== 'conversation', 'does not shadow the shipped conversation panel')
 
 // Render both components. A component that throws here would throw in the shell.
-for (const entry of [sidebar, main]) {
+// Render the page. A component that throws here would throw in the shell. The window is deliberately
+// NOT rendered here: it uses hooks, and this checker has no renderer, so calling it would fail for
+// the harness's reasons rather than the plugin's.
+for (const entry of [main]) {
   if (!entry) continue
   try {
-    const element = entry.component(entry.options.name === 'sidebar.panellist' ? { size: 20, active: false } : {})
+    const element = entry.component({})
     check(Boolean(element), `renders ${entry.options.name}`)
   } catch (error) {
     failures.push(`rendering ${entry.options.name} threw: ${error.message}`)
