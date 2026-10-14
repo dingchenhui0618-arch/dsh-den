@@ -949,6 +949,11 @@ await panelPillDeferred.settle()
 check(panelPillDeferred.text().includes('等待投递'), 'a pill whose heartbeat is waiting says so instead of claiming to run')
 check(!panelPillDeferred.text().includes('心跳运行中'), 'and does not claim the heartbeat is fine')
 
+/* --- the transcript scrolls in its own area, which is what "scrollable" means --- */
+
+const scrollArea = findAll(panelTalk.tree, (n) => n.props?.style?.overflowY === 'auto')
+check(scrollArea.length === 1, 'the transcript has exactly one scrolling area of its own')
+check(Number(scrollArea[0]?.props?.style?.maxHeight) > 0, 'and that area is bounded, so the window cannot grow with the transcript')
 /* --- a host that has not been reloaded: say so, and disable what cannot work --- */
 
 fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false }))
