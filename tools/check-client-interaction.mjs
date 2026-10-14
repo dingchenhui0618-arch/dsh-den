@@ -866,6 +866,35 @@ check(grantButton?.props?.disabled !== true, 'grant needs no conversation, so it
 const revokeButton8 = panel8.buttons().find((button) => textOf(button).trim() === '撤销')
 check(revokeButton8?.props?.disabled === true, 'but revoke does, so it is disabled rather than silently doing nothing')
 
+/* --- the floating window can be moved, and remembers where ----------------- */
+
+// Storage is the window's own preference blob, so the check reads what a browser would keep.
+fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false }))
+const dragWindow = mount(bootWindow({ scripted: { status: healthyStatus() } }).component, {})
+await dragWindow.settle()
+const dragHandles = findAll(dragWindow.tree, (node) => node.props && typeof node.props.onPointerDown === 'function')
+check(dragHandles.length === 1, `the window offers exactly one drag handle; saw ${dragHandles.length}`)
+
+let measured = 0
+const handleTarget = {
+  getBoundingClientRect: () => { measured += 1; return { left: 400, top: 300, width: 320, height: 240 } },
+  setPointerCapture: () => {},
+}
+const handleOf = () => findAll(dragWindow.tree, (node) => node.props && typeof node.props.onPointerMove === 'function')[0]
+handleOf().props.onPointerDown({ currentTarget: handleTarget, pointerId: 7, preventDefault: () => {} })
+await dragWindow.settle()
+handleOf().props.onPointerMove({ movementX: 120, movementY: -40 })
+await dragWindow.settle()
+handleOf().props.onPointerUp({})
+await dragWindow.settle()
+
+const keptPreference = JSON.parse(fakeStorage.getItem('dsh-den.mini') || '{}')
+check(measured === 1, 'the window measures where it already is before the first movement, so it does not jump')
+check(keptPreference.x === 520 && keptPreference.y === 260, `the window stays where it was put (${keptPreference.x}, ${keptPreference.y})`)
+const placedTree = findAll(dragWindow.tree, (node) => Boolean(node.props && node.props.style && node.props.style.position === 'fixed'))
+check(placedTree.length >= 1, 'and the remembered place is applied, rather than only stored')
+fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false }))
+
 /* --- a host failure is surfaced, not swallowed ---------------------------- */
 
 const panel9 = mount(

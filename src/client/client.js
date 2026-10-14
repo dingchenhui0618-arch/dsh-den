@@ -1286,6 +1286,64 @@ window.__ModuleLoader__.load({
           { name: 'shell.overlay', id: 'den-mini', order: 40 },
           function DenMini(props) {
             void props
+            // Where the human last put it. Unset until they move it, so the default placement the
+            // shell gives an overlay occupant is left exactly as it was.
+            var placeState = React.useState(function () {
+              var x = miniPref('x')
+              var y = miniPref('y')
+              return typeof x === 'number' && typeof y === 'number' ? { x: x, y: y } : null
+            })
+            var place = placeState[0]
+            var setPlace = placeState[1]
+            var dragState = React.useState(false)
+            var isDragging = dragState[0]
+            var setDragging = dragState[1]
+
+            function placedStyle(current) {
+              if (!current) return {}
+              return { position: 'fixed', left: current.x, top: current.y, right: 'auto', bottom: 'auto', zIndex: 60 }
+            }
+
+            function onDragStart(event) {
+              setDragging(true)
+              // Seed from where the window actually is, or the first movement would jump it to the
+              // top-left corner: the shell position is a layout fact, not a number we were told.
+              if (!place && event && event.currentTarget && event.currentTarget.getBoundingClientRect) {
+                var rect = event.currentTarget.getBoundingClientRect()
+                setPlace({ x: Math.round(rect.left), y: Math.round(rect.top) })
+              }
+              if (event && event.preventDefault) event.preventDefault()
+              if (event && event.currentTarget && event.currentTarget.setPointerCapture && event.pointerId !== undefined) {
+                try { event.currentTarget.setPointerCapture(event.pointerId) } catch (e) { void e }
+              }
+            }
+
+            function onDragMove(event) {
+              if (!isDragging || !event) return
+              var dx = event.movementX || 0
+              var dy = event.movementY || 0
+              // The handler is rebuilt on every render, so `place` here is the position from the
+              // last one; a functional update would be tidier but not every renderer has it.
+              var from = place || { x: 0, y: 0 }
+              var wide = typeof window !== 'undefined' && window.innerWidth ? window.innerWidth : 1200
+              var tall = typeof window !== 'undefined' && window.innerHeight ? window.innerHeight : 800
+              var maxX = Math.max(0, wide - 72)
+              var maxY = Math.max(0, tall - 32)
+              setPlace({
+                x: Math.min(Math.max(0, from.x + dx), maxX),
+                y: Math.min(Math.max(0, from.y + dy), maxY),
+              })
+            }
+
+            function onDragEnd() {
+              if (!isDragging) return
+              setDragging(false)
+              if (place) {
+                setMiniPref('x', place.x)
+                setMiniPref('y', place.y)
+              }
+            }
+
             var openState = React.useState(miniPref('collapsed') !== true)
             var open = openState[0]
             var setOpen = openState[1]
@@ -1315,24 +1373,42 @@ window.__ModuleLoader__.load({
             if (open) {
               return React.createElement(
                 'div',
-                { style: { pointerEvents: 'auto' } },
+                { style: Object.assign({ pointerEvents: 'auto' }, placedStyle(place)) },
+                // The bar is the grab area: it holds no text of its own, so the window still reads
+                // as the panel and nothing else, and the only control on it is the collapse button.
                 React.createElement(
-                  'button',
+                  'div',
                   {
-                    type: 'button',
-                    onClick: function () { setOpen(false); setMiniPref('collapsed', true) },
+                    onPointerDown: onDragStart,
+                    onPointerMove: onDragMove,
+                    onPointerUp: onDragEnd,
+                    onPointerCancel: onDragEnd,
                     style: {
-                      float: 'right',
-                      border: 'none',
-                      background: 'transparent',
-                      color: 'var(--dsw-alias-label-secondary)',
-                      cursor: 'pointer',
-                      fontSize: 14,
-                      padding: '0 6px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'flex-end',
+                      cursor: isDragging ? 'grabbing' : 'grab',
+                      userSelect: 'none',
+                      touchAction: 'none',
                     },
-                    title: t('collapse'),
                   },
-                  '–',
+                  React.createElement(
+                    'button',
+                    {
+                      type: 'button',
+                      onClick: function () { setOpen(false); setMiniPref('collapsed', true) },
+                      style: {
+                        border: 'none',
+                        background: 'transparent',
+                        color: 'var(--dsw-alias-label-secondary)',
+                        cursor: 'pointer',
+                        fontSize: 14,
+                        padding: '0 6px',
+                      },
+                      title: t('collapse'),
+                    },
+                    '–',
+                  ),
                 ),
                 React.createElement(DenPanel, { t: t, act: act, sessionId: null, compact: true }),
               )
@@ -1356,6 +1432,7 @@ window.__ModuleLoader__.load({
                 type: 'button',
                 onClick: function () { setOpen(true); setMiniPref('collapsed', false) },
                 style: {
+                  ...placedStyle(place),
                   pointerEvents: 'auto',
                   border: '1px solid var(--dsw-alias-border-l2)',
                   borderRadius: 999,
