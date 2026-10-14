@@ -83,3 +83,131 @@ export function textOf(node) {
 export function allText(tree) {
   return findAll(tree, () => true).map(textOf).join(' ')
 }
+
+/* --------------------------------------------------------------- static preview */
+
+/**
+ * Style properties whose bare number means pixels.
+ *
+ * Without this table `fontSize: 12` renders as `font-size:12` — an invalid declaration the browser
+ * drops, so the preview page would be laid out in the browser's defaults while claiming to show the
+ * panel. A preview that silently drops half its styles is worse than none: the whole reason to
+ * generate one from the renderer is that it can be trusted to look like the real thing.
+ */
+const LENGTH_PROPS = new Set([
+  'margin', 'marginTop', 'marginBottom', 'marginLeft', 'marginRight',
+  'padding', 'paddingTop', 'paddingBottom', 'paddingLeft', 'paddingRight',
+  'fontSize', 'gap', 'rowGap', 'columnGap', 'borderRadius', 'borderWidth',
+  'width', 'height', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight',
+  'top', 'right', 'bottom', 'left', 'letterSpacing', 'flexBasis',
+])
+
+const VOID_TAGS = new Set(['br', 'hr', 'img', 'input'])
+
+/** Escape text for HTML. Panel copy is plain text, but a preview must not execute what it shows. */
+export function escapeHtml(text) {
+  return String(text).replace(/[&<>"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[char])
+}
+
+function styleOf(style) {
+  if (!style || typeof style !== 'object') return ''
+  const parts = []
+  for (const [key, value] of Object.entries(style)) {
+    if (value === null || value === undefined || value === false) continue
+    const css = key.replace(/[A-Z]/g, (match) => `-${match.toLowerCase()}`)
+    const unit = typeof value === 'number' && LENGTH_PROPS.has(key) ? 'px' : ''
+    parts.push(`${css}:${value}${unit}`)
+  }
+  return parts.join(';')
+}
+
+/** Serialize a collected tree (see `collect`) into HTML. */
+export function toHtml(tree) {
+  const nodes = Array.isArray(tree) ? tree : [tree]
+  return nodes
+    .map((node) => {
+      if (!node) return ''
+      if (node.kind === 'text') return escapeHtml(node.text)
+      const type = typeof node.type === 'string' ? node.type : 'div'
+      const props = node.props ?? {}
+      const attrs = []
+      if (props.className) attrs.push(`class="${escapeHtml(props.className)}"`)
+      if (typeof props.type === 'string') attrs.push(`type="${escapeHtml(props.type)}"`)
+      if (typeof props.placeholder === 'string') attrs.push(`placeholder="${escapeHtml(props.placeholder)}"`)
+      if (props.value !== undefined && props.value !== null) attrs.push(`value="${escapeHtml(props.value)}"`)
+      if (props.disabled) attrs.push('disabled')
+      const style = styleOf(props.style)
+      if (style) attrs.push(`style="${escapeHtml(style)}"`)
+      const open = `<${type}${attrs.length ? ` ${attrs.join(' ')}` : ''}>`
+      if (VOID_TAGS.has(type)) return open
+      return `${open}${toHtml(node.children ?? [])}</${type}>`
+    })
+    .join('')
+}
+
+/**
+ * Wrap rendered trees in a standalone preview page.
+ *
+ * Honesty is built into the shape of this page, not bolted on: the markup is the panel's own (it
+ * comes from the same renderer the checks use, so it cannot drift), the *data* is demo data, and
+ * the page says so. The colours are the DSH semantic variables with preview fallbacks, because the
+ * real values are injected by the host and are not available to a file on disk; the fallbacks are
+ * chosen to be readable in both themes, not to pass as the host's palette.
+ */
+export function demoPage({ title, note, sections, generatedBy }) {
+  const styles = `
+:root{--dsw-alias-bg-layer-1:#ffffff;--dsw-alias-bg-layer-2:#f4f5f7;--dsw-alias-bg-layer-3:#e9ebef;
+--dsw-alias-border-l2:#dcdfe6;--dsw-alias-label-primary:#1f2329;--dsw-alias-label-secondary:#5a6069;
+--dsw-alias-label-tertiary:#8f959e;--dsw-alias-state-success-primary:#1f9254;--dsw-alias-state-warn-primary:#a86b00;
+--dsw-alias-state-error-primary:#c4342b;--demo-page:#f7f8fa}
+:root[data-theme=dark]{--dsw-alias-bg-layer-1:#1f2126;--dsw-alias-bg-layer-2:#272a30;--dsw-alias-bg-layer-3:#333740;
+--dsw-alias-border-l2:#3c414b;--dsw-alias-label-primary:#e8eaed;--dsw-alias-label-secondary:#a8aeb8;
+--dsw-alias-label-tertiary:#767d88;--dsw-alias-state-success-primary:#4fc07e;--dsw-alias-state-warn-primary:#e0a63c;
+--dsw-alias-state-error-primary:#f0736a;--demo-page:#16181c}
+*{box-sizing:border-box}
+body{margin:0;padding:28px;background:var(--demo-page);color:var(--dsw-alias-label-primary);
+font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+header{max-width:760px;margin:0 auto 20px}
+h1{font-size:18px;margin:0 0 6px}
+.meta{font-size:12px;color:var(--dsw-alias-label-secondary)}
+.banner{margin:12px 0 0;padding:8px 10px;border-radius:6px;font-size:12px;
+background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-state-warn-primary)}
+section{max-width:760px;margin:22px auto;padding:16px;border-radius:10px;
+background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2)}
+h2{font-size:13px;margin:0 0 4px;font-weight:600}
+.hint{margin:0 0 12px;font-size:12px;color:var(--dsw-alias-label-tertiary)}
+button{font:inherit}
+input{font:inherit;padding:6px 8px;border-radius:6px;border:1px solid var(--dsw-alias-border-l2);
+background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary)}
+#theme{position:fixed;top:18px;right:20px;padding:6px 12px;border-radius:999px;cursor:pointer;
+border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
+`
+  const body = sections
+    .map((section) => `  <section>\n    <h2>${escapeHtml(section.label)}</h2>\n    <p class="hint">${escapeHtml(section.hint)}</p>\n    <div>${toHtml(section.tree)}</div>\n  </section>`)
+    .join('\n')
+  return `<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escapeHtml(title)}</title>
+<style>${styles}</style>
+</head>
+<body>
+<button id="theme" type="button">切换亮色 / 暗色</button>
+<header>
+  <h1>${escapeHtml(title)}</h1>
+  <p class="meta">${escapeHtml(generatedBy)}</p>
+  <p class="banner">演示数据，非真实状态：下面的界面结构由扁平面板的同一个渲染器导出，不是手抄的 HTML；里面的数字与通知内容是为展示编的。</p>
+</header>
+${body}
+<script>
+document.getElementById('theme').addEventListener('click', function () {
+  var root = document.documentElement
+  root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark'
+})
+</script>
+</body>
+</html>
+`
+}
