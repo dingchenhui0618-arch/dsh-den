@@ -30,8 +30,6 @@ window.__ModuleLoader__.load({
     /* Sidebar entry id and main-panel key. These MUST be the same value. */
     var PANEL_KEY = 'dsh-den.status'
     /** Its own seat in the composer dock: a fresh id adds an entry rather than replacing the shell's. */
-    var GRANT_KEY = 'dsh-den-grant'
-    var GRANT_ORDER = 15
     /**
      * The host route. Must equal the `path` the host hands to `webServer.register`,
      * which is `/<package name>` by the convention every client plugin here follows
@@ -80,7 +78,7 @@ window.__ModuleLoader__.load({
         autonomyGrant: 'Grant',
         autonomyRevoke: 'Revoke',
         autonomyNoSession:
-          'this page has no conversation bound to it — grant from the control above the message box',
+          'this page has no conversation bound to it — grant from the floating window; one grant covers every conversation',
         grantDock: 'Standing autonomy · this conversation',
         grantDockGranted: 'granted for this conversation',
         grantDockNotGranted: 'not granted for this conversation',
@@ -120,7 +118,7 @@ window.__ModuleLoader__.load({
         kernelGaveUp: 'gave up after',
         attempts: 'attempts',
         footNote:
-          'Granting is per conversation — do it from the control above the message box.',
+          'Granting happens in the floating window: mint a token, paste it into any conversation, and every conversation is awake from then on.',
       },
       zh: {
         nav: 'den',
@@ -156,7 +154,7 @@ window.__ModuleLoader__.load({
         working: '处理中…',
         autonomyGrant: '授予',
         autonomyRevoke: '撤销',
-        autonomyNoSession: '这个页面没有被绑定任何会话 —— 请到输入框上方的控件里授予',
+        autonomyNoSession: '这个页面没有被绑定任何会话 —— 在右下角的浮窗里授予就行，一次授权对所有会话生效',
         grantDock: '常驻自治 · 本会话',
         noticesOwed: '你不在的时候：',
         noticeReadIt: '读过了',
@@ -197,7 +195,7 @@ window.__ModuleLoader__.load({
         kernelGaveUp: '已放弃，尝试',
         attempts: '次',
         footNote:
-          '授予是按会话进行的 —— 在消息框上方那条控件里做。',
+          '授予在浮窗里做：铸一个令牌，把它贴到任意一个会话里发出去，之后所有会话都算醒着。',
       },
     }
 
@@ -467,10 +465,9 @@ window.__ModuleLoader__.load({
       }, [load])
 
       var loadSchedules = React.useCallback(function () {
-        if (!sessionId) {
-          setSched({ list: [], error: null })
-          return
-        }
+        // No conversation is no longer a reason to show nothing: the host answers with every
+        // schedule when none is bound (panel-api: `liveSessionId ? filter : all`), and with the
+        // composer dock gone this is the only place the list can be seen at all.
         act('schedules/list', {}, sessionId)
           .then(function (value) {
             setSched({ list: (value && value.schedules) || [], error: null })
@@ -633,7 +630,9 @@ window.__ModuleLoader__.load({
                       item.title + (item.dueNow ? ' · ' + t('dueNow') : ''),
                     ),
                     React.createElement(Button, {
-                      disabled: busy || !sessionId,
+                      // Deleting needs no conversation: the host removes by schedule id, and with the
+                      // composer dock gone this is the only surface the list can be seen on at all.
+                      disabled: busy,
                       onClick: function () { onRemoveSchedule(item.id) },
                     }, t('scheduleRemove')),
                   )
@@ -676,11 +675,6 @@ window.__ModuleLoader__.load({
                         disabled: busy || !sessionId,
                         onClick: onAddSchedule,
                       }, t('scheduleAdd')),
-                      React.createElement(
-                        'div',
-                        { style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)', marginTop: 4 } },
-                        t('scheduleCreateHint'),
-                      ),
                     )
                   : null,
               )
@@ -692,6 +686,13 @@ window.__ModuleLoader__.load({
                   'div',
                   { style: { marginTop: 4, color: 'var(--dsw-alias-label-tertiary)' } },
                   t('scheduleAddElsewhere'),
+                ),
+                // This used to live in the creation form, which is unreachable now, so the one
+                // thing it says that still matters to a reader was going to disappear with it.
+                React.createElement(
+                  'div',
+                  { style: { marginTop: 4, fontSize: 11, color: 'var(--dsw-alias-label-tertiary)' } },
+                  t('scheduleCreateHint'),
                 ),
               ),
         )
@@ -783,7 +784,10 @@ window.__ModuleLoader__.load({
           React.createElement('span', null, !known ? t('grantDockUnknown') : granted ? t('grantDockGranted') : t('grantDockNotGranted')),
           React.createElement(Button, {
             primary: !granted,
-            disabled: busy || !sessionId,
+            // Minting needs no conversation: the token is carried to one by the human, and the grant
+            // is confirmed there. Demanding a session id here is exactly what made the floating
+            // window read-only, which is why the controls had to live in the composer instead.
+            disabled: busy,
             onClick: function () { onGrant(true) },
           }, t('autonomyGrant')),
           React.createElement(Button, {
@@ -822,7 +826,7 @@ window.__ModuleLoader__.load({
             : null,
           ),
           noticesBlock(),
-          schedulesBlock(true),
+          schedulesBlock(Boolean(sessionId)),
         )
       }
 
@@ -1267,36 +1271,6 @@ window.__ModuleLoader__.load({
       })
 
 
-      /**
-       * The per-conversation controls, in the one seat that hands over a conversation.
-       *
-       * `conversation.input.dock` is session-scoped and its live catalog lists `sessionId: SessionId`
-       * among the standard props, so the id comes from the shell rather than from a guess. It is also
-       * directly above the message box, which is where the minted token has to be pasted.
-       */
-      ctx.slots.inject('conversation.input.dock', function () {
-        return ctx.slots.register(
-          { name: 'conversation.input.dock', id: GRANT_KEY, order: GRANT_ORDER },
-          function GrantDock(props) {
-            return React.createElement(DenPanel, {
-              t: t,
-              act: act,
-              sessionId: (props || {}).sessionId,
-              compact: true,
-            })
-          },
-        )
-      })
-      /**
-       * The floating window, in the shell overlay layer.
-       *
-       * The dock above stays: it is session-scoped because a minted token has to be pasted
-       * somewhere near the message box, and a root-scoped seat is handed no conversation at all.
-       * What it must not do is be the ONLY place the status is visible, which is what made a
-       * status strip follow the person into every conversation and take a line from what they
-       * were doing. This seat is frame-wide, outside every column and click-through: it is there
-       * when looked at and cannot block what is underneath.
-       */
       ctx.slots.inject('shell.overlay', function () {
         /**
          * The floating window: a panel when open, one line of information when shut.

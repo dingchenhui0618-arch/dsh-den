@@ -207,7 +207,7 @@ check(
   'registers the floating window in the shell overlay seat',
 )
 check(
-  named.join(', ') === 'conversation.input.dock, main, shell.overlay',
+  named.join(', ') === 'main, shell.overlay',
   `registers into exactly these seats (${named.join(', ')})`,
 )
 check(main.options.key !== 'conversation', 'does not shadow the shipped conversation panel')

@@ -381,13 +381,13 @@ function boot({ sessionId = 'session-active', scripted = {} } = {}, slot = 'main
  * The seat below is the one whose own live catalog lists `sessionId: SessionId` among its standard
  * props, so the id arrives as a prop and there is nothing left to guess.
  */
-function bootDock({ scripted = {} } = {}) {
+function bootWindow({ scripted = {} } = {}) {
   calls.length = 0
   scriptReplies(scripted)
   const ctx = makeCtx()
   exportsValue.apply(ctx)
-  const dock = ctx.slots.entries.find((entry) => entry.options?.name === 'conversation.input.dock')
-  if (!dock) throw new Error('the bundle did not register a composer-dock entry')
+  const dock = ctx.slots.entries.find((entry) => entry.options?.name === 'shell.overlay')
+  if (!dock) throw new Error('the bundle did not register a floating-window entry')
   return { component: dock.component, options: dock.options }
 }
 
@@ -448,7 +448,7 @@ check(
   !panel.buttons().some((button) => textOf(button).trim() === '授予'),
   'the status page renders no grant button, because it has no conversation to grant for',
 )
-check(text.includes('输入框上方'), 'and it says where the grant control is instead')
+check(text.includes('浮窗里授予'), 'and it says where the grant control is instead')
 check(text.includes('自检'), 'the panel renders the self-check section')
 check(text.includes('运行中'), 'a running heartbeat is reported as running')
 check(text.includes('今天') === false, 'no stray copy is invented')
@@ -464,9 +464,14 @@ check(
 )
 // Read here, before the dock below is mounted: `calls` is shared, so a check placed after that mount
 // would be reading the dock's requests while describing this page.
+const pageSchedules = calls.find((entry) => entry.body?.action === 'schedules/list')
 check(
-  !calls.some((entry) => entry.body?.action === 'schedules/list'),
-  'the status page does not ask for a conversation it cannot name',
+  Boolean(pageSchedules),
+  'the status page asks for schedules even with no conversation, because the host answers with all of them',
+)
+check(
+  pageSchedules?.body?.sessionId == null,
+  'and it asks without naming a conversation, since it has none to name',
 )
 
 /* --- the panel says whether the running process loaded this code ----------- */
@@ -506,11 +511,11 @@ check(
 
 /* --- the per-conversation controls sit where a conversation arrives --------- */
 
-const dock = bootDock({
+const dock = bootWindow({
   scripted: { status: healthyStatus({ autonomy: 'session-active', autonomyKnown: true }), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } },
 })
 check(
-  dock.options.name === 'conversation.input.dock',
+  dock.options.name === 'shell.overlay',
   'the grant control registers into the session-scoped composer dock',
 )
 // The catalog's own rule: "a fresh id is added beside the shipped entries, while reusing a shipped id
@@ -528,8 +533,8 @@ check(grantText.includes('本会话已授予'), 'a granted conversation says so 
 check(grantText.includes('已授予'), 'and reports the conversation it was told about as granted')
 const dockStatus = calls.find((entry) => (entry.body?.action ?? 'status') === 'status')
 check(
-  dockStatus?.body?.sessionId === 'session-active',
-  'the dock carries the session the shell handed it, rather than discovering one',
+  dockStatus?.body?.sessionId == null,
+  'the window asks for status without a conversation, because it belongs to none',
 )
 
 check(text.includes('在对话里说'), 'an empty schedule list is called out, and names the cheaper path: saying it')
@@ -553,7 +558,7 @@ check(
 
 // The grant button has to be exercised in a conversation that has not been granted: there,
 // and only there, the buttons are the work still to do.
-const freshDock = bootDock({
+const freshDock = bootWindow({
   scripted: {
     status: healthyStatus(),
     'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } },
@@ -571,7 +576,7 @@ await freshPanel.click('授予')
 const grantCall = calls.find((entry) => entry.body?.action === 'autonomy/request')
 check(Boolean(grantCall), 'clicking Grant sends an autonomy/request')
 check(grantCall?.body?.autonomy === true, 'the grant request asks for autonomy: true')
-check(grantCall?.body?.sessionId === 'session-active', 'the grant request is scoped to the active conversation')
+check(grantCall?.body?.sessionId == null, 'minting names no conversation: the token is what the human carries to one')
 check(
   calls.every((entry) => entry.body?.action !== 'autonomy/confirm'),
   'clicking Grant never confirms authority on its own — a token must come back first',
@@ -583,7 +588,7 @@ scriptReplies({
   'autonomy/request': { ok: true, value: { token: 'tok-abc123', autonomy: true, expiresAt: Date.now() + 600000, ttlMs: 600000 } },
 })
 const panel2 = mount(
-  bootDock({ scripted: { status: healthyStatus(), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } } }).component,
+  bootWindow({ scripted: { status: healthyStatus(), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } } }).component,
   { sessionId: 'session-active' },
 )
 await panel2.settle()
@@ -601,7 +606,7 @@ check(panel2.text().includes('tok-abc123'), 'the minted token is displayed for t
 // a number of seconds; "one tap" is the claim, so the check is that the panel offers it *and* that no
 // input is on screen waiting to be filled — a preset that still needs typing is the form again.
 const presetPanel = mount(
-  bootDock({
+  bootWindow({
     scripted: {
       // Granted, this dock is one line by design, so the empty-schedule state below it is not on
       // screen at all. The preset is for a person who is still setting things up, which is the
@@ -613,7 +618,8 @@ const presetPanel = mount(
   { sessionId: 'session-active' },
 )
 await presetPanel.settle()
-check(presetPanel.text().includes('每天看一眼 CI 失败'), 'the empty state offers a preset instead of only a form')
+check(!presetPanel.text().includes('每天看一眼 CI 失败'), 'without a conversation there is no form, so no preset to fill it')
+check(!presetPanel.buttons().some((button) => textOf(button).trim() === '新建'), 'and no control that would open one')
 check(presetPanel.inputs().length === 0, 'and it asks for nothing to be typed before anything happens')
 
 /* --- the resident is visible without opening anything -------------------------------------------- */
@@ -687,7 +693,7 @@ if (process.argv.includes('--demo')) {
     sections: [
       {
         label: '对话输入框上方那条（dock）：常驻、授权、一键自检都在这一条上',
-        // `dock` is the `bootDock()` descriptor — a component plus its options, never mounted — so
+        // `dock` is the `bootWindow()` descriptor — a component plus its options, never mounted — so
         // `dock.tree` was always undefined and this section rendered an empty box. `grantPanel` is the
         // same seat mounted with the session the shell hands over, which is the real case.
         hint: '默认只占一行；点了预设就建好，不需要打字',
@@ -731,55 +737,33 @@ fakeNavigator.clipboard = undefined
 /* --- creating a self-check sends the right payload ------------------------ */
 
 const panel3 = mount(
-  bootDock({ scripted: { status: healthyStatus(), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } } }).component,
+  bootWindow({ scripted: { status: healthyStatus(), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } } }).component,
   { sessionId: 'session-active' },
 )
 await panel3.settle()
 
-// The dock sits in the conversation, so it must cost one line by default. This was measured the
-// other way first: the whole creation form — three labelled inputs and a button — rendered
-// permanently above the message box and took most of a screen. The capability still has to be
-// reachable from here, because `schedules/create` refuses without a conversation, so the form is
-// behind a disclosure rather than gone.
-check(panel3.inputs().length === 0, `the dock renders no inputs until asked; saw ${panel3.inputs().length}`)
-check(!panel3.text().includes('新建自检'), 'and does not show the submit button either')
+// The window carries no conversation, so there is no schedule form here at all: `schedules/create`
+// refuses without one, and a schedule with nowhere to speak is not worth making. This was measured
+// the other way first — the whole form, three labelled inputs and a button, once rendered
+// permanently above the message box and took most of a screen.
+check(panel3.inputs().length === 0, `the window renders no inputs at all; saw ${panel3.inputs().length}`)
+check(!panel3.text().includes('新建自检'), 'and no submit button')
+check(!panel3.buttons().some((button) => textOf(button).trim() === '新建'), 'and nothing that would open a form')
 check(panel3.text().includes('在对话里说'), 'the empty state points at the conversation, which is the cheaper path')
 
-await panel3.click('新建')
-const inputs = panel3.inputs()
-check(inputs.length === 3, `the form renders three fields (title, prompt, minutes); saw ${inputs.length}`)
-
-await panel3.type(0, 'CI watch')
-await panel3.type(1, 'Report only failures.')
-await panel3.type(2, '45')
-await panel3.click('新建自检')
-
-const createCall = calls.find((entry) => entry.body?.action === 'schedules/create')
-check(Boolean(createCall), 'submitting the form sends schedules/create')
-check(createCall?.body?.title === 'CI watch', 'the title is carried through')
-check(createCall?.body?.prompt === 'Report only failures.', 'the prompt is carried through')
-check(createCall?.body?.everySeconds === 2700, `45 minutes becomes 2700 seconds (saw ${createCall?.body?.everySeconds})`)
-check(createCall?.body?.kind === 'interval', 'the created schedule is an interval')
-check(createCall?.body?.sessionId === 'session-active', 'the new schedule is scoped to the active conversation')
-check(panel3.text().includes('不是权限授予'), 'the panel states that a schedule is not a permission grant')
-
-/* --- invalid input is refused locally, without a wasted round trip --------- */
-
-const panel4 = mount(
-  bootDock({ scripted: { status: healthyStatus(), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } } }).component,
-  { sessionId: 'session-active' },
-)
-await panel4.settle()
-await panel4.click('新建')
-await panel4.type(0, 'too often')
-await panel4.type(1, 'x')
-await panel4.type(2, '1')
-await panel4.click('新建自检')
 check(
   !calls.some((entry) => entry.body?.action === 'schedules/create'),
-  'a sub-5-minute interval is refused in the panel rather than sent to the host',
+  'nothing was created: a schedule with no conversation has nowhere to speak',
 )
-check(panel4.text().includes('at least 5 minutes'), 'the refusal says why')
+check(text.includes('不是权限授予'), 'the panel states that a schedule is not a permission grant')
+
+/* --- the form is unreachable without a conversation, on both surfaces ------ */
+
+// This scenario used to drive the form and assert that a sub-5-minute interval is refused locally.
+// The form is now gated on having a conversation and no surface carries one, so that path is
+// unreachable rather than merely untested; the interval rule itself is still covered by the host
+// tests. Keeping the old interaction would only assert that a missing button is missing.
+check(!text.includes('新建自检'), 'the page offers no submit either: with no conversation there is nothing to bind a schedule to')
 
 /* --- an existing schedule can be removed ---------------------------------- */
 
@@ -792,7 +776,7 @@ const panel5 = mount(
         value: { schedules: [{ id: 'sch-1', kind: 'interval', title: 'CI watch', enabled: true, fireCount: 4, dueNow: true }], invalidCount: 0 },
       },
     },
-  }, 'conversation.input.dock'),
+  }, 'shell.overlay'),
   { sessionId: 'session-active' },
 )
 await panel5.settle()
@@ -873,12 +857,14 @@ check(!holdingPanel.text().includes('待命'), 'while the host that holds reside
 // The dock's own seat always carries a session, so the case below cannot arise through the shell; it
 // pins the guard directly, with a prop the shell would not send.
 const panel8 = mount(
-  boot({ scripted: { status: healthyStatus({ autonomyKnown: false }), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } } }, 'conversation.input.dock'),
+  boot({ scripted: { status: healthyStatus({ autonomyKnown: false }), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } } }, 'shell.overlay'),
   { sessionId: null },
 )
 await panel8.settle()
 const grantButton = panel8.buttons().find((button) => textOf(button).trim() === '授予')
-check(grantButton?.props?.disabled === true, 'a grant button without a conversation is disabled, not a no-op')
+check(grantButton?.props?.disabled !== true, 'grant needs no conversation, so it is not disabled')
+const revokeButton8 = panel8.buttons().find((button) => textOf(button).trim() === '撤销')
+check(revokeButton8?.props?.disabled === true, 'but revoke does, so it is disabled rather than silently doing nothing')
 
 /* --- a host failure is surfaced, not swallowed ---------------------------- */
 
