@@ -680,36 +680,6 @@ check(
 // trees it just rendered as a standalone page. It is generated here, from the same components the
 // checks drive, because a hand-written preview drifts: the checks keep passing while the file on disk
 // quietly shows the previous design.
-if (process.argv.includes('--demo')) {
-  const demoPath = process.argv[process.argv.indexOf('--demo') + 1] || 'docs/demo.html'
-  const { mkdirSync, writeFileSync } = await import('node:fs')
-  const { demoPage } = await import('./panel-tree.mjs')
-  const demoMain = mount(component, {})
-  await demoMain.settle()
-
-  const page = demoPage({
-    title: 'dsh-den 面板预览',
-    generatedBy: '由 tools/check-client-interaction.mjs 生成',
-    sections: [
-      {
-        label: '对话输入框上方那条（dock）：常驻、授权、一键自检都在这一条上',
-        // `dock` is the `bootWindow()` descriptor — a component plus its options, never mounted — so
-        // `dock.tree` was always undefined and this section rendered an empty box. `grantPanel` is the
-        // same seat mounted with the session the shell hands over, which is the real case.
-        hint: '默认只占一行；点了预设就建好，不需要打字',
-        tree: grantPanel.tree,
-      },
-      {
-        label: '页面座位（默认视图，按下 [详情] 之前）',
-        hint: '一行状态白话；八行技术指标收在 [详情] 里；异常状态自动展开',
-        tree: demoMain.tree,
-      },
-    ],
-  })
-  mkdirSync('docs', { recursive: true })
-  writeFileSync(demoPath, page, 'utf8')
-  console.log('demo written:', demoPath, page.length, 'bytes')
-}
 check(panel2.text().includes('一次性'), 'the panel explains the token is single-use')
 
 /* --- carrying the token is one click, and a copy that did not happen says so --- */
@@ -1061,6 +1031,58 @@ check(
   'and does not surface a JSON parse error in its place',
 )
 transport.raw = null
+
+/* ----------------------------------------------------------------- preview page */
+
+// How the panel looks is decided by a human, not by an assertion, so the harness emits the very
+// trees it just rendered as a standalone page — generated here, from the same components the checks
+// drive, because a hand-written preview drifts: the checks keep passing while the file on disk
+// quietly shows the previous design.
+//
+// It sits *below* every scenario on purpose. `panelTalk` and `panelPill` are `const`s declared with
+// the other scenarios, so a preview above them could not name them at all — which is how the two
+// seats ① retired kept being what this page showed, with the floating window mislabelled as the old
+// dock and the collapsed pill absent.
+if (process.argv.includes('--demo')) {
+  const demoPath = process.argv[process.argv.indexOf('--demo') + 1] || 'docs/demo.html'
+  const { mkdirSync, writeFileSync } = await import('node:fs')
+  const { demoPage } = await import('./panel-tree.mjs')
+  const demoMain = mount(component, {})
+  await demoMain.settle()
+
+  const page = demoPage({
+    title: 'dsh-den 浮窗预览',
+    generatedBy: '由 tools/check-client-interaction.mjs 生成',
+    sections: [
+      {
+        label: '① 浮窗卡片：全屏唯一的 den 落点（shell.overlay）',
+        // `dock` here is the `shell.overlay` entry — the descriptor, not the retired input dock its
+        // old label named. `grantPanel` is that component mounted with the session the shell hands
+        // over, which is the real case; it pairs with the `main, shell.overlay` injection check.
+        hint: '右下角 420px 卡片；按住顶部条可拖；[–] 收成胶囊；没有对话时提示说一句就开始',
+        tree: grantPanel.tree,
+      },
+      {
+        label: '② 浮窗里的消息流：可滚动、可直接发话',
+        hint: '演示数据。一轮问答；发完立即重读，所以自己的话先出现，回复随后到',
+        tree: panelTalk.tree,
+      },
+      {
+        label: '① 收成胶囊：缩小不等于失明，胶囊上仍然报信息',
+        hint: '常驻中 / 心跳 / 预算 / 待重启都在这一行白话里，点开回到卡片',
+        tree: panelPill.tree,
+      },
+      {
+        label: '整页面板（main）：打开 den 自己的页面时',
+        hint: '一行状态白话；八行技术指标收在 [详情] 里；异常状态自动展开',
+        tree: demoMain.tree,
+      },
+    ],
+  })
+  mkdirSync('docs', { recursive: true })
+  writeFileSync(demoPath, page, 'utf8')
+  console.log('demo written:', demoPath, page.length, 'bytes')
+}
 
 /* ----------------------------------------------------------------- report */
 
