@@ -66,6 +66,13 @@ const React = {
     if (!previous || !sameDeps(previous.deps, deps)) hooks.slots[index] = { fn, deps }
     return hooks.slots[index].fn
   },
+  useRef(value) {
+    const hooks = activeHooks
+    const index = hooks.cursor
+    hooks.cursor += 1
+    if (!(index in hooks.slots)) hooks.slots[index] = { current: value }
+    return hooks.slots[index]
+  },
   useEffect(fn, deps) {
     const hooks = activeHooks
     const index = hooks.cursor
@@ -166,6 +173,17 @@ const fakeStorage = (() => {
   }
 })()
 
+const fakeResizeObservers = []
+class FakeResizeObserver {
+  constructor(callback) {
+    this.callback = callback
+    this.target = null
+    fakeResizeObservers.push(this)
+  }
+  observe(target) { this.target = target }
+  disconnect() { this.target = null }
+}
+
 {
   const sandbox = {
     navigator: fakeNavigator,
@@ -175,6 +193,7 @@ const fakeStorage = (() => {
       // action state that no DOM would otherwise expose.
       __dshDenDebug: (event) => sinkLog.push(event),
       localStorage: fakeStorage,
+      ResizeObserver: FakeResizeObserver,
     },
     // The bundle reaches the host with the browser's own `fetch`, exactly like the
     // other client plugins. It is a global, not a `window` property, so it belongs
@@ -1023,11 +1042,29 @@ check(scrollArea.length === 1, 'the transcript has exactly one scrolling area of
 check(Number(scrollArea[0]?.props?.style?.maxHeight) > 0, 'and that area is bounded, so the window cannot grow with the transcript')
 /* --- the window places and paints itself, because the layer gives it neither --- */
 
-const cardNodes = findAll(panelTalk.tree, (n) => n.props?.style?.position === 'absolute' && n.props?.style?.width === 420)
+const cardNodes = findAll(panelTalk.tree, (n) => n.props?.style?.position === 'absolute' && n.props?.style?.width === 360)
 check(cardNodes.length === 1, 'the open window places and sizes itself instead of becoming a strip across the top')
 check(cardNodes[0]?.props?.style?.right === 24 && cardNodes[0]?.props?.style?.bottom === 24, 'and anchors itself off the header and the tabs until it is moved')
 check(String(cardNodes[0]?.props?.style?.background || '').includes('--dsw-alias-bg-overlay'), 'and paints a surface rather than reading as page furniture')
 check(cardNodes[0]?.props?.style?.zIndex === 60, 'and sits above the page it floats over')
+check(cardNodes[0]?.props?.style?.height === 260, 'and starts with a compact desktop-pet footprint')
+check(cardNodes[0]?.props?.style?.resize === 'both', 'and exposes a native two-axis resize affordance')
+check(cardNodes[0]?.props?.style?.minWidth === 260 && cardNodes[0]?.props?.style?.minHeight === 190, 'and keeps the pet usable at its smallest size')
+check(cardNodes[0]?.props?.['aria-label'] === '常驻会话', 'and gives the floating pet an accessible identity')
+
+fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false, width: 300, height: 220 }))
+const rememberedSizeWindow = mount(bootWindow({ scripted: { status: healthyStatus() } }).component, {})
+const rememberedSizeCard = findAll(rememberedSizeWindow.tree, (node) => node.props?.style?.position === 'absolute' && node.props?.style?.resize === 'both')[0]
+check(rememberedSizeCard?.props?.style?.width === 300 && rememberedSizeCard?.props?.style?.height === 220, 'and reopens at the dimensions the person chose')
+const resizeTarget = { getBoundingClientRect: () => ({ width: 412, height: 318 }) }
+if (rememberedSizeCard?.props?.ref) rememberedSizeCard.props.ref.current = resizeTarget
+await rememberedSizeWindow.settle()
+const resizeObserver = fakeResizeObservers[fakeResizeObservers.length - 1]
+resizeObserver?.callback([{ target: resizeTarget }])
+await rememberedSizeWindow.settle()
+const rememberedAfterResize = JSON.parse(fakeStorage.getItem('dsh-den.mini') || '{}')
+check(rememberedAfterResize.width === 412 && rememberedAfterResize.height === 318, 'and remembers a later resize through the same preference blob')
+fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false }))
 /* --- a host that has not been reloaded: say so, and disable what cannot work --- */
 
 fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false }))
@@ -1156,7 +1193,7 @@ if (process.argv.includes('--demo')) {
         // `dock` here is the `shell.overlay` entry — the descriptor, not the retired input dock its
         // old label named. `grantPanel` is that component mounted with the session the shell hands
         // over, which is the real case; it pairs with the `main, shell.overlay` injection check.
-        hint: '右下角 420px 卡片；按住顶部条可拖；[–] 收成胶囊；没有对话时提示说一句就开始',
+        hint: '默认 360×260；按住顶部条移动，拖右下角调整大小；[–] 收成胶囊',
         tall: true,
         tree: grantPanel.tree,
       },

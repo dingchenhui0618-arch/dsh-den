@@ -119,6 +119,7 @@ window.__ModuleLoader__.load({
         collapse: 'shut it',
         openPanel: 'Open den panel',
         floatingLabel: 'standing chat',
+        resizeHint: 'Drag the corner to resize',
         tasksShort: 'in progress',
         tasksStuck: 'stuck',
         tasksWaiting: 'waiting on you',
@@ -207,6 +208,7 @@ window.__ModuleLoader__.load({
         collapse: '收起',
         openPanel: '打开 den 面板',
         floatingLabel: '常驻会话',
+        resizeHint: '拖动右下角调整大小',
         tasksShort: '进行中',
         tasksStuck: '卡住',
         tasksWaiting: '等你',
@@ -1651,7 +1653,7 @@ window.__ModuleLoader__.load({
 
       return React.createElement(
         'div',
-        { style: { padding: '8px 10px 10px', background: 'var(--dsw-alias-bg-layer-1)' } },
+        { style: { display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: 0, overflow: 'hidden', padding: '8px 10px 10px', background: 'var(--dsw-alias-bg-layer-1)' } },
         // The transcript accumulates; the model's context does not. This says so in the one place a
         // reader would otherwise assume they are looking at everything.
         view.phase === 'older'
@@ -1662,7 +1664,7 @@ window.__ModuleLoader__.load({
           : null,
         React.createElement(
           'div',
-          { style: { maxHeight: 260, overflowY: 'auto', padding: '4px 2px', borderRadius: 10 } },
+          { style: { flex: '1 1 auto', minHeight: 56, maxHeight: 260, overflowY: 'auto', padding: '4px 2px', borderRadius: 10 } },
           allRows.length
             ? allRows
             : React.createElement('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', margin: '6px 0' } }, t('sayEmpty')),
@@ -1681,7 +1683,7 @@ window.__ModuleLoader__.load({
           : null,
         React.createElement(
           'div',
-          { style: { display: 'flex', gap: 6, alignItems: 'center', marginTop: 6 } },
+          { style: { display: 'flex', flex: '0 0 auto', gap: 6, alignItems: 'center', marginTop: 6 } },
           React.createElement('input', {
             value: typed,
             placeholder: view.phase === 'older' ? t('sayHostOld') : t('sayPlaceholder'),
@@ -1733,6 +1735,17 @@ window.__ModuleLoader__.load({
             })
             var place = placeState[0]
             var setPlace = placeState[1]
+            var sizeState = React.useState(function () {
+              var width = Number(miniPref('width'))
+              var height = Number(miniPref('height'))
+              return {
+                width: Number.isFinite(width) && width >= 260 ? width : 360,
+                height: Number.isFinite(height) && height >= 190 ? height : 260,
+              }
+            })
+            var size = sizeState[0]
+            var setSize = sizeState[1]
+            var cardRef = React.useRef(null)
             var dragState = React.useState(false)
             var isDragging = dragState[0]
             var setDragging = dragState[1]
@@ -1790,6 +1803,26 @@ window.__ModuleLoader__.load({
             var setStatus = snapshot[1]
 
             React.useEffect(function () {
+              if (!open || !cardRef.current || typeof window === 'undefined' || typeof window.ResizeObserver !== 'function') return undefined
+              var observer = new window.ResizeObserver(function (entries) {
+                var target = entries && entries[0] && entries[0].target
+                if (!target || typeof target.getBoundingClientRect !== 'function') return
+                var rect = target.getBoundingClientRect()
+                var width = Math.round(rect.width)
+                var height = Math.round(rect.height)
+                if (!Number.isFinite(width) || !Number.isFinite(height) || width < 260 || height < 190) return
+                setSize(function (previous) {
+                  if (previous.width === width && previous.height === height) return previous
+                  setMiniPref('width', width)
+                  setMiniPref('height', height)
+                  return { width: width, height: height }
+                })
+              })
+              observer.observe(cardRef.current)
+              return function () { observer.disconnect() }
+            }, [open])
+
+            React.useEffect(function () {
               if (open) {
                 setStatus(null)
                 return undefined
@@ -1812,14 +1845,23 @@ window.__ModuleLoader__.load({
               return React.createElement(
                 'div',
                 {
+                  ref: cardRef,
+                  role: 'dialog',
+                  'aria-label': t('floatingLabel'),
                   style: Object.assign(
                     {
                       pointerEvents: 'auto',
-                      // A fixed width, because a shrink-to-fit card behind a message stream
-                      // collapses to whatever the last message happened to be.
-                      width: 420,
-                      maxWidth: 'calc(100vw - 32px)',
-                      maxHeight: '72vh',
+                      // The browser's native resize affordance makes this feel like a small desktop
+                      // pet instead of a disposable panel. Dimensions are observed and remembered
+                      // below, so the human's preferred footprint survives a DSH reload.
+                      width: size.width,
+                      height: size.height,
+                      minWidth: 260,
+                      minHeight: 190,
+                      maxWidth: 'calc(100vw - 24px)',
+                      maxHeight: 'calc(100vh - 24px)',
+                      boxSizing: 'border-box',
+                      resize: 'both',
                       overflow: 'hidden',
                       display: 'flex',
                       flexDirection: 'column',
@@ -1884,6 +1926,7 @@ window.__ModuleLoader__.load({
                                 // The strip, not the panel: the grant has to stay reachable from the surface that is
                                 // always on screen, but its numbers and schedules belong on den's page.
                                 React.createElement(DenPanel, { t: t, act: act, sessionId: null, compact: true, stripOnly: true }),
+                React.createElement('span', { 'aria-hidden': true, title: t('resizeHint'), style: { position: 'absolute', right: 6, bottom: 5, pointerEvents: 'none', color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1, opacity: 0.8 } }, '◢'),
               )
             }
 

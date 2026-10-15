@@ -122,6 +122,7 @@ const baseline = {
     useState: (initial) => [initial, () => {}],
     useEffect: () => {},
     useCallback: (fn) => fn,
+    useRef: (value) => ({ current: value }),
   },
 }
 let exportsValue = null
