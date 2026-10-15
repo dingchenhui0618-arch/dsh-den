@@ -29,6 +29,8 @@ process.env.DSH_HOME = home
 const { DenService } = await import('../src/index.js')
 const { dueTriggers } = await import('../src/triggers.js')
 const { watcherSeenPath } = await import('../src/watcher.js')
+const { DenKernel } = await import('../src/kernel.js')
+const { digest } = await import('../src/atom.js')
 
 const OTHER = 'other-session-id'
 const DEN = 'den-own-session-id'
@@ -121,6 +123,79 @@ test('another conversation failing makes den schedule a wake in its own, unasked
   const seen = JSON.parse(String(readFileSync(watcherSeenPath(), 'utf8')))
   assert.equal(typeof seen.sessions[OTHER].size, 'number')
   assert.equal(typeof seen.alerted[`${OTHER}:${seen.sessions[OTHER].size}`], 'number')
+})
+
+test('the heartbeat delivers the wake the watcher scheduled, into the den conversation', async () => {
+  // A second, independent store: the test above already taught the watcher about its session.
+  rmSync(watcherSeenPath(), { force: true })
+  rmSync(join(home, 'den', 'triggers'), { recursive: true, force: true })
+  rmSync(join(home, 'den', 'ledger'), { recursive: true, force: true })
+  rmSync(join(home, 'den', 'pacing.json'), { force: true })
+
+  const other = 'second-other-session'
+  const otherDir = join(home, 'sessions', '--C-Users-someone-project--', other)
+  const otherLog = join(otherDir, 'session.v4.jsonl.zstd')
+  mkdirSync(otherDir, { recursive: true })
+  writeFileSync(otherLog, frame([asked('build it'), fine()]))
+
+  const { service, conversationPath } = serviceForTest()
+  service.scanSessions({ now: 1000, conversationPath })
+  appendFileSync(otherLog, frame([failed('the tool call was refused')]))
+  const noticed = service.scanSessions({ now: 2000, conversationPath })
+  assert.equal(noticed.attention.length, 1, 'the watcher noticed without being asked')
+
+  const scheduled = dueTriggers(2500)
+  assert.equal(scheduled.length, 1)
+  assert.equal(scheduled[0].trigger.sessionId, DEN)
+
+  // Standing autonomy, granted the way the plugin grants it: a verifiable human turn in the conversation plus
+  // a grant recorded beside the session id. Without it the authority gate refuses, which is the intended
+  // answer for a conversation nobody has authorised.
+  const humanMessageId = 'msg-human-1'
+  const agent = {
+    id: 'agent-watch',
+    status: 'running',
+    session: {
+      id: DEN,
+      events: [
+        { seq: 1, type: 'turn/start' },
+        { seq: 2, type: 'user/message', data: { id: humanMessageId, source: { kind: 'user' } } },
+      ],
+    },
+  }
+  const grantsDir = join(home, 'den', 'grants')
+  mkdirSync(grantsDir, { recursive: true })
+  writeFileSync(
+    join(grantsDir, `${digest(DEN)}.json`),
+    JSON.stringify({
+      version: 1,
+      sessionId: DEN,
+      autonomy: true,
+      humanMessageId,
+      humanSeq: 2,
+      recordedAfterSeq: 2,
+    }),
+  )
+
+  const delivered = []
+  const kernel = new DenKernel({
+    service: { state: () => ({ dailyTurnBudget: 50, cooldownSeconds: 0, quietHours: null }) },
+    grantsDir,
+    deliver: async ({ trigger, instruction, agent: resolved }) => {
+      delivered.push({ trigger, instruction, agentId: resolved?.id })
+      return 'Another conversation failed; I read it and there is nothing to do yet.'
+    },
+  })
+
+  const result = await kernel.tick({ agent, now: 3000 })
+  assert.equal(result.results.length, 1, 'the heartbeat picked up the wake nobody asked for')
+  assert.equal(delivered.length, 1)
+  assert.equal(delivered[0].trigger.id, scheduled[0].trigger.id, 'the same wake, not a re-invented one')
+  assert.equal(delivered[0].trigger.sessionId, DEN)
+  assert.match(delivered[0].trigger.prompt, /the tool call was refused/)
+  assert.equal(delivered[0].agentId, 'agent-watch', 'delivered to the den conversation, not the watched one')
+  assert.equal(typeof delivered[0].instruction, 'string')
+  assert.equal(dueTriggers(4000).length, 0, 'a one-shot wake is consumed, not repeated')
 })
 
 test.after(() => {
