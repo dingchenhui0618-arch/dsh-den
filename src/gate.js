@@ -161,6 +161,20 @@ const OUTBOUND_PATTERNS = [
 ]
 
 /**
+ * The session-inspection flow reuses one directory owned by DSH itself.  Its cleanup is still
+ * written with `Remove-Item -Recurse -Force`, so the general recursive-delete rule would turn a
+ * harmless ZIP inspection into an approval request.  Keep this exception deliberately tied to
+ * the exact scratch name and to the command assigning it from TEMP; an arbitrary recursive
+ * delete, including another temporary path, must continue to ask.
+ */
+const DSH_SESSION_SCRATCH_CLEANUP =
+  /\$dst\s*=\s*["']?\$env:TEMP\\dsh-sess["']?[\s\S]*?Test-Path\s+\$dst[\s\S]*?Remove-Item\s+\$dst\b[^|]*-Recurse\b[^|]*-Force\b/i
+
+function isDshSessionScratchCleanup(text) {
+  return DSH_SESSION_SCRATCH_CLEANUP.test(String(text ?? ''))
+}
+
+/**
  * The tools whose arguments are a command line the Host will actually execute.
  *
  * The outbound rules describe **actions** — uploading, publishing, deleting a tree. A tool that
@@ -427,6 +441,7 @@ export function classifyCall(exec) {
   // Only where the arguments are a command line that runs. See EXECUTING_TOOLS.
   if (EXECUTING_TOOLS.has(name)) {
     for (const rule of OUTBOUND_PATTERNS) {
+      if (rule.id === 'recursive-delete' && isDshSessionScratchCleanup(text)) continue
       if (rule.pattern.test(text)) {
         const destination = destinationOf(text)
         return {

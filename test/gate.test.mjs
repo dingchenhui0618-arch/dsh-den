@@ -70,6 +70,25 @@ test('actions that reach outside ask before running', () => {
   }
 })
 
+test('DSH session ZIP scratch cleanup stays usable while other recursive deletes ask', () => {
+  const inspectSession = [
+    `$zip = 'D:\\Downloads\\session.zip'`,
+    '$dst = "$env:TEMP\\dsh-sess"',
+    'if (Test-Path $dst) { Remove-Item $dst -Recurse -Force }',
+    'Expand-Archive -Path $zip -DestinationPath $dst -Force',
+  ].join('\n')
+
+  const cleanup = classifyCall(call('pwsh', { command: inspectSession }))
+  assert.equal(cleanup.risk, RISK.allow)
+  assert.equal(cleanup.rule, 'tool:pwsh')
+
+  const otherTempPath = classifyCall(
+    call('pwsh', { command: 'Remove-Item "$env:TEMP\\other-dir" -Recurse -Force' }),
+  )
+  assert.equal(otherTempPath.risk, RISK.ask)
+  assert.equal(otherTempPath.rule, 'outbound:recursive-delete')
+})
+
 test('an outbound reason names the destination, because local and remote are not the same claim', () => {
   // The command strings below are assembled from pieces on purpose. The gate flattens the
   // arguments of *every* tool call and tests every rule against that text, without looking at
