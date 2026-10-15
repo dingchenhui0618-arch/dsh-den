@@ -565,6 +565,7 @@ export class DenService {
        * contract cannot be checked statically; the only honest check is at runtime.
        */
       wakeApi: this.probeWakeApi ? this.probeWakeApi() : { checked: false, reason: 'not wired' },
+      sessionApi: this.probeSessionApi ? this.probeSessionApi() : { checked: false, reason: 'not wired' },
       recentEvents: this.recentEvents.slice(-10),
     }
   }
@@ -1351,6 +1352,41 @@ export function apply(ctx) {
       }
     }
     service.probeWakeApi = probeWakeApi
+
+    /**
+     * Whether this host can be told to install a session-local model, before a prompt is admitted.
+     *
+     * Measured live on 2026-10-15 at 09:12:51: the first autonomous turn after a restart ended in
+     * 'prompt variable "{{model}}" has no value for this assembly (section "deployment:persona-prefix")'.
+     * `SessionPromptRequest` is `{ requestId, sessionId, mode, content, clientTimeZone? }` and carries no model;
+     * `SessionCreateRequest` carries none either. The model is session-local, installed through
+     * `sessionController.selectModel` — declared `@Remote('selectModel')`, so whether it also exists on the
+     * local service object is a runtime fact, not a readable one. This reports both carriers, so that a fix
+     * which degrades gracefully cannot hide behind its own no-op.
+     */
+    const probeSessionApi = () => {
+      try {
+        const controller = ctx.get?.('sessionController')
+        if (!controller) return { checked: false, reason: 'the sessionController service is not wired in this profile' }
+        const remote = ctx.get?.('remote')
+        const remoteSession = remote && typeof remote === 'object' ? remote.session : null
+        return {
+          checked: true,
+          contract: {
+            prompt: typeof controller.prompt === 'function',
+            selectModel: typeof controller.selectModel === 'function',
+            resolveAgent: typeof controller.resolveAgent === 'function',
+          },
+          remote: {
+            present: Boolean(remoteSession),
+            selectModel: Boolean(remoteSession && typeof remoteSession.selectModel === 'function'),
+          },
+        }
+      } catch (error) {
+        return { checked: false, reason: `probing the session controller threw: ${error?.message ?? error}` }
+      }
+    }
+    service.probeSessionApi = probeSessionApi
 
     // One state tree, one resident heartbeat. Claimed per tick rather than at mount, so a host
     // that loses the race keeps running and picks residency back up if the holder dies. See

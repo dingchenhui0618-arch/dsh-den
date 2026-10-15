@@ -101,6 +101,16 @@ export function statusSnapshot(service, { sessionId, nextTriggerAt } = {}) {
      * is that adding a field is a two-file change and only one of them fails loudly.
      */
     wakeApi: status.wakeApi ?? null,
+    /**
+     * The session controller's real contract, measured at runtime.
+     *
+     * A prompt is assembled with a session-local model — `SessionPromptRequest` is `{ requestId, sessionId,
+     * mode, content, clientTimeZone? }` and carries none — so a fix that installs one through
+     * `sessionController.selectModel` degrades to a silent no-op on a host whose local service object has no
+     * such method. This field is what tells a working fix from a graceful nothing, in the running route
+     * rather than in a test's imagination.
+     */
+    sessionApi: status.sessionApi ?? null,
     /** Which process is answering, so "has this Host loaded my change" is answerable. */
     pid: status.pid ?? null,
     startedAt: status.startedAt ?? null,

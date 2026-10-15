@@ -137,6 +137,22 @@ test('a service that cannot measure the wake surface reports null, not a fabrica
   assert.equal(snap.wakeApi, null, 'absence must be reported as absence')
 })
 
+test('the panel payload carries the session contract through, including a missing model installer', () => {
+  // The model a prompt is assembled with is session-local, and `SessionPromptRequest` has no model field: a
+  // fix that installs one therefore degrades to a no-op on a host whose local service object lacks
+  // `selectModel`. This field is what tells a working fix from a graceful nothing, in the route the drill reads.
+  const measured = {
+    checked: true,
+    contract: { prompt: true, selectModel: false, resolveAgent: true },
+    remote: { present: false, selectModel: false },
+  }
+  const service = stubService()
+  service.status = () => ({ ...stubService().status(), sessionApi: measured })
+  const snap = statusSnapshot(service, { nextTriggerAt: () => 1 })
+  assert.deepEqual(snap.sessionApi, measured, 'the contract must survive the allow-list')
+  assert.equal(statusSnapshot(stubService(), { nextTriggerAt: () => 1 }).sessionApi, null, 'and absence is absence')
+})
+
 test('the route hands over what the request said about itself, not a verdict about it', async () => {
   // `firstReachedAt` answers "did anything ever arrive". It cannot answer "is the panel in a
   // browser talking to this route now", because a deployment probe and a polling panel are
