@@ -24,6 +24,11 @@ export const WATCH_SEEN_FILE = 'sessions-seen.json'
 export const LOG_NAME = 'session.v4.jsonl.zstd'
 export const DEFAULT_TAIL_BYTES = 262144
 export const DEFAULT_MAX_SESSIONS = 300
+/**
+ * How far the tail window may grow while looking for the last turn ending. Bounded on purpose: the point of
+ * reading a tail at all is that a 31 MB log must not be decompressed in full on a heartbeat.
+ */
+export const MAX_TAIL_BYTES = 4 * 1024 * 1024
 
 export function watcherSeenPath() {
   return denPath(WATCH_SEEN_FILE)
@@ -73,15 +78,14 @@ export function scanSessionLogs({ root = watcherSessionsRoot(), exclude = [], ma
  * `decodeLog` already skips a candidate that will not decompress, so a partial leading frame costs
  * nothing but is never trusted.
  */
-export function tailEvents(path, size, { tailBytes = DEFAULT_TAIL_BYTES, keep = 24 } = {}) {
-  if (!Number.isFinite(size) || size <= 0) return []
-  const length = Math.min(tailBytes, size)
+/** One bounded read of the last `length` bytes, decoded. Binary-search-free: the window only grows. */
+function readTail(path, size, length) {
   const buffer = Buffer.alloc(length)
   let fd = null
   try {
     fd = openSync(path, 'r')
     const read = readSync(fd, buffer, 0, length, size - length)
-    return decodeLog(buffer.subarray(0, read)).slice(-keep)
+    return decodeLog(buffer.subarray(0, read))
   } catch (error) {
     return []
   } finally {
@@ -95,10 +99,36 @@ export function tailEvents(path, size, { tailBytes = DEFAULT_TAIL_BYTES, keep = 
   }
 }
 
+/**
+ * The last events of a log, read from its tail.
+ *
+ * The window starts small — one `readSync` into a fixed buffer — and grows while the events it holds contain
+ * no `turn/end`. Two things make that necessary rather than tidy: one write is one frame, and a long turn can
+ * be a frame larger than the starting window, so a fixed window can contain no complete frame at all and a
+ * failing turn would be missed. Growth stops at `maxTailBytes`, so a 31 MB log is still never read whole; the
+ * caller gets the empty answer instead of a heartbeat that decompresses everything.
+ */
+export function tailEvents(
+  path,
+  size,
+  { tailBytes = DEFAULT_TAIL_BYTES, keep = 24, maxTailBytes = MAX_TAIL_BYTES } = {},
+) {
+  if (!Number.isFinite(size) || size <= 0) return []
+  const ceiling = Math.min(Math.max(maxTailBytes, tailBytes), size)
+  let length = Math.min(tailBytes, size)
+  let events = readTail(path, size, length)
+  while (!events.some((event) => event?.type === 'turn/end') && length < ceiling) {
+    length = Math.min(length * 4, ceiling)
+    events = readTail(path, size, length)
+  }
+  return events.slice(-keep)
+}
+
 /** What the tail says about a session, in the few fields a decision needs. */
 export function summariseTail(events) {
   const types = new Map()
   let error = ''
+  let errorAt = 0
   let lastAt = 0
   let spoke = false
   for (const event of events || []) {
@@ -109,10 +139,14 @@ export function summariseTail(events) {
     if (type === 'assistant/message') spoke = true
     if (type === 'turn/end') {
       const reason = event.data?.reason
-      error = reason?.kind === 'error' && typeof reason.error?.message === 'string' ? reason.error.message.slice(0, 200) : ''
+      const failed = reason?.kind === 'error' && typeof reason.error?.message === 'string'
+      error = failed ? reason.error.message.slice(0, 200) : ''
+      // Which turn failed, not how big the file is: appending anything at all — including the human
+      // replying — used to change the size and make den report the same old error a second time.
+      errorAt = failed ? at : 0
     }
   }
-  return { types, lastAt, error, spoke }
+  return { types, lastAt, error, errorAt, spoke }
 }
 
 /** One `stat` fingerprint per session, plus what the tail said when it changed. */
@@ -147,6 +181,7 @@ export function observeSessionActivity({
       rewritten: Boolean(prior) && log.size < prior.size,
       adopted: isNew,
       error: summary.error,
+      errorAt: summary.errorAt,
       spoke: summary.spoke,
       lastAt: summary.lastAt,
     })
@@ -155,9 +190,15 @@ export function observeSessionActivity({
   return { seen: next, changes, attention, adopted, watched: logs.length }
 }
 
-/** Whether this sighting is worth waking for, given what has already been alerted. */
+/**
+ * The identity of one thing worth alerting about: which turn failed, not how big the log had become.
+ *
+ * Keyed on the file size, den re-reported the same error every time the conversation moved on — a reply from
+ * the human was enough. Keyed on the failing turn, it is reported once. The size stays as the fallback so a
+ * caller that has no `turn/end` instant still gets a stable key.
+ */
 export function alertKey(item) {
-  return `${item.sessionId}:${item.size}`
+  return item && item.errorAt ? `${item.sessionId}:turn@${item.errorAt}` : `${item.sessionId}:size@${item?.size}`
 }
 
 export function shouldAlert(item, alerted = {}) {

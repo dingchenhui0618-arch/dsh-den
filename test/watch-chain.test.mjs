@@ -120,10 +120,15 @@ test('another conversation failing makes den schedule a wake in its own, unasked
   assert.equal(summaryAfterThird.attention, 0, 'the third scan saw nothing new')
   assert.equal(summaryAfterThird.queued, 0, 'and queued nothing, which is what "already alerted" means')
 
-  // The scan state is real and durable, in the temp home.
+  // The scan state is real and durable, in the temp home, and the alert is keyed on the failing turn.
   const seen = JSON.parse(String(readFileSync(watcherSeenPath(), 'utf8')))
   assert.equal(typeof seen.sessions[OTHER].size, 'number')
-  assert.equal(typeof seen.alerted[`${OTHER}:${seen.sessions[OTHER].size}`], 'number')
+  const failingTurn = second.attention[0]
+  assert.equal(
+    typeof seen.alerted[`${OTHER}:turn@${failingTurn.errorAt}`],
+    'number',
+    'keyed on the turn that failed, not on how big the log had grown',
+  )
 })
 
 test('the heartbeat delivers the wake the watcher scheduled, into the den conversation', async () => {
