@@ -8,7 +8,9 @@
  */
 
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import test from 'node:test'
 
 const { DEFAULT_RISK, RISK, classifyCall, decide, flattenArgs, installGate } = await import('../src/gate.js')
@@ -17,6 +19,12 @@ const { DEFAULT_RISK, RISK, classifyCall, decide, flattenArgs, installGate } = a
 const { secretShapedPath } = await import('./support/fixtures.mjs')
 
 const call = (name, args) => ({ name, arguments: args })
+
+// The live profile may intentionally set approval.json to "off" so ordinary DSH tool calls
+// are not turned into host-level rejections. These unit tests exercise the guarded path itself,
+// so give them an isolated den home with no switch; missing means the gate is on by design.
+const gateTestDir = mkdtempSync(join(tmpdir(), 'dsh-den-gate-test-'))
+test.after(() => rmSync(gateTestDir, { recursive: true, force: true }))
 
 // ------------------------------------------------------------- secret reads
 
@@ -365,7 +373,7 @@ function fakeCtx() {
 
 test('installing the gate mounts both a pre-execute listener and a monotonic guard', () => {
   const ctx = fakeCtx()
-  const dispose = installGate(ctx, { tools: ctx.tools })
+  const dispose = installGate(ctx, { tools: ctx.tools, dir: gateTestDir })
   assert.ok(ctx.listeners.has('tools/pre-execute'))
   assert.equal(ctx.guards.length, 1)
 
@@ -376,7 +384,7 @@ test('installing the gate mounts both a pre-execute listener and a monotonic gua
 
 test('the pre-execute listener delegates to next() for an allowed call', async () => {
   const ctx = fakeCtx()
-  installGate(ctx, { tools: ctx.tools })
+  installGate(ctx, { tools: ctx.tools, dir: gateTestDir })
   let delegated = false
   const result = await ctx.listeners.get('tools/pre-execute')(
     { name: 'web_search', arguments: { query: 'x' } },
@@ -391,7 +399,7 @@ test('the pre-execute listener delegates to next() for an allowed call', async (
 
 test('the pre-execute listener returns ask without delegating', async () => {
   const ctx = fakeCtx()
-  installGate(ctx, { tools: ctx.tools })
+  installGate(ctx, { tools: ctx.tools, dir: gateTestDir })
   const result = await ctx.listeners.get('tools/pre-execute')(
     { name: 'bash', arguments: { command: 'git push' } },
     () => {
@@ -403,7 +411,7 @@ test('the pre-execute listener returns ask without delegating', async () => {
 
 test('the monotonic guard denies a secret read even though pre-execute ran first', () => {
   const ctx = fakeCtx()
-  installGate(ctx, { tools: ctx.tools })
+  installGate(ctx, { tools: ctx.tools, dir: gateTestDir })
   // The guard is the backstop: it does not care what the waterfall decided.
   const reason = ctx.guards[0]({ name: 'read', arguments: { path: '~/.dsh/.credentials.yaml' } })
   assert.equal(typeof reason, 'string')
@@ -412,14 +420,14 @@ test('the monotonic guard denies a secret read even though pre-execute ran first
 
 test('the guard stays silent on an ordinary call', () => {
   const ctx = fakeCtx()
-  installGate(ctx, { tools: ctx.tools })
+  installGate(ctx, { tools: ctx.tools, dir: gateTestDir })
   assert.equal(ctx.guards[0]({ name: 'read', arguments: { path: 'src/index.js' } }), undefined)
 })
 
 test('every decision the gate makes is reported for auditing', async () => {
   const ctx = fakeCtx()
   const seen = []
-  installGate(ctx, { tools: ctx.tools, onDecision: (entry) => seen.push(entry) })
+  installGate(ctx, { tools: ctx.tools, dir: gateTestDir, onDecision: (entry) => seen.push(entry) })
 
   await ctx.listeners.get('tools/pre-execute')(
     { name: 'bash', arguments: { command: 'git push' } },
