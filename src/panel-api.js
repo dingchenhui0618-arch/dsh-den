@@ -69,6 +69,9 @@ export function statusSnapshot(service, { sessionId, nextTriggerAt } = {}) {
     home: status.home,
     autonomy,
     autonomyKnown: autonomy !== null,
+    // What the heartbeat last saw in the other conversations. Named in the allow-list because a new
+    // `status()` field is invisible until it is named — the same trap the fields above document.
+    watch: service.watchSummary ? service.watchSummary() : null,
     nextCheckAt,
     ledger: status.ledger,
     /** How many self-initiated turns today, against the cap the host is enforcing. */

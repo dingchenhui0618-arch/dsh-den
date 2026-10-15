@@ -42,6 +42,7 @@ import { denHome, denPath, listJsonFiles, reapStaleTempFiles, readJson, toLossle
 import { currentGrant, recordGrant, sessionEvents } from './grant.js'
 import { ackNotice as markNoticeDelivered, allNotices, isExpired, pendingNotices, queueNotice, sweepExpiredNotices } from './notices.js'
 import { installGate, RISK, classifyCall, recordAudit, auditPath } from './gate.js'
+import { alertKey, observeSessionActivity, shouldAlert, watchWakeFor, watcherSeenPath } from './watcher.js'
 import { KernelLease } from './resident.js'
 import { DenKernel, evaluateGates, readLedger, ledgerPath } from './kernel.js'
 import { deleteTrigger, dueTriggers, listTriggers, nextTriggerAt, normalizeTrigger, saveTrigger } from './triggers.js'
@@ -52,7 +53,7 @@ import { TASKS_FILE } from './tasks-store.js'
 import { PROFILE_FILE } from './profile.js'
 import { registerProfileTools } from './profile-tools.js'
 import { registerTaskTools } from './tasks-tools.js'
-import { ensureConversation, promptConversation } from './conversation.js'
+import { readConversationRecord, ensureConversation, promptConversation } from './conversation.js'
 
 export const name = 'dsh-den'
 export const inject = ['agents', 'tools', 'webServer']
@@ -263,6 +264,58 @@ export class DenService {
    */
   ackNotice(sessionId, id) {
     return markNoticeDelivered(sessionId, id)
+  }
+
+  // --------------------------------------------------------------- watching
+
+  /**
+   * Look at the other conversations and act on what changed.
+   *
+   * Cheap by construction: one `statSync` per session, and one tail read only for a session that
+   * actually changed. It never writes into another session and never wakes one — the only action
+   * available to it is a wake in den's own conversation, which then meets the same four gates as
+   * every other autonomous wake. Authority in this plugin is per conversation, so a wake attributed
+   * to a watched session would be refused forever; that is why the wake carries den's own id.
+   */
+  scanSessions({ now = Date.now() } = {}) {
+    const storePath = watcherSeenPath()
+    const store = readJson(storePath) || {}
+    const own = readConversationRecord(this.conversationPath)
+    const exclude = own?.sessionId ? [own.sessionId] : []
+    const result = observeSessionActivity({ seen: store.sessions || {}, exclude, now })
+    const alerted = store.alerted || {}
+    let queued = 0
+    for (const item of result.attention) {
+      if (!shouldAlert(item, alerted)) continue
+      alerted[alertKey(item)] = now
+      if (!own?.sessionId) break
+      try {
+        this.createTrigger(watchWakeFor(item, { sessionId: own.sessionId, now }))
+        queued += 1
+      } catch (error) {
+        // A trigger this host refuses to store must not stop the heartbeat; it is recorded instead.
+        this.noteEvent({ type: 'watch-trigger-failed', message: String(error?.message || error).slice(0, 160) })
+      }
+    }
+    writeJsonAtomic(storePath, { version: 1, scannedAt: now, sessions: result.seen, alerted })
+    // `watchState`, not `watchSummary`: a field that shares the method's name shadows it, and then the
+    // method returns itself before the first scan has run.
+    this.watchState = {
+      scannedAt: now,
+      watched: result.watched,
+      adopted: result.adopted,
+      changes: result.changes.length,
+      attention: result.attention.length,
+      queued,
+      lastError: result.attention.length ? result.attention[0].error : '',
+    }
+    if (queued) this.noteEvent({ type: 'watch-woke', queued })
+    return result
+  }
+
+  /** What the last scan saw, for `den_status`. Null until one has run. */
+  watchSummary() {
+    return this.watchState || null
   }
 
   // -------------------------------------------------------------- triggers
@@ -1300,6 +1353,7 @@ export function apply(ctx) {
         tickSeconds: service.state().tickSeconds,
         onEvent: (event) => service.noteEvent(event),
         lease: service.kernelLease,
+        watch: (info) => service.scanSessions(info),
       })
       // Claim residency now rather than waiting for the first heartbeat, so `status()` can say
       // whether this host is the resident from the moment it mounts. Failing here is not fatal

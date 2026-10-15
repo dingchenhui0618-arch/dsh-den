@@ -249,6 +249,7 @@ export class DenKernel {
     resolveAgent = null,
     resolveSession = null,
     lease = null,
+    watch = null,
   }) {
     this.service = service
     this.deliver = deliver
@@ -258,6 +259,7 @@ export class DenKernel {
     this.resolveAgent = resolveAgent
     this.resolveSession = resolveSession
     this.lease = lease
+    this.watch = watch
     this.tickSeconds = Math.max(5, tickSeconds)
     this.timer = null
     this.running = false
@@ -424,6 +426,19 @@ export class DenKernel {
     return { triggerId: step.id, outcome: 'spoke' }
   }
   async #runDue({ agent, now }) {
+    /**
+     * Watching the other conversations happens on quiet heartbeats too — that is the whole point, and
+     * a channel placed after the `due.length === 0` return below would never once run. Same trap the
+     * task channel documents three paragraphs down, same fix: before the return. It is wrapped because a
+     * watcher that throws must not take the heartbeat with it.
+     */
+    if (this.watch) {
+      try {
+        this.watch({ now })
+      } catch (error) {
+        this.onEvent({ type: 'watch-failed', message: String(error?.message || error).slice(0, 160) })
+      }
+    }
     const due = dueTriggers(now)
     // The empty case returns the same shape as the busy one, `results` included.
     //

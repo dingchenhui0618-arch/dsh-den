@@ -520,3 +520,20 @@ at `<den home>/approval.json` (`~/.dsh/den/approval.json` by default). Missing, 
 or any other value leaves the gate **on**: only an explicit `off` disables anything, and it disables
 both the `ask` waterfall and the hard-secrets `deny`. `den_status` reports which state is in force as
 `gate: mounted | not-mounted`. It takes effect when the plugin loads, so a restart, not a tool call.
+
+## Watching the other conversations
+
+A resident assistant that only ever answers when spoken to is a chat window. den also *looks*: on every
+heartbeat it scans the session store and reads the tail of any log that changed.
+
+- **Cheap.** The change signal is `size + mtimeMs` from `statSync`, and a changed log is read through
+  one `readSync` into a fixed 256 KB buffer. The largest log on this machine is 32 MB; nothing here
+  ever decompresses a whole one.
+- **Quiet at first.** A session den has never seen is *adopted*, not accused. Otherwise the first scan
+  would report every historical failure on the machine as news.
+- **Not intrusive.** den never writes into another session, and never wakes one. What it finds becomes
+  a one-shot wake in den's **own** conversation, where the same four gates apply: daily budget, quiet
+  hours, pacing, and the human's standing grant. Without a grant the wake is refused and recorded, not
+  delivered — which is the intended answer, not a bug.
+- **Visible.** `den_status` carries `watch`: sessions watched, changes seen, how many wakes were
+  queued, and the last error text.
