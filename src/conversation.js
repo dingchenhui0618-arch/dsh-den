@@ -127,10 +127,13 @@ export function readStandingConversation(ctx, { limit = DEFAULT_READ_LIMIT, path
 export async function promptConversation(ctx, sessionId, text, { requestId = '', now = Date.now(), signal = null } = {}) {
   const body = String(text ?? '').trim()
   if (!body) throw new Error('dsh-den: there is nothing to say')
-  if (typeof ctx?.sessionController?.prompt !== 'function') return null
+  // `serviceOf`, not a dot access: this very guard threw on a Cordis context whose controller is not
+  // injected, so the honest "this host cannot admit prompts" answer never got a chance to be given.
+  const controller = serviceOf(ctx, 'sessionController')
+  if (typeof controller?.prompt !== 'function') return null
   if (!sessionId) throw new Error('dsh-den: the standing conversation has no id to speak into')
   const abort = signal || (typeof AbortController === 'function' ? new AbortController().signal : undefined)
-  await ctx.sessionController.prompt(
+  await controller.prompt(
     {
       requestId: requestId || `den-say-${now}-${randomUUID().slice(0, 8)}`,
       sessionId,

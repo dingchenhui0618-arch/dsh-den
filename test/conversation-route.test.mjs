@@ -166,6 +166,24 @@ test('a context that throws when a service is missing is "unreadable", not a Cor
   })
 })
 
+test('a throwing context is not a delivery path either, but the words are recorded first', async () => {
+  await tempConversation(async ({ path }) => {
+    writeFileSync(path, JSON.stringify({ sessionId: 'sess-live', createdAt: 1, agentPreset: 'cordis' }))
+    const appended = []
+    const session = { append: (type, data) => appended.push({ type, data }), snapshotEvents: () => [] }
+    const ctx = { agents: { get: () => ({ id: 'sess-live', session }) } }
+    Object.defineProperty(ctx, 'sessionController', {
+      get() {
+        throw new Error('cannot get property "sessionController" without inject')
+      },
+    })
+    const outcome = await invokeAction(serviceWith(ctx, path), 'conversation/say', { text: 'hello' }, {})
+    assert.equal(outcome.ok, false, 'no delivery is claimed')
+    assert.match(outcome.error, /no way to wake the standing conversation/)
+    assert.equal(appended.length, 1, 'and the human\'s words are in the transcript anyway')
+  })
+})
+
 test('and creating one there reports what this host cannot do, not what Cordis could not read', async () => {
   await tempConversation(async ({ path }) => {
     const ctx = {}
