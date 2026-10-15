@@ -21,6 +21,7 @@ const {
   alertKey,
   observeSessionActivity,
   pruneAlerted,
+  sameState,
   scanSessionLogs,
   shouldAlert,
   summariseTail,
@@ -234,4 +235,28 @@ test('a session that leaves the disk leaves the scan state with it', () => {
     const second = observeSessionActivity({ root, seen: first.seen, now: 2000 })
     assert.deepEqual(Object.keys(second.seen), ['sess-alive'], 'state does not accumulate the machine history')
   })
+})
+
+test('a quiet scan keeps the state byte for byte, so the heartbeat writes nothing', () => {
+  // The seen entry carried the scan instant, so every heartbeat produced a different state: the write-skip
+  // could never fire and the file was rewritten 1440 times a day with identical meaning.
+  withStore(({ root, write, append }) => {
+    write('sess-quiet', [asked('hi'), fine()])
+    const first = observeSessionActivity({ root, seen: {}, now: 1000 })
+    const second = observeSessionActivity({ root, seen: first.seen, now: 2000 })
+    assert.deepEqual(second.seen, first.seen, 'nothing moved, so nothing about it changed')
+    assert.equal(second.seen['sess-quiet'].at, 1000, 'and `at` stays the moment the session last moved')
+
+    append('sess-quiet', [answered('hello', 3)])
+    const third = observeSessionActivity({ root, seen: second.seen, now: 3000 })
+    assert.equal(third.seen['sess-quiet'].at, 3000, 'a real change moves it forward')
+    assert.equal(third.changes.length, 1)
+  })
+})
+
+test('two states are the same when they say the same thing, whatever the key order', () => {
+  assert.equal(sameState({ a: { size: 1 }, b: { size: 2 } }, { b: { size: 2 }, a: { size: 1 } }), true)
+  assert.equal(sameState({ a: { size: 1 } }, { a: { size: 2 } }), false, 'a changed size is a different state')
+  assert.equal(sameState({}, {}), true)
+  assert.equal(sameState(undefined, {}), true, 'a missing state is an empty one')
 })

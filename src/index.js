@@ -47,6 +47,7 @@ import {
   alertKey,
   observeSessionActivity,
   pruneAlerted,
+  sameState,
   shouldAlert,
   watchWakeFor,
   watcherSeenPath,
@@ -323,7 +324,10 @@ export class DenService {
     // Pruned before writing: an alerted key whose session has left the machine can never fire again, and the
     // map otherwise grows by one entry per failing turn for the life of the installation.
     const keptAlerted = pruneAlerted(alerted, new Set(Object.keys(result.seen)))
-    writeJsonAtomic(storePath, { version: 1, scannedAt: now, sessions: result.seen, alerted: keptAlerted })
+    const persisted = !sameState(store.sessions, result.seen) || !sameState(store.alerted, keptAlerted)
+    if (persisted) {
+      writeJsonAtomic(storePath, { version: 1, scannedAt: now, sessions: result.seen, alerted: keptAlerted })
+    }
     // `watchState`, not `watchSummary`: a field that shares the method's name shadows it, and then the
     // method returns itself before the first scan has run.
     this.watchState = {
@@ -333,6 +337,8 @@ export class DenService {
       changes: result.changes.length,
       attention: result.attention.length,
       queued,
+      // Whether this scan had something new to remember. A quiet heartbeat says false and writes nothing.
+      persisted,
       // A store larger than the scan limit is reported, not hidden behind a complete-looking number.
       capped: result.watched >= DEFAULT_MAX_SESSIONS,
       lastError: result.attention.length ? result.attention[0].error : '',

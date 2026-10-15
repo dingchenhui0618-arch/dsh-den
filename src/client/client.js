@@ -183,7 +183,8 @@ window.__ModuleLoader__.load({
         working: '处理中…',
         autonomyGrant: '授予',
         autonomyRevoke: '撤销',
-        autonomyNoSession: '这个页面没有被绑定任何会话 —— 在右下角的浮窗里授予就行，一次授权对所有会话生效',
+        autonomyNoSession:
+          '这个页面没有被绑定任何会话 —— 在浮窗里授予就行（收起时是右上角那颗带小圆点的 ◈ 圆钮），一次授权对所有会话生效',
         grantDock: '常驻自治 · 本会话',
         sayYou: '你',
         residentDeferred: '等待投递',
@@ -1738,9 +1739,11 @@ window.__ModuleLoader__.load({
             var placeState = React.useState(function () {
               var x = Number(miniPref('x'))
               var y = Number(miniPref('y'))
-              return Number.isFinite(x) && Number.isFinite(y)
-                ? { x: Math.max(MINI_MARGIN, x), y: Math.max(MINI_TOP_SAFE, y) }
-                : null
+              if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+              // Clamped on load, not only while dragging. The saved spot belongs to the human, but the viewport
+              // can shrink under it — the pill then sits past the right or bottom edge, still `active`, and
+              // unreachable. Measured symptom (2026-10-15, the user): "I cannot even find den in my sidebar."
+              return clampPlace(x, y, Number(miniPref('width')), Number(miniPref('height')))
             })
             var place = placeState[0]
             var setPlace = placeState[1]

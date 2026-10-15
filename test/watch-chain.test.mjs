@@ -116,6 +116,7 @@ test('another conversation failing makes den schedule a wake in its own, unasked
   assert.equal(summaryAfterSecond.watched, 1)
   assert.equal(summaryAfterSecond.attention, 1)
   assert.equal(summaryAfterSecond.queued, 1)
+  assert.equal(summaryAfterSecond.persisted, true, 'the scan that learned something writes it down')
   const summaryAfterThird = service.watchSummary()
   assert.equal(summaryAfterThird.attention, 0, 'the third scan saw nothing new')
   assert.equal(summaryAfterThird.queued, 0, 'and queued nothing, which is what "already alerted" means')

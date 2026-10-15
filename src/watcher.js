@@ -164,8 +164,12 @@ export function observeSessionActivity({
   let adopted = 0
   for (const log of logs) {
     const prior = seen[log.sessionId]
-    next[log.sessionId] = { size: log.size, mtimeMs: log.mtimeMs, at: now }
-    if (prior && prior.size === log.size && prior.mtimeMs === log.mtimeMs) continue
+    const still = Boolean(prior) && prior.size === log.size && prior.mtimeMs === log.mtimeMs
+    // `at` is when this session last moved, not when the scan ran. Stamping the scan instant made the state
+    // differ on every heartbeat, which meant the write-skip below could never fire and an mtime that should
+    // mean "the machine moved" meant "a minute passed" again — the defect the skip exists to remove.
+    next[log.sessionId] = { size: log.size, mtimeMs: log.mtimeMs, at: still && prior.at ? prior.at : now }
+    if (still) continue
     const isNew = !prior
     if (isNew) adopted += 1
     // A first sighting is a baseline, not news: the alternative is reporting every failure in the
@@ -215,6 +219,23 @@ export const MAX_ALERTED = 500
  * The key is `sessionId:turn@<instant>`, and a session id never contains a colon, so the session can be
  * recovered from the key without keeping a second index.
  */
+/**
+ * Whether two scan states say the same thing, ignoring key order.
+ *
+ * The heartbeat rewrote the state file every 60 seconds whether or not anything had changed: about 14 MB of
+ * identical bytes a day, and an mtime that meant "a minute passed" instead of "the machine moved". Comparing
+ * canonical forms lets a quiet tick cost one `statSync` per session and nothing else.
+ */
+export function sameState(a = {}, b = {}) {
+  const canonical = (map) =>
+    JSON.stringify(
+      Object.keys(map || {})
+        .sort()
+        .map((key) => [key, (map || {})[key]]),
+    )
+  return canonical(a) === canonical(b)
+}
+
 export function pruneAlerted(alerted = {}, alive = new Set(), { max = MAX_ALERTED } = {}) {
   const kept = []
   for (const [key, at] of Object.entries(alerted)) {

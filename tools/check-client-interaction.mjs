@@ -1135,6 +1135,27 @@ const placedTree = findAll(
   (node) => node.props?.style?.left === 520 && node.props?.style?.top === 260 && node.props?.style?.right === 'auto',
 )
 check(placedTree.length >= 1, 'and the remembered place is applied, rather than only stored')
+
+/* --- a remembered place that no longer fits is pulled back into view -------- */
+
+// Measured symptom (2026-10-15, the user): "I cannot even find den in my sidebar." The pill had been saved at
+// a spot the current viewport no longer contains, and the load path clamped only the low side, so it rendered
+// past the right or bottom edge — mounted, `active: true`, and unreachable.
+fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: true, x: 4000, y: 3000 }))
+const offscreenWindow = mount(bootWindow({ scripted: { status: healthyStatus() } }).component, {})
+await offscreenWindow.settle()
+const offscreenPill = findAll(
+  offscreenWindow.tree,
+  (node) =>
+    node.props?.style?.position === 'absolute' &&
+    node.props?.style?.width === 36 &&
+    Number.isFinite(Number(node.props?.style?.left)),
+)[0]
+check(Boolean(offscreenPill), 'a shut pill with an off-screen remembered place is still rendered')
+const pillLeft = Number(offscreenPill?.props?.style?.left)
+const pillTop = Number(offscreenPill?.props?.style?.top)
+check(pillLeft < 4000 && pillTop < 3000, `and is pulled back into view rather than left off the edge (${pillLeft}, ${pillTop})`)
+check(pillLeft >= 0 && pillTop >= 0, 'and never lands at a negative offset')
 fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false }))
 
 /* --- a host failure is surfaced, not swallowed ---------------------------- */
