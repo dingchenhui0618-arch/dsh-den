@@ -154,6 +154,13 @@ export async function promptConversation(ctx, sessionId, text, { requestId = '',
   const controller = serviceOf(ctx, 'sessionController')
   if (typeof controller?.prompt !== 'function') return null
   if (!sessionId) throw new Error('dsh-den: the standing conversation has no id to speak into')
+  // Before the prompt, not after a failure. The model a prompt is assembled with is session-local state, and
+  // a session that has none ends every turn in 'prompt variable "{{model}}" has no value for this assembly'
+  // (section "deployment:persona-prefix"). Measured live on 2026-10-15 at 09:12:51: the first autonomous turn
+  // after a restart failed exactly so — `turn/start`, `step/start`, `step/end`, `turn/end error` in the same
+  // second — while the human's own turns kept working, because their composer selects a model on the way in.
+  // That asymmetry is why only the wake was broken, and why the fix belongs on this side of the admission.
+  await ensureConversationModel(ctx, sessionId)
   const abort = signal || (typeof AbortController === 'function' ? new AbortController().signal : undefined)
   await controller.prompt(
     {
@@ -165,6 +172,33 @@ export async function promptConversation(ctx, sessionId, text, { requestId = '',
     abort,
   )
   return 'prompt'
+}
+
+/**
+ * Install the host's currently selected model on one conversation before anything is admitted into it.
+ *
+ * `SessionPromptRequest` carries no model — its shape is `{ requestId, sessionId, mode, content,
+ * clientTimeZone? }` — and neither does `SessionCreateRequest`. The model is session-local state, and
+ * `sessionController.selectModel` is the host's documented way to install it ("select one Session-local model
+ * after explicitly resuming the Session"). Returns the selection it installed, or null when this host offers no
+ * selection or no way to install one. A failure here must never block the message: a prompt delivered with the
+ * wrong model is still better than a standing conversation nothing can be said into.
+ */
+export async function ensureConversationModel(ctx, sessionId) {
+  const controller = serviceOf(ctx, 'sessionController')
+  if (!controller || typeof controller.selectModel !== 'function' || !sessionId) return null
+  const selection = resolveAgentOptions(ctx)
+  if (!selection) return null
+  try {
+    const value = await controller.selectModel({
+      sessionId,
+      provider: selection.provider,
+      model: selection.model,
+    })
+    return value?.selected || selection
+  } catch (error) {
+    return null
+  }
 }
 
 /**

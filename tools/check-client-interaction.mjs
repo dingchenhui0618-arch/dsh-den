@@ -1051,6 +1051,30 @@ const cardNodes = findAll(panelTalk.tree, (n) => n.props?.style?.position === 'a
 check(cardNodes.length === 1, 'the open window places and sizes itself instead of becoming a strip across the top')
 check(cardNodes[0]?.props?.style?.right === 24 && cardNodes[0]?.props?.style?.top === 56 && cardNodes[0]?.props?.style?.bottom === 'auto', 'and starts below the page header instead of colliding with it')
 check(String(cardNodes[0]?.props?.style?.background || '').includes('--dsw-alias-bg-overlay'), 'and paints a surface rather than reading as page furniture')
+
+/* --- the collapse control actually collapses, through a real press ---------- */
+
+// The bar behind it is a drag handle that captures the pointer on pointerdown, and a click inside a captured
+// pointer is retargeted to the capturing element — so this button's onClick never ran at all. Measured report
+// (2026-10-15, the user): "我现在点击缩小没反应". Every earlier check seeded `collapsed: true` in storage
+// instead of pressing the control, which is exactly how 126 green checks missed a button that did nothing.
+let collapseStopped = 0
+const collapseButton = findAll(panelTalk.tree, (n) => n.props?.['aria-label'] === '收起')[0]
+check(Boolean(collapseButton), 'the open window offers a collapse control under its accessible name')
+check(typeof collapseButton?.props?.onPointerDown === 'function', 'and stops the drag handle from capturing a press on it')
+collapseButton?.props?.onPointerDown({ stopPropagation: () => { collapseStopped += 1 } })
+check(collapseStopped === 1, 'so pressing it is not read as the start of a drag')
+collapseButton?.props?.onClick()
+await panelTalk.settle()
+check(
+  findAll(panelTalk.tree, (n) => n.props?.style?.width === 300).length === 0,
+  'and pressing it puts the window away instead of doing nothing',
+)
+const reopened = findAll(panelTalk.tree, (n) => n.props?.['aria-label']?.includes('打开 den 面板'))[0]
+check(Boolean(reopened), 'leaving the shut pill in its place')
+reopened?.props?.onClick()
+await panelTalk.settle()
+check(findAll(panelTalk.tree, (n) => n.props?.style?.width === 300).length === 1, 'and the pill brings the window back')
 check(cardNodes[0]?.props?.style?.zIndex === 60, 'and sits above the page it floats over')
 check(cardNodes[0]?.props?.style?.height === 210, 'and starts with a smaller desktop-pet footprint')
 check(cardNodes[0]?.props?.style?.resize === 'both', 'and exposes a native two-axis resize affordance')

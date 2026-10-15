@@ -6,6 +6,7 @@ import { join } from 'node:path'
 
 import {
   ensureConversation,
+  ensureConversationModel,
   readConversation,
   readConversationRecord,
   readStandingConversation,
@@ -37,6 +38,68 @@ const answered = (seq, text) => ({
   seq,
   time: 1000 + seq,
   data: { role: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } },
+})
+
+/** A context carrying only the services the model helper asks for, and a record of what it was asked. */
+function modelCtx({ selection = { provider: 'p', model: 'm' }, selectModel } = {}) {
+  const calls = []
+  const installer =
+    selectModel === null
+      ? undefined
+      : selectModel ||
+        (async (request) => {
+          calls.push(request)
+          return { selected: { provider: request.provider, model: request.model } }
+        })
+  return {
+    calls,
+    ctx: {
+      get: (name) => {
+        if (name === 'agentDefaultModel') return { currentSelection: () => selection }
+        if (name === 'sessionController') {
+          return { prompt: async () => ({ accepted: true }), ...(installer ? { selectModel: installer } : {}) }
+        }
+        return undefined
+      },
+    },
+  }
+}
+
+test('a prompt installs the host model on the conversation first', async () => {
+  // The model is session-local: `SessionPromptRequest` is `{ requestId, sessionId, mode, content,
+  // clientTimeZone? }` and has no model field, so without this the first autonomous turn after a restart ends
+  // in 'prompt variable "{{model}}" has no value for this assembly'. Measured live 2026-10-15 at 09:12:51.
+  const { ctx, calls } = modelCtx()
+  assert.equal(await promptConversation(ctx, 'session-1', 'hello'), 'prompt')
+  assert.equal(calls.length, 1, 'the model was installed once, before the prompt')
+  assert.deepEqual(calls[0], { sessionId: 'session-1', provider: 'p', model: 'm' })
+})
+
+test('a host with no model selection still gets its message', async () => {
+  // `{}` rather than `undefined`: a default parameter falls back on `undefined`, so passing it would hand this
+  // test the usable selection it is trying not to have.
+  const { ctx } = modelCtx({ selection: {} })
+  assert.equal(await ensureConversationModel(ctx, 'session-1'), null)
+  assert.equal(await promptConversation(ctx, 'session-1', 'hello'), 'prompt', 'the message is not held hostage')
+})
+
+test('a host that cannot install a model is not an error, and a failure never blocks the message', async () => {
+  const { ctx } = modelCtx({ selectModel: null })
+  assert.equal(await ensureConversationModel(ctx, 'session-1'), null)
+
+  const failing = modelCtx({
+    selectModel: async () => {
+      throw new Error('session/agent-busy')
+    },
+  })
+  assert.equal(await ensureConversationModel(failing.ctx, 'session-1'), null)
+  assert.equal(await promptConversation(failing.ctx, 'session-1', 'hello'), 'prompt')
+})
+
+test('the helper declines an unnamed conversation rather than installing a model nowhere', async () => {
+  const { ctx, calls } = modelCtx()
+  assert.equal(await ensureConversationModel(ctx, ''), null)
+  assert.equal(calls.length, 0)
 })
 
 test('the conversation is only what was said, not the machinery of the turn', () => {

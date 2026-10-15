@@ -1784,6 +1784,10 @@ window.__ModuleLoader__.load({
 
             function onDragStart(event) {
               if (!event || !event.currentTarget) return
+              // A control inside the bar must never begin a drag: the capture below retargets the pointer to
+              // the bar, which is how a click on the collapse button came to do nothing at all.
+              var startedOn = event.target
+              if (startedOn && typeof startedOn.closest === 'function' && startedOn.closest('button,a,input,textarea,select')) return
               var rect = typeof event.currentTarget.getBoundingClientRect === 'function'
                 ? event.currentTarget.getBoundingClientRect()
                 : { left: 0, top: MINI_TOP_SAFE, width: open ? size.width : 36, height: open ? size.height : 36 }
@@ -1951,6 +1955,13 @@ window.__ModuleLoader__.load({
                     'button',
                     {
                       type: 'button',
+                      // The bar behind this button is a drag handle, and it captures the pointer on
+                      // pointerdown (`setPointerCapture`). A click inside a captured pointer is retargeted to
+                      // the capturing element, so this button's onClick never ran: collapsing did nothing.
+                      // Measured report, 2026-10-15: "我现在点击缩小没反应".
+                      onPointerDown: function (event) {
+                        if (event && event.stopPropagation) event.stopPropagation()
+                      },
                       onClick: function () { setOpen(false); setMiniPref('collapsed', true) },
                       'aria-label': t('collapse'),
                       title: t('collapse'),
