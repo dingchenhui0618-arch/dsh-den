@@ -31,6 +31,7 @@ const { dueTriggers } = await import('../src/triggers.js')
 const { watcherSeenPath } = await import('../src/watcher.js')
 const { DenKernel } = await import('../src/kernel.js')
 const { digest } = await import('../src/atom.js')
+const { allNotices } = await import('../src/notices.js')
 
 const OTHER = 'other-session-id'
 const DEN = 'den-own-session-id'
@@ -183,7 +184,7 @@ test('the heartbeat delivers the wake the watcher scheduled, into the den conver
     grantsDir,
     deliver: async ({ trigger, instruction, agent: resolved }) => {
       delivered.push({ trigger, instruction, agentId: resolved?.id })
-      return 'Another conversation failed; I read it and there is nothing to do yet.'
+      return 'Another conversation failed: the tool call was refused there. I read its log; the fix belongs to that session.'
     },
   })
 
@@ -196,6 +197,12 @@ test('the heartbeat delivers the wake the watcher scheduled, into the den conver
   assert.equal(delivered[0].agentId, 'agent-watch', 'delivered to the den conversation, not the watched one')
   assert.equal(typeof delivered[0].instruction, 'string')
   assert.equal(dueTriggers(4000).length, 0, 'a one-shot wake is consumed, not repeated')
+
+  // And it reaches a human. A wake that reads the other conversation and then leaves no trace on the den's own
+  // side has advanced nothing a person can see; the notice is the durable half of "it did something about it".
+  const notices = allNotices().filter((notice) => notice.sessionId === DEN)
+  assert.equal(notices.length, 1, 'exactly one durable notice for the den conversation')
+  assert.match(notices[0].text, /failed|refused/, 'and it says what happened')
 })
 
 test.after(() => {
