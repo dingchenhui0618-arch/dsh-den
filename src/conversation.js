@@ -25,6 +25,7 @@ import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
 import { denPath, readJson, writeJsonAtomic } from './atom.js'
 import { serviceOf, sessionEvents } from './grant.js'
+import { readTranscriptFromLog } from './session-log.js'
 
 /** How many messages the window is handed by default. The transcript itself keeps everything. */
 export const DEFAULT_READ_LIMIT = 40
@@ -96,16 +97,37 @@ export function readConversation(session, { limit = DEFAULT_READ_LIMIT } = {}) {
  *   - `live`     — an agent is running on it right now;
  *   - `unreadable` — the id exists but this host cannot hand back its events.
  */
-export function readStandingConversation(ctx, { limit = DEFAULT_READ_LIMIT, path = conversationPath() } = {}) {
+export function readStandingConversation(
+  ctx,
+  { limit = DEFAULT_READ_LIMIT, path = conversationPath(), sessionsRoot } = {},
+) {
   const record = readConversationRecord(path)
   if (!record) return { sessionId: null, state: 'absent', messages: [], total: 0, truncated: false, lastError: '' }
   const agents = serviceOf(ctx, 'agents')
   const sessions = serviceOf(ctx, 'sessions')
   const live = typeof agents?.get === 'function' ? agents.get(record.sessionId) : undefined
   const session = live?.session ?? (typeof sessions?.get === 'function' ? sessions.get(record.sessionId) : null)
-  if (!session) return { sessionId: record.sessionId, state: 'unreadable', messages: [], total: 0, truncated: false, lastError: '' }
-  const read = readConversation(session, { limit })
-  return Object.assign({ sessionId: record.sessionId, state: live ? 'live' : 'stored' }, read)
+  if (session) {
+    const read = readConversation(session, { limit })
+    return Object.assign({ sessionId: record.sessionId, state: live ? 'live' : 'stored', readFrom: 'store' }, read)
+  }
+  // The Host does not publish a session it has not resumed, so an agent that has finished leaves
+  // `sessions.get` answering nothing while the whole conversation sits in the log on disk. Measured:
+  // the window read `unreadable`, `messages: []`, while the log held two completed turns and both
+  // answers. Reading the log is what makes the window show the conversation instead of a blank.
+  const fromLog = readTranscriptFromLog(record.sessionId, { cwd: record.cwd, limit, sessionsRoot })
+  if (fromLog) {
+    return Object.assign({ sessionId: record.sessionId, state: 'stored', readFrom: 'log' }, fromLog)
+  }
+  return {
+    sessionId: record.sessionId,
+    state: 'unreadable',
+    readFrom: 'none',
+    messages: [],
+    total: 0,
+    truncated: false,
+    lastError: '',
+  }
 }
 
 /**
