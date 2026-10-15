@@ -192,6 +192,14 @@ export function watchWakeFor(item, { sessionId, now = Date.now() } = {}) {
     title: `another conversation ended a turn in an error (${short})`,
     prompt: facts,
     kind: 'once',
+    /**
+     * A `once` trigger defaults to `maySpeak: false`. For a scheduled check-in that is the right
+     * default — it is a reminder, not a message. This one is the opposite: den was woken because
+     * something in another conversation needs a decision, and a wake forbidden to say what it found is
+     * a wake that did nothing. Measured, not assumed: `normalizeTrigger` filled in `false` and the
+     * integration test asserted the value the wake actually has.
+     */
+    maySpeak: true,
     at: now,
     maxRuns: 1,
   }

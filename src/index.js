@@ -277,10 +277,10 @@ export class DenService {
    * every other autonomous wake. Authority in this plugin is per conversation, so a wake attributed
    * to a watched session would be refused forever; that is why the wake carries den's own id.
    */
-  scanSessions({ now = Date.now() } = {}) {
+  scanSessions({ now = Date.now(), conversationPath: ownPath = this.conversationPath } = {}) {
     const storePath = watcherSeenPath()
     const store = readJson(storePath) || {}
-    const own = readConversationRecord(this.conversationPath)
+    const own = readConversationRecord(ownPath)
     const exclude = own?.sessionId ? [own.sessionId] : []
     const result = observeSessionActivity({ seen: store.sessions || {}, exclude, now })
     const alerted = store.alerted || {}
