@@ -679,18 +679,19 @@ const shutPanel = mount(shutWindow, {})
 await shutPanel.settle()
 // The pill fetches its numbers in an effect, so one settle is not enough: the poll needs a turn.
 await shutPanel.settle()
-const shutText = shutPanel.text()
+const shutButton = shutPanel.buttons().find((button) => button.props?.['aria-label']?.includes('打开 den 面板'))
+const shutLabel = String(shutButton?.props?.['aria-label'] || '')
 check(
-  shutText.includes('\u5e38\u9a7b\u4e2d'),
-  'the shut floating window still says whether the resident is running',
+  shutLabel.includes('\u5e38\u9a7b\u4e2d'),
+  'the shut floating window keeps whether the resident is running in its accessible label',
 )
 check(
-  shutText.includes('\u6709\u8bdd\u60f3\u8ddf\u4f60\u8bf4'),
-  'and still reports how many things it has for the person',
+  shutLabel.includes('\u6709\u8bdd\u60f3\u8ddf\u4f60\u8bf4'),
+  'and keeps how many things it has for the person in that label',
 )
 check(
-  shutText.split('\u00b7').length >= 3,
-  'and keeps more than one fact on the line, instead of shrinking to a dot',
+  shutLabel.split('\u00b7').length >= 3 && shutButton?.children?.length === 1,
+  'and keeps the facts accessible while the visible control shrinks to den\'s mark and a dot',
 )
 fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false }))
 
@@ -1011,12 +1012,14 @@ const panelPill = mount(
   {},
 )
 await panelPill.settle()
-// '常驻中' is in both branches — the shut branch reads '常驻中 · 已停' — so the first version of this
-// check passed while the pill was reporting the wrong side. Assert the half that decides.
-check(panelPill.text().includes('心跳运行中'), 'the shut pill reports the kernel it was actually given, not the absence of a field')
-check(!panelPill.text().includes('已停'), 'and does not also report it as stopped')
-check(!panelPill.text().includes('宿主待重启'), 'a host that sends the budget is not called older')
-check(panelPill.text().includes('回合 2/24'), "and how much of today's self-initiated budget is spent")
+const panelPillButton = panelPill.buttons().find((button) => button.props?.['aria-label']?.includes('打开 den 面板'))
+const panelPillLabel = String(panelPillButton?.props?.['aria-label'] || '')
+check(panelPillLabel.includes('心跳运行中'), 'the shut pill keeps the real kernel state in its accessible label')
+check(!panelPillLabel.includes('已停'), 'and does not also report it as stopped')
+check(!panelPillLabel.includes('宿主待重启'), 'a host that sends the budget is not called older')
+check(panelPillLabel.includes('回合 2/24'), "and keeps today's self-initiated budget in the accessible label")
+check(panelPillButton?.props?.style?.width === 36 && panelPillButton?.props?.style?.height === 36, 'and reduces the shut control to a small desktop-pet button')
+check(panelPillButton?.children?.length === 1, 'and shows only den\'s mark and status dot visibly')
 
 const panelPillDeferred = mount(
   bootWindow({
@@ -1032,8 +1035,10 @@ const panelPillDeferred = mount(
   {},
 )
 await panelPillDeferred.settle()
-check(panelPillDeferred.text().includes('等待投递'), 'a pill whose heartbeat is waiting says so instead of claiming to run')
-check(!panelPillDeferred.text().includes('心跳运行中'), 'and does not claim the heartbeat is fine')
+const panelPillDeferredButton = panelPillDeferred.buttons().find((button) => button.props?.['aria-label']?.includes('打开 den 面板'))
+const panelPillDeferredLabel = String(panelPillDeferredButton?.props?.['aria-label'] || '')
+check(panelPillDeferredLabel.includes('等待投递'), 'a pill whose heartbeat is waiting says so instead of claiming to run')
+check(!panelPillDeferredLabel.includes('心跳运行中'), 'and does not claim the heartbeat is fine')
 
 /* --- the transcript scrolls in its own area, which is what "scrollable" means --- */
 
@@ -1042,20 +1047,20 @@ check(scrollArea.length === 1, 'the transcript has exactly one scrolling area of
 check(Number(scrollArea[0]?.props?.style?.maxHeight) > 0, 'and that area is bounded, so the window cannot grow with the transcript')
 /* --- the window places and paints itself, because the layer gives it neither --- */
 
-const cardNodes = findAll(panelTalk.tree, (n) => n.props?.style?.position === 'absolute' && n.props?.style?.width === 360)
+const cardNodes = findAll(panelTalk.tree, (n) => n.props?.style?.position === 'absolute' && n.props?.style?.width === 300)
 check(cardNodes.length === 1, 'the open window places and sizes itself instead of becoming a strip across the top')
-check(cardNodes[0]?.props?.style?.right === 24 && cardNodes[0]?.props?.style?.bottom === 24, 'and anchors itself off the header and the tabs until it is moved')
+check(cardNodes[0]?.props?.style?.right === 24 && cardNodes[0]?.props?.style?.top === 56 && cardNodes[0]?.props?.style?.bottom === 'auto', 'and starts below the page header instead of colliding with it')
 check(String(cardNodes[0]?.props?.style?.background || '').includes('--dsw-alias-bg-overlay'), 'and paints a surface rather than reading as page furniture')
 check(cardNodes[0]?.props?.style?.zIndex === 60, 'and sits above the page it floats over')
-check(cardNodes[0]?.props?.style?.height === 260, 'and starts with a compact desktop-pet footprint')
+check(cardNodes[0]?.props?.style?.height === 210, 'and starts with a smaller desktop-pet footprint')
 check(cardNodes[0]?.props?.style?.resize === 'both', 'and exposes a native two-axis resize affordance')
-check(cardNodes[0]?.props?.style?.minWidth === 260 && cardNodes[0]?.props?.style?.minHeight === 190, 'and keeps the pet usable at its smallest size')
+check(cardNodes[0]?.props?.style?.minWidth === 220 && cardNodes[0]?.props?.style?.minHeight === 160, 'and keeps the pet usable at its smallest size')
 check(cardNodes[0]?.props?.['aria-label'] === '常驻会话', 'and gives the floating pet an accessible identity')
 
-fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false, width: 300, height: 220 }))
+fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false, width: 280, height: 190, sizeVersion: 2 }))
 const rememberedSizeWindow = mount(bootWindow({ scripted: { status: healthyStatus() } }).component, {})
 const rememberedSizeCard = findAll(rememberedSizeWindow.tree, (node) => node.props?.style?.position === 'absolute' && node.props?.style?.resize === 'both')[0]
-check(rememberedSizeCard?.props?.style?.width === 300 && rememberedSizeCard?.props?.style?.height === 220, 'and reopens at the dimensions the person chose')
+check(rememberedSizeCard?.props?.style?.width === 280 && rememberedSizeCard?.props?.style?.height === 190, 'and reopens at the dimensions the person chose')
 const resizeTarget = { getBoundingClientRect: () => ({ width: 412, height: 318 }) }
 if (rememberedSizeCard?.props?.ref) rememberedSizeCard.props.ref.current = resizeTarget
 await rememberedSizeWindow.settle()
@@ -1092,10 +1097,12 @@ fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: true }))
 // `healthyStatus()` sends no `dailyTurnBudget`, which is exactly what the live older host sends.
 const panelPillNoBudget = mount(bootWindow({ scripted: { status: healthyStatus() } }).component, {})
 await panelPillNoBudget.settle()
-check(panelPillNoBudget.text().includes('宿主待重启'), 'a host that sends no budget is named as older, not left unexplained')
-check(!panelPillNoBudget.text().includes('自治已关'), 'a host that reports no budget is not described as proactivity being off')
-check(!panelPillNoBudget.text().includes('回合'), 'and no budget number is invented for it')
-const pillPlaced = findAll(panelPillNoBudget.tree, (n) => n.props?.style?.position === 'absolute' && n.props?.style?.bottom === 24)
+const panelPillNoBudgetButton = panelPillNoBudget.buttons().find((button) => button.props?.['aria-label']?.includes('打开 den 面板'))
+const panelPillNoBudgetLabel = String(panelPillNoBudgetButton?.props?.['aria-label'] || '')
+check(panelPillNoBudgetLabel.includes('宿主待重启'), 'a host that sends no budget is named as older, not left unexplained')
+check(!panelPillNoBudgetLabel.includes('自治已关'), 'a host that reports no budget is not described as proactivity being off')
+check(!panelPillNoBudgetLabel.includes('回合'), 'and no budget number is invented for it')
+const pillPlaced = findAll(panelPillNoBudget.tree, (n) => n.props?.style?.position === 'absolute' && n.props?.style?.top === 56)
 check(pillPlaced.length >= 1, 'and the shut pill places itself too, rather than sitting in the page flow')
 
 /* --- the floating window can be moved, and remembers where ----------------- */
@@ -1104,7 +1111,7 @@ check(pillPlaced.length >= 1, 'and the shut pill places itself too, rather than 
 fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false }))
 const dragWindow = mount(bootWindow({ scripted: { status: healthyStatus() } }).component, {})
 await dragWindow.settle()
-const dragHandles = findAll(dragWindow.tree, (node) => node.props && typeof node.props.onPointerDown === 'function')
+const dragHandles = findAll(dragWindow.tree, (node) => node.props?.['data-dsh-role'] === 'drag-handle')
 check(dragHandles.length === 1, `the window offers exactly one drag handle; saw ${dragHandles.length}`)
 
 let measured = 0
@@ -1193,7 +1200,7 @@ if (process.argv.includes('--demo')) {
         // `dock` here is the `shell.overlay` entry — the descriptor, not the retired input dock its
         // old label named. `grantPanel` is that component mounted with the session the shell hands
         // over, which is the real case; it pairs with the `main, shell.overlay` injection check.
-        hint: '默认 360×260；按住顶部条移动，拖右下角调整大小；[–] 收成胶囊',
+        hint: '默认 300×210；按住顶部条移动，拖右下角调整大小；[–] 收成 den 图标',
         tall: true,
         tree: grantPanel.tree,
       },
@@ -1210,8 +1217,8 @@ if (process.argv.includes('--demo')) {
         tree: panelDead.tree,
       },
       {
-        label: '① 收成胶囊：缩小不等于失明，胶囊上仍然报信息',
-        hint: '常驻中 / 心跳 / 预算 / 待重启都在这一行白话里，点开回到卡片',
+        label: '① 收成 den 图标：小尺寸仍有状态反馈',
+        hint: '收起后只保留 den 图标和状态点；完整状态在无障碍标签里，点开回到卡片',
         tall: true,
         tree: panelPill.tree,
       },

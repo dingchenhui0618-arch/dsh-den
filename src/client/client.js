@@ -484,6 +484,13 @@ window.__ModuleLoader__.load({
 
 /** How often the shut pill refreshes itself: slower than the open panel, never stopped. */
     var MINI_POLL_MS = 2000
+    var MINI_SIZE_VERSION = 2
+    var MINI_DEFAULT_WIDTH = 300
+    var MINI_DEFAULT_HEIGHT = 210
+    var MINI_MIN_WIDTH = 220
+    var MINI_MIN_HEIGHT = 160
+    var MINI_MARGIN = 16
+    var MINI_TOP_SAFE = 56
 
     /**
      * Where the floating window remembers that it was shut.
@@ -1715,9 +1722,9 @@ window.__ModuleLoader__.load({
         /**
          * The floating window: a panel when open, one line of information when shut.
          *
-         * Shut is not the same as hidden. A pill that keeps polling on a slower cadence still
-         * answers the two questions worth asking at a glance - is it awake, and does it have
-         * anything for me - which is why the numbers stay on it instead of it shrinking to a dot.
+         * Shut is not the same as hidden. The compact control keeps den's mark and one status dot
+         * visible, while the full state remains in its accessible label and title. That leaves the
+         * page readable at a glance without turning the desktop pet back into a second panel.
          *
          * The polling moves rather than doubles: open, the panel owns it; shut, this owns it.
          * The numbers come from the same fields and the same translated strings either way.
@@ -1729,69 +1736,101 @@ window.__ModuleLoader__.load({
             // Where the human last put it. Unset until they move it: the overlay layer gives an
             // occupant no placement of its own, so the window anchors itself rather than trust
             var placeState = React.useState(function () {
-              var x = miniPref('x')
-              var y = miniPref('y')
-              return typeof x === 'number' && typeof y === 'number' ? { x: x, y: y } : null
+              var x = Number(miniPref('x'))
+              var y = Number(miniPref('y'))
+              return Number.isFinite(x) && Number.isFinite(y)
+                ? { x: Math.max(MINI_MARGIN, x), y: Math.max(MINI_TOP_SAFE, y) }
+                : null
             })
             var place = placeState[0]
             var setPlace = placeState[1]
             var sizeState = React.useState(function () {
               var width = Number(miniPref('width'))
               var height = Number(miniPref('height'))
+              var savedVersion = Number(miniPref('sizeVersion'))
               return {
-                width: Number.isFinite(width) && width >= 260 ? width : 360,
-                height: Number.isFinite(height) && height >= 190 ? height : 260,
+                width: savedVersion === MINI_SIZE_VERSION && Number.isFinite(width) && width >= MINI_MIN_WIDTH ? width : MINI_DEFAULT_WIDTH,
+                height: savedVersion === MINI_SIZE_VERSION && Number.isFinite(height) && height >= MINI_MIN_HEIGHT ? height : MINI_DEFAULT_HEIGHT,
               }
             })
             var size = sizeState[0]
             var setSize = sizeState[1]
             var cardRef = React.useRef(null)
+            var dragRef = React.useRef(null)
             var dragState = React.useState(false)
             var isDragging = dragState[0]
             var setDragging = dragState[1]
 
+            function clampPlace(x, y, width, height) {
+              var wide = typeof window !== 'undefined' && window.innerWidth ? window.innerWidth : 1200
+              var tall = typeof window !== 'undefined' && window.innerHeight ? window.innerHeight : 800
+              var itemWidth = Number.isFinite(Number(width)) ? Number(width) : MINI_DEFAULT_WIDTH
+              var itemHeight = Number.isFinite(Number(height)) ? Number(height) : MINI_DEFAULT_HEIGHT
+              var maxX = Math.max(MINI_MARGIN, wide - Math.max(36, itemWidth) - MINI_MARGIN)
+              var maxY = Math.max(MINI_TOP_SAFE, tall - Math.max(36, itemHeight) - MINI_MARGIN)
+              return {
+                x: Math.round(Math.min(Math.max(MINI_MARGIN, Number(x) || 0), maxX)),
+                y: Math.round(Math.min(Math.max(MINI_TOP_SAFE, Number(y) || 0), maxY)),
+              }
+            }
+
             function placedStyle(current) {
-              if (!current) return { position: 'absolute', right: 24, bottom: 24, zIndex: 60 }
+              if (!current) return { position: 'absolute', right: 24, top: MINI_TOP_SAFE, bottom: 'auto', zIndex: 60 }
               return { position: 'absolute', left: current.x, top: current.y, right: 'auto', bottom: 'auto', zIndex: 60 }
             }
 
             function onDragStart(event) {
-              setDragging(true)
-              // Seed from where the window actually is, or the first movement would jump it to the
-              // top-left corner: the shell position is a layout fact, not a number we were told.
-              if (!place && event && event.currentTarget && event.currentTarget.getBoundingClientRect) {
-                var rect = event.currentTarget.getBoundingClientRect()
-                setPlace({ x: Math.round(rect.left), y: Math.round(rect.top) })
+              if (!event || !event.currentTarget) return
+              var rect = typeof event.currentTarget.getBoundingClientRect === 'function'
+                ? event.currentTarget.getBoundingClientRect()
+                : { left: 0, top: MINI_TOP_SAFE, width: open ? size.width : 36, height: open ? size.height : 36 }
+              var origin = place || clampPlace(rect.left, rect.top, rect.width, rect.height)
+              if (!place) setPlace(origin)
+              var pointerX = Number(event.clientX)
+              var pointerY = Number(event.clientY)
+              var hasPointer = Number.isFinite(pointerX) && Number.isFinite(pointerY)
+              dragRef.current = {
+                startX: hasPointer ? pointerX : null,
+                startY: hasPointer ? pointerY : null,
+                originX: origin.x,
+                originY: origin.y,
+                lastPlace: origin,
+                width: rect.width,
+                height: rect.height,
               }
-              if (event && event.preventDefault) event.preventDefault()
-              if (event && event.currentTarget && event.currentTarget.setPointerCapture && event.pointerId !== undefined) {
+              setDragging(true)
+              if (event.preventDefault) event.preventDefault()
+              if (event.stopPropagation) event.stopPropagation()
+              if (event.currentTarget.setPointerCapture && event.pointerId !== undefined) {
                 try { event.currentTarget.setPointerCapture(event.pointerId) } catch (e) { void e }
               }
             }
 
             function onDragMove(event) {
-              if (!isDragging || !event) return
-              var dx = event.movementX || 0
-              var dy = event.movementY || 0
-              // The handler is rebuilt on every render, so `place` here is the position from the
-              // last one; a functional update would be tidier but not every renderer has it.
-              var from = place || { x: 0, y: 0 }
-              var wide = typeof window !== 'undefined' && window.innerWidth ? window.innerWidth : 1200
-              var tall = typeof window !== 'undefined' && window.innerHeight ? window.innerHeight : 800
-              var maxX = Math.max(0, wide - 72)
-              var maxY = Math.max(0, tall - 32)
-              setPlace({
-                x: Math.min(Math.max(0, from.x + dx), maxX),
-                y: Math.min(Math.max(0, from.y + dy), maxY),
-              })
+              var drag = dragRef.current
+              if (!drag || !event) return
+              var pointerX = Number(event.clientX)
+              var pointerY = Number(event.clientY)
+              var hasPointer = Number.isFinite(pointerX) && Number.isFinite(pointerY)
+              var next
+              if (hasPointer && drag.startX !== null && drag.startY !== null) {
+                next = clampPlace(drag.originX + pointerX - drag.startX, drag.originY + pointerY - drag.startY, drag.width, drag.height)
+              } else {
+                next = clampPlace(drag.lastPlace.x + (Number(event.movementX) || 0), drag.lastPlace.y + (Number(event.movementY) || 0), drag.width, drag.height)
+              }
+              drag.lastPlace = next
+              setPlace(next)
             }
 
             function onDragEnd() {
-              if (!isDragging) return
+              var drag = dragRef.current
+              if (!drag) return
+              dragRef.current = null
               setDragging(false)
-              if (place) {
-                setMiniPref('x', place.x)
-                setMiniPref('y', place.y)
+              if (drag.lastPlace) {
+                setPlace(drag.lastPlace)
+                setMiniPref('x', drag.lastPlace.x)
+                setMiniPref('y', drag.lastPlace.y)
               }
             }
 
@@ -1810,11 +1849,12 @@ window.__ModuleLoader__.load({
                 var rect = target.getBoundingClientRect()
                 var width = Math.round(rect.width)
                 var height = Math.round(rect.height)
-                if (!Number.isFinite(width) || !Number.isFinite(height) || width < 260 || height < 190) return
+                if (!Number.isFinite(width) || !Number.isFinite(height) || width < MINI_MIN_WIDTH || height < MINI_MIN_HEIGHT) return
                 setSize(function (previous) {
                   if (previous.width === width && previous.height === height) return previous
                   setMiniPref('width', width)
                   setMiniPref('height', height)
+                  setMiniPref('sizeVersion', MINI_SIZE_VERSION)
                   return { width: width, height: height }
                 })
               })
@@ -1856,8 +1896,8 @@ window.__ModuleLoader__.load({
                       // below, so the human's preferred footprint survives a DSH reload.
                       width: size.width,
                       height: size.height,
-                      minWidth: 260,
-                      minHeight: 190,
+                      minWidth: MINI_MIN_WIDTH,
+                      minHeight: MINI_MIN_HEIGHT,
                       maxWidth: 'calc(100vw - 24px)',
                       maxHeight: 'calc(100vh - 24px)',
                       boxSizing: 'border-box',
@@ -1865,6 +1905,7 @@ window.__ModuleLoader__.load({
                       overflow: 'hidden',
                       display: 'flex',
                       flexDirection: 'column',
+                      WebkitAppRegion: 'no-drag',
                       background: 'var(--dsw-alias-bg-overlay)',
                       color: 'var(--dsw-alias-label-primary)',
                       border: '1px solid var(--dsw-alias-border-l1)',
@@ -1879,6 +1920,7 @@ window.__ModuleLoader__.load({
                 React.createElement(
                   'div',
                   {
+                    'data-dsh-role': 'drag-handle',
                     onPointerDown: onDragStart,
                     onPointerMove: onDragMove,
                     onPointerUp: onDragEnd,
@@ -1893,6 +1935,7 @@ window.__ModuleLoader__.load({
                       cursor: isDragging ? 'grabbing' : 'grab',
                       userSelect: 'none',
                       touchAction: 'none',
+                      WebkitAppRegion: 'no-drag',
                     },
                   },
                   React.createElement(
@@ -1961,13 +2004,14 @@ window.__ModuleLoader__.load({
             } else {
               bits.push(t('residentOn'))
             }
+            var statusLabel = t('openPanel') + (bits.length ? ' · ' + bits.join(' · ') : '')
             return React.createElement(
               'button',
               {
                 type: 'button',
                 onClick: function () { setOpen(true); setMiniPref('collapsed', false) },
-                'aria-label': t('openPanel'),
-                title: t('openPanel'),
+                'aria-label': statusLabel,
+                title: statusLabel,
                 style: {
                   ...placedStyle(place),
                   pointerEvents: 'auto',
@@ -1976,14 +2020,19 @@ window.__ModuleLoader__.load({
                   background: 'var(--dsw-alias-bg-layer-2)',
                   color: 'var(--dsw-alias-label-primary)',
                   cursor: 'pointer',
-                  fontSize: 12,
-                  fontWeight: 600,
-                  padding: '7px 11px',
+                  width: 36,
+                  height: 36,
+                  display: 'grid',
+                  placeItems: 'center',
+                  padding: 0,
                   boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
+                  WebkitAppRegion: 'no-drag',
                 },
               },
-              React.createElement('span', { 'aria-hidden': true, style: { display: 'inline-block', width: 7, height: 7, marginRight: 7, borderRadius: 999, background: status && status.kernelDeferred ? 'var(--dsw-alias-state-warn-primary)' : status && status.kernel && status.kernel.running ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)' } }),
-              bits.join(' · '),
+              React.createElement('span', { 'aria-hidden': true, style: { display: 'inline-flex', alignItems: 'center', gap: 5 } },
+                React.createElement('span', { style: { color: 'var(--dsw-alias-state-success-primary)', fontSize: 15, lineHeight: 1 } }, '◈'),
+                React.createElement('span', { style: { display: 'inline-block', width: 7, height: 7, borderRadius: 999, background: status && status.kernelDeferred ? 'var(--dsw-alias-state-warn-primary)' : status && status.kernel && status.kernel.running ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)' } }),
+              ),
             )
           },
         )
