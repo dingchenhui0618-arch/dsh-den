@@ -46,6 +46,8 @@ window.__ModuleLoader__.load({
       en: {
         nav: 'den',
         title: 'den — resident assistant',
+        panelEyebrow: 'RESIDENT CONTROL',
+        panelSubtitle: 'Signals first. Details when you need them.',
         refreshing: 'refreshing…',
         refresh: 'Refresh',
         autonomy: 'acting on my own',
@@ -57,7 +59,11 @@ window.__ModuleLoader__.load({
         notices: 'Pending notices',
         gate: 'Approval gate',
         gateMounted: 'armed',
-        gateUnmounted: 'NOT armed',
+        gateUnmounted: 'tools unguarded',
+        gateArmed: 'tools guarded',
+        gateDirect: 'tools pass through',
+        gateDirectHint: 'Approval gate is off for this profile.',
+        gateArmedHint: 'Risky or remote actions stay behind the gate.',
         scenarios: 'Memory scenarios',
         kernel: 'Heartbeat',
         kernelOn: 'running',
@@ -111,6 +117,8 @@ window.__ModuleLoader__.load({
         wokeShort: 'woke itself today',
         owedShort: 'things to tell you',
         collapse: 'shut it',
+        openPanel: 'Open den panel',
+        floatingLabel: 'standing chat',
         tasksShort: 'in progress',
         tasksStuck: 'stuck',
         tasksWaiting: 'waiting on you',
@@ -137,6 +145,8 @@ window.__ModuleLoader__.load({
       zh: {
         nav: 'den',
         title: 'den —— 常驻助理',
+        panelEyebrow: '常驻控制台',
+        panelSubtitle: '先看信号，再决定是否展开细节。',
         refreshing: '刷新中…',
         refresh: '刷新',
         autonomy: '能不能自己动手',
@@ -148,7 +158,11 @@ window.__ModuleLoader__.load({
         notices: '待处理提醒',
         gate: '审批闸门',
         gateMounted: '已装载',
-        gateUnmounted: '未装载',
+        gateUnmounted: '工具直通',
+        gateArmed: '工具受保护',
+        gateDirect: '工具直通',
+        gateDirectHint: '当前 profile 已关闭审批闸门，工具调用不会被拦截。',
+        gateArmedHint: '危险或远端操作会留在审批门后。',
         scenarios: '记忆场景',
         kernel: '心跳',
         kernelOn: '运行中',
@@ -191,6 +205,8 @@ window.__ModuleLoader__.load({
         wokeShort: '自己醒来',
         owedShort: '有话想跟你说',
         collapse: '收起',
+        openPanel: '打开 den 面板',
+        floatingLabel: '常驻会话',
         tasksShort: '进行中',
         tasksStuck: '卡住',
         tasksWaiting: '等你',
@@ -309,6 +325,80 @@ window.__ModuleLoader__.load({
       error: 'var(--dsw-alias-state-error-primary)',
     }
 
+    /**
+     * Compact status language for the panel header and the floating window.
+     *
+     * The dot is deliberately a semantic token rather than a hard-coded colour: the host owns
+     * the light/dark palette, while den owns the meaning of the state. A single status primitive
+     * also keeps the main page and the floating surface from drifting apart again.
+     */
+    function StatusBadge(props) {
+      var color = TONE_TOKEN[props.tone || 'success'] || TONE_TOKEN.success
+      return React.createElement(
+        'span',
+        {
+          role: 'status',
+          style: {
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 7,
+            minHeight: 24,
+            padding: '3px 9px',
+            borderRadius: 999,
+            border: '1px solid var(--dsw-alias-border-l2)',
+            background: 'var(--dsw-alias-bg-layer-2)',
+            color: 'var(--dsw-alias-label-secondary)',
+            fontSize: 11,
+            fontWeight: 600,
+            letterSpacing: '0.01em',
+            whiteSpace: 'nowrap',
+          },
+        },
+        React.createElement('span', {
+          'aria-hidden': true,
+          style: { width: 7, height: 7, borderRadius: 999, background: color, boxShadow: '0 0 0 3px var(--dsw-alias-bg-layer-2)' },
+        }),
+        React.createElement('span', null, props.label),
+        props.detail
+          ? React.createElement('span', { style: { color: 'var(--dsw-alias-label-tertiary)', fontWeight: 400 } }, props.detail)
+          : null,
+      )
+    }
+
+    /** A small signal card; values lead, labels recede, and the detail line explains the number. */
+    function Metric(props) {
+      var tone = props.tone ? TONE_TOKEN[props.tone] : null
+      return React.createElement(
+        'div',
+        {
+          style: {
+            minWidth: 0,
+            padding: '10px 11px',
+            borderRadius: 10,
+            border: '1px solid var(--dsw-alias-border-l2)',
+            background: 'var(--dsw-alias-bg-layer-2)',
+          },
+        },
+        React.createElement(
+          'div',
+          { style: { color: 'var(--dsw-alias-label-tertiary)', fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase' } },
+          props.label,
+        ),
+        React.createElement(
+          'div',
+          { style: { marginTop: 4, color: tone || 'var(--dsw-alias-label-primary)', fontSize: 16, fontWeight: 700, lineHeight: 1.2, fontVariantNumeric: 'tabular-nums' } },
+          props.value,
+        ),
+        props.detail
+          ? React.createElement(
+              'div',
+              { style: { marginTop: 4, color: 'var(--dsw-alias-label-tertiary)', fontSize: 11, lineHeight: 1.35, wordBreak: 'break-word' } },
+              props.detail,
+            )
+          : null,
+      )
+    }
+
     function Row(props) {
       var tone = props.tone ? TONE_TOKEN[props.tone] : null
       if (props.tone && !tone) throw new Error('unknown status tone: ' + props.tone)
@@ -368,15 +458,22 @@ window.__ModuleLoader__.load({
           type: 'button',
           disabled: props.disabled ? true : undefined,
           onClick: props.onClick,
+          title: props.title,
+          'aria-label': props['aria-label'],
+          'aria-busy': props.busy ? true : undefined,
           style: {
-            padding: '4px 10px',
+            minHeight: 30,
+            padding: props.compact ? '3px 8px' : '5px 10px',
             marginRight: 6,
-            borderRadius: 4,
+            borderRadius: 7,
             border: '1px solid var(--dsw-alias-border-l2)',
-            background: props.primary ? 'var(--dsw-alias-bg-layer-3)' : 'transparent',
+            background: props.primary ? 'var(--dsw-alias-bg-layer-3)' : 'var(--dsw-alias-bg-layer-2)',
             color: props.disabled ? 'var(--dsw-alias-label-tertiary)' : 'var(--dsw-alias-label-primary)',
             cursor: props.disabled ? 'default' : 'pointer',
             font: 'inherit',
+            fontSize: 12,
+            fontWeight: props.primary ? 600 : 500,
+            transition: 'border-color 120ms ease, background 120ms ease, transform 120ms ease',
           },
         },
         props.children,
@@ -624,8 +721,13 @@ window.__ModuleLoader__.load({
         }
         return React.createElement(
           'div',
-          { style: { marginTop: 14, paddingTop: 10, borderTop: '1px solid var(--dsw-alias-border-l2)' } },
-          React.createElement('div', { style: { fontSize: 13, color: 'var(--dsw-alias-label-primary)', marginBottom: 4 } }, t('schedules')),
+          { style: { marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--dsw-alias-border-l2)' } },
+          React.createElement(
+            'div',
+            { style: { display: 'flex', alignItems: 'center', gap: 7, marginBottom: 7 } },
+            React.createElement('span', { 'aria-hidden': true, style: { width: 6, height: 6, borderRadius: 999, background: 'var(--dsw-alias-state-success-primary)' } }),
+            React.createElement('span', { style: { fontSize: 12, fontWeight: 700, color: 'var(--dsw-alias-label-primary)' } }, t('schedules')),
+          ),
           sched.list.length === 0
             ? React.createElement(
                 'div',
@@ -752,8 +854,10 @@ window.__ModuleLoader__.load({
               alignItems: 'center',
               flexWrap: 'wrap',
               gap: 8,
-              padding: '6px 10px',
+              padding: '9px 11px',
               fontSize: 12,
+              borderLeft: '3px solid var(--dsw-alias-state-warn-primary)',
+              borderRadius: 8,
               background: 'var(--dsw-alias-bg-layer-2)',
               color: 'var(--dsw-alias-label-secondary)',
             },
@@ -793,13 +897,13 @@ window.__ModuleLoader__.load({
         if (granted) {
           return React.createElement(
             'div',
-            { style: { padding: '6px 10px', fontSize: 12, color: 'var(--dsw-alias-label-secondary)' } },
+            { style: { margin: '4px 8px', padding: '7px 10px', fontSize: 12, color: 'var(--dsw-alias-label-secondary)', background: 'var(--dsw-alias-bg-layer-2)', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 8 } },
             React.createElement('span', null, t('grantDock') + ' ' + String.fromCharCode(183) + ' ' + t('grantDockGranted')),
           )
         }
         return React.createElement(
           'div',
-          null,
+          { style: { margin: '4px 8px', background: 'var(--dsw-alias-bg-layer-2)', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 8 } },
           React.createElement(
             'div',
             {
@@ -863,7 +967,87 @@ window.__ModuleLoader__.load({
         )
       }
 
-      var children = [React.createElement('h2', { key: 'h', style: { margin: '0 0 4px', fontSize: 16, color: 'var(--dsw-alias-label-primary)' } }, t('title'))]
+      var gateMounted = Boolean(d && d.gate && d.gate.mounted)
+      var headerKernelTone = !d || d.kernelDeferred || !(d.kernel && d.kernel.running)
+        ? 'error'
+        : d.residency && d.residency.held === false
+          ? 'warn'
+          : 'success'
+      var headerKernelLabel = !d
+        ? t('unavailable')
+        : d.kernelDeferred
+          ? t('kernelWaiting')
+          : d.kernel && d.kernel.running
+            ? t('residentOn')
+            : t('residentOff')
+      var headerKernelDetail = d && d.kernel && d.kernel.lastTickAt ? t('lastTick') + ' ' + fmtTime(d.kernel.lastTickAt, t) : null
+      var children = [
+        React.createElement(
+          'div',
+          {
+            key: 'hero',
+            style: {
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 12,
+              padding: '2px 0 14px',
+              borderBottom: '1px solid var(--dsw-alias-border-l2)',
+            },
+          },
+          React.createElement(
+            'div',
+            { style: { display: 'flex', alignItems: 'flex-start', gap: 10 } },
+            React.createElement(
+              'div',
+              {
+                'aria-hidden': true,
+                style: {
+                  display: 'grid',
+                  placeItems: 'center',
+                  flex: '0 0 auto',
+                  width: 34,
+                  height: 34,
+                  borderRadius: 10,
+                  background: 'var(--dsw-alias-bg-layer-3)',
+                  border: '1px solid var(--dsw-alias-border-l2)',
+                  color: 'var(--dsw-alias-state-success-primary)',
+                  fontSize: 18,
+                  fontWeight: 700,
+                },
+              },
+              '◈',
+            ),
+            React.createElement(
+              'div',
+              { style: { minWidth: 0, flex: '1 1 auto' } },
+              React.createElement('div', { style: { color: 'var(--dsw-alias-label-tertiary)', fontSize: 10, fontWeight: 700, letterSpacing: '0.12em' } }, t('panelEyebrow')),
+              React.createElement('h2', { style: { margin: '3px 0 2px', fontSize: 18, lineHeight: 1.2, letterSpacing: '-0.02em', color: 'var(--dsw-alias-label-primary)' } }, t('title')),
+              React.createElement('div', { style: { color: 'var(--dsw-alias-label-secondary)', fontSize: 12, lineHeight: 1.45 } }, t('panelSubtitle')),
+            ),
+            React.createElement(
+              Button,
+              {
+                compact: true,
+                onClick: load,
+                busy: view.phase === 'refreshing',
+                title: t('refresh'),
+                'aria-label': t('refresh'),
+              },
+              view.phase === 'refreshing' ? '…' : '↻',
+            ),
+          ),
+          React.createElement(
+            'div',
+            { style: { display: 'flex', flexWrap: 'wrap', gap: 7 } },
+            React.createElement(StatusBadge, { tone: headerKernelTone, label: headerKernelLabel, detail: headerKernelDetail }),
+            React.createElement(StatusBadge, {
+              tone: gateMounted ? 'success' : 'warn',
+              label: gateMounted ? t('gateArmed') : t('gateDirect'),
+              detail: gateMounted ? null : t('gateDirectHint'),
+            }),
+          ),
+        ),
+      ]
 
       if (view.phase === 'error') {
         children.push(
@@ -955,41 +1139,66 @@ window.__ModuleLoader__.load({
           Boolean(d && d.freshness && d.freshness.stale)
 
         /**
-         * One line a person can read in a second; the measured rows only if asked for.
-         *
-         * The user's own panel on their phone puts a single `label value · label value` row above the
-         * composer. This is the same shape and the same argument: the default view answers the three
-         * questions a person actually has — is it on, has it done anything, is anything waiting for
-         * me — and the measurements move behind `details`.
+         * The signal rail is the focal point of the page: four quiet cards answer the useful questions
+         * without making the operator decode a paragraph of dots. The values stay short, while the
+         * detail line carries the timestamp, budget or recovery hint that makes each number actionable.
          */
+        var taskMetric = d && d.tasks && Number(d.tasks.total) > 0 && Number.isFinite(d.tasks.active)
+          ? React.createElement(Metric, {
+              label: t('tasksShort'),
+              value: t('tasksShort') + ' ' + String(d.tasks.active),
+              detail:
+                (Number(d.tasks.blocked) > 0 ? t('tasksStuck') + ' ' + String(d.tasks.blocked) : '') +
+                (Number(d.tasks.waiting) > 0 ? (Number(d.tasks.blocked) > 0 ? ' · ' : '') + t('tasksWaiting') + ' ' + String(d.tasks.waiting) : ''),
+              tone: Number(d.tasks.blocked) > 0 ? 'warn' : 'success',
+            })
+          : null
         children.push(
           React.createElement(
             'div',
-            { key: 'plain', style: { margin: '6px 0 2px', color: 'var(--dsw-alias-label-secondary)' } },
+            {
+              key: 'signals',
+              'aria-label': t('panelSubtitle'),
+              style: {
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(132px, 1fr))',
+                gap: 8,
+                margin: '14px 0 8px',
+              },
+            },
+            React.createElement(Metric, {
+              label: t('kernel'),
+              value: running ? t('kernelOn') : d.kernelDeferred ? t('kernelWaiting') : t('kernelOff'),
+              detail: running ? t('lastTick') + ' ' + fmtTime(d.kernel && d.kernel.lastTickAt, t) : kernelValue,
+              tone: kernelTone,
+            }),
+            React.createElement(Metric, {
+              label: t('autonomy'),
+              value: autonomyText,
+              detail: gateMounted ? t('gateArmedHint') : t('gateDirectHint'),
+              tone: autonomyTone || 'warn',
+            }),
+            React.createElement(Metric, {
+              label: t('turns'),
+              value: t('wokeShort') + ' ' + String((d && d.ledger && d.ledger.turns) || 0),
+              detail: d.dailyTurnBudget ? t('budgetShort') + ' ' + String((d.ledger && d.ledger.turns) || 0) + '/' + String(d.dailyTurnBudget) : t('budgetOff'),
+            }),
+            React.createElement(Metric, {
+              label: t('notices'),
+              value: t('owedShort') + ' ' + String(owedCount),
+              detail: owedCount ? t('noticesOwed') : t('none'),
+              tone: owedCount ? 'warn' : undefined,
+            }),
+            taskMetric,
             React.createElement(
-              'span',
-              { style: { color: 'var(--dsw-alias-label-primary)' } },
-              running ? t('residentOn') : t('residentOff'),
-            ),
-            ' · ' + t('wokeShort') + ' ' + String((d && d.ledger && d.ledger.turns) || 0),
-            ' · ' + t('owedShort') + ' ' + String(owedCount),
-            // Tasks (DESIGN 7.4). Same row, not a new one, and only when there is something to
-            // say: with no tasks this line stays byte-identical to what it was, because a permanent
-            // "in progress 0" is exactly the kind of always-there furniture the default view is
-            // supposed to be free of. When there is work, the stuck count rides along — never
-            // folded behind `details`, because a step that cannot move on is the one thing a person
-            // must not have to go looking for.
-            d && d.tasks && Number(d.tasks.total) > 0 && Number.isFinite(d.tasks.active)
-              ? ' · ' + t('tasksShort') + ' ' + String(d.tasks.active) +
-                (Number(d.tasks.blocked) > 0 ? ' · ' + t('tasksStuck') + ' ' + String(d.tasks.blocked) : '') +
-                (Number(d.tasks.waiting) > 0 ? ' · ' + t('tasksWaiting') + ' ' + String(d.tasks.waiting) : '')
-              : '',
-            ' · ' + autonomyText,
-            '  ',
-            React.createElement(
-              Button,
-              { onClick: function () { setDetailOpen(!detailOpen) } },
-              detailOpen ? t('scheduleClose') : t('details'),
+              'div',
+              { style: { gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, minHeight: 30 } },
+              React.createElement('span', { style: { color: 'var(--dsw-alias-label-tertiary)', fontSize: 11 } }, t('details')),
+              React.createElement(
+                Button,
+                { compact: true, onClick: function () { setDetailOpen(!detailOpen) }, 'aria-label': t('details') },
+                detailOpen ? t('scheduleClose') : t('details'),
+              ),
             ),
           ),
           noticesBlock(),
@@ -1009,8 +1218,8 @@ window.__ModuleLoader__.load({
               }),
               React.createElement(Row, {
                 label: t('gate'),
-                value: d.gate && d.gate.mounted ? t('gateMounted') : t('gateUnmounted'),
-                tone: d.gate && d.gate.mounted ? 'success' : 'error',
+                value: gateMounted ? t('gateMounted') : t('gateUnmounted'),
+                tone: gateMounted ? 'success' : 'warn',
               }),
               React.createElement(Row, {
                 label: t('kernel'),
@@ -1100,12 +1309,14 @@ window.__ModuleLoader__.load({
         'div',
         {
           style: {
-            padding: 16,
+            padding: 18,
             background: 'var(--dsw-alias-bg-layer-1)',
             border: '1px solid var(--dsw-alias-border-l2)',
-            borderRadius: 8,
+            borderRadius: 12,
+            boxShadow: '0 12px 28px rgba(0,0,0,.12)',
             fontFamily: 'inherit',
-            maxWidth: 520,
+            lineHeight: 1.4,
+            maxWidth: 640,
           },
         },
         children,
@@ -1406,17 +1617,21 @@ window.__ModuleLoader__.load({
             key: String(message.seq || index),
             style: { margin: '6px 0', display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start' },
           },
-          React.createElement('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)' } }, mine ? t('sayYou') : t('sayDen')),
+          React.createElement('div', { style: { marginBottom: 3, padding: '0 4px', fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', color: mine ? 'var(--dsw-alias-label-secondary)' : 'var(--dsw-alias-state-success-primary)', textTransform: 'uppercase' } }, mine ? t('sayYou') : t('sayDen')),
           React.createElement(
             'div',
             {
               style: {
                 fontSize: 13,
-                lineHeight: 1.45,
+                lineHeight: 1.5,
                 color: 'var(--dsw-alias-label-primary)',
                 whiteSpace: 'pre-wrap',
                 wordBreak: 'break-word',
                 maxWidth: '92%',
+                padding: '8px 10px',
+                borderRadius: mine ? '12px 12px 4px 12px' : '12px 12px 12px 4px',
+                background: mine ? 'var(--dsw-alias-bg-layer-3)' : 'var(--dsw-alias-bg-layer-2)',
+                border: '1px solid var(--dsw-alias-border-l2)',
               },
             },
             message.text,
@@ -1428,15 +1643,15 @@ window.__ModuleLoader__.load({
         return React.createElement(
           'div',
           { key: 'waiting-' + index, style: { margin: '6px 0', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', opacity: 0.72 } },
-          React.createElement('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)' } }, t('sayYou') + ' · ' + t('saySending')),
-          React.createElement('div', { style: { fontSize: 13, lineHeight: 1.45, color: 'var(--dsw-alias-label-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxWidth: '92%' } }, text),
+          React.createElement('div', { style: { marginBottom: 3, padding: '0 4px', fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--dsw-alias-label-secondary)', textTransform: 'uppercase' } }, t('sayYou') + ' · ' + t('saySending')),
+          React.createElement('div', { style: { fontSize: 13, lineHeight: 1.5, color: 'var(--dsw-alias-label-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxWidth: '92%', padding: '8px 10px', borderRadius: '12px 12px 4px 12px', background: 'var(--dsw-alias-bg-layer-3)', border: '1px solid var(--dsw-alias-border-l2)' } }, text),
         )
       })
       var allRows = rows.concat(waitingRows)
 
       return React.createElement(
         'div',
-        { style: { padding: '2px 10px 8px' } },
+        { style: { padding: '8px 10px 10px', background: 'var(--dsw-alias-bg-layer-1)' } },
         // The transcript accumulates; the model's context does not. This says so in the one place a
         // reader would otherwise assume they are looking at everything.
         view.phase === 'older'
@@ -1447,7 +1662,7 @@ window.__ModuleLoader__.load({
           : null,
         React.createElement(
           'div',
-          { style: { maxHeight: 260, overflowY: 'auto' } },
+          { style: { maxHeight: 260, overflowY: 'auto', padding: '4px 2px', borderRadius: 10 } },
           allRows.length
             ? allRows
             : React.createElement('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', margin: '6px 0' } }, t('sayEmpty')),
@@ -1477,11 +1692,12 @@ window.__ModuleLoader__.load({
               flex: 1,
               minWidth: 0,
               fontSize: 12,
-              padding: '4px 6px',
-              borderRadius: 4,
+              padding: '8px 10px',
+              borderRadius: 8,
               border: '1px solid var(--dsw-alias-border-l2)',
-              background: 'var(--dsw-alias-bg-layer-1)',
+              background: 'var(--dsw-alias-bg-layer-2)',
               color: 'var(--dsw-alias-label-primary)',
+              outline: 'none',
             },
           }),
           React.createElement(Button, {
@@ -1610,14 +1826,14 @@ window.__ModuleLoader__.load({
                       background: 'var(--dsw-alias-bg-overlay)',
                       color: 'var(--dsw-alias-label-primary)',
                       border: '1px solid var(--dsw-alias-border-l1)',
-                      borderRadius: 12,
+                      borderRadius: 14,
                       boxShadow: '0 18px 44px rgba(0,0,0,.24), 0 2px 6px rgba(0,0,0,.10)',
                     },
                     placedStyle(place),
                   ),
                 },
-                // The bar is the grab area: it holds no text of its own, so the window still reads
-                // as the panel and nothing else, and the only control on it is the collapse button.
+                // The bar is the grab area: the short label makes the floating surface identifiable
+                // without competing with the conversation, and the only control on it is collapse.
                 React.createElement(
                   'div',
                   {
@@ -1628,26 +1844,38 @@ window.__ModuleLoader__.load({
                     style: {
                       display: 'flex',
                       alignItems: 'center',
-                      justifyContent: 'flex-end',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      padding: '8px 10px 7px',
+                      borderBottom: '1px solid var(--dsw-alias-border-l2)',
                       cursor: isDragging ? 'grabbing' : 'grab',
                       userSelect: 'none',
                       touchAction: 'none',
                     },
                   },
                   React.createElement(
+                    'div',
+                    { style: { display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 } },
+                    React.createElement('span', { 'aria-hidden': true, style: { color: 'var(--dsw-alias-state-success-primary)', fontSize: 14 } }, '◈'),
+                    React.createElement('span', { style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--dsw-alias-label-secondary)' } }, t('floatingLabel')),
+                  ),
+                  React.createElement(
                     'button',
                     {
                       type: 'button',
                       onClick: function () { setOpen(false); setMiniPref('collapsed', true) },
+                      'aria-label': t('collapse'),
+                      title: t('collapse'),
                       style: {
-                        border: 'none',
-                        background: 'transparent',
+                        border: '1px solid var(--dsw-alias-border-l2)',
+                        borderRadius: 6,
+                        background: 'var(--dsw-alias-bg-layer-2)',
                         color: 'var(--dsw-alias-label-secondary)',
                         cursor: 'pointer',
                         fontSize: 14,
-                        padding: '0 6px',
+                        lineHeight: 1,
+                        padding: '5px 7px',
                       },
-                      title: t('collapse'),
                     },
                     '–',
                   ),
@@ -1695,19 +1923,23 @@ window.__ModuleLoader__.load({
               {
                 type: 'button',
                 onClick: function () { setOpen(true); setMiniPref('collapsed', false) },
+                'aria-label': t('openPanel'),
+                title: t('openPanel'),
                 style: {
                   ...placedStyle(place),
                   pointerEvents: 'auto',
-                  border: '1px solid var(--dsw-alias-border-l2)',
+                  border: '1px solid var(--dsw-alias-border-l1)',
                   borderRadius: 999,
-                  background: 'var(--dsw-alias-bg-base)',
-                  color: 'var(--dsw-alias-label-secondary)',
+                  background: 'var(--dsw-alias-bg-layer-2)',
+                  color: 'var(--dsw-alias-label-primary)',
                   cursor: 'pointer',
                   fontSize: 12,
-                  padding: '4px 10px',
+                  fontWeight: 600,
+                  padding: '7px 11px',
                   boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
                 },
               },
+              React.createElement('span', { 'aria-hidden': true, style: { display: 'inline-block', width: 7, height: 7, marginRight: 7, borderRadius: 999, background: status && status.kernelDeferred ? 'var(--dsw-alias-state-warn-primary)' : status && status.kernel && status.kernel.running ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)' } }),
               bits.join(' · '),
             )
           },

@@ -398,11 +398,15 @@ function bootWindow({ scripted = {} } = {}) {
  * on `ok !== true`, so a scripted reply is the bare `{ok, value}` — not the full
  * `server-response` frame the route writes onto the wire.
  */
+const demoRender = process.argv.includes('--demo')
+const demoStatusTime = Date.parse('2026-10-15T00:00:00.000Z')
+
 function healthyStatus(overrides = {}) {
+  const statusTime = demoRender ? demoStatusTime : Date.now()
   return {
     ok: true,
     value: {
-      generatedAt: Date.now(),
+      generatedAt: statusTime,
       name: 'Den',
       home: 'C:\\Users\\123\\.dsh\\den',
       autonomy: null,
@@ -411,7 +415,7 @@ function healthyStatus(overrides = {}) {
       ledger: { turns: 3, spoken: 1, skipped: 2, refused: 0 },
       notices: { total: 1, deliverable: 1, expired: 0 },
       triggers: { total: 1, invalid: 0, due: 0 },
-      kernel: { running: true, lastTickAt: Date.now(), lastError: null },
+      kernel: { running: true, lastTickAt: statusTime, lastError: null },
       tasks: { active: 2, blocked: 1, waiting: 1, total: 3 },
       kernelDeferred: null,
       gate: { mounted: true, recent: [] },
@@ -439,6 +443,10 @@ if (process.env.DEN_DEBUG) {
 
 const text = panel.text()
 check(text.includes('常驻助理') && !text.includes('Den ——'), 'the panel renders its title, lowercase to match the nav entry')
+check(text.includes('常驻控制台') && text.includes('先看信号'), 'the status page opens with a clear control-room hierarchy')
+check(panel.buttons().some((button) => textOf(button).trim() === '↻'), 'the page exposes an explicit refresh control')
+check(findAll(panel.tree, (node) => node.props?.style?.gridTemplateColumns === 'repeat(auto-fit, minmax(132px, 1fr))').length === 1, 'the summary uses a responsive signal rail instead of a flat paragraph')
+check(text.includes('工具受保护'), 'the approval state is stated in plain language when the gate is armed')
 check(text.includes('进行中 2'), 'the plain line carries the task count once there is work')
 check(text.includes('卡住 1'), 'a stuck step rides on that same line, not behind details')
   check(text.includes('等你 1'), 'and the step that is waiting on the person is on that line too')
@@ -483,10 +491,10 @@ check(
  * to reach the panel: the human is the only one who can restart DSH, and this is the one place
  * they are already looking.
  */
-async function mainPanelWith(freshness) {
+async function mainPanelWith(freshness, overrides = {}) {
   const component = boot({
     scripted: {
-      status: healthyStatus({ freshness }),
+      status: healthyStatus({ freshness, ...overrides }),
       'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } },
     },
   })
@@ -508,6 +516,8 @@ check(
   !unknownText.includes('与代码树一致'),
   'which is the point: "I cannot tell" must not render as "fine"',
 )
+const directToolsText = await mainPanelWith(null, { gate: { mounted: false, recent: [] } })
+check(directToolsText.includes('工具直通'), 'an explicitly disabled approval gate is explained as direct tool access, not as a red failure')
 
 /* --- the per-conversation controls sit where a conversation arrives --------- */
 
