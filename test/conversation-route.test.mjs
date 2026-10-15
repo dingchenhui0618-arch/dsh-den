@@ -146,6 +146,42 @@ test('a first message creates the conversation, delivers it, and writes the id d
   })
 })
 
+test('a context that throws when a service is missing is "unreadable", not a Cordis error', async () => {
+  await tempConversation(async ({ path }) => {
+    writeFileSync(path, JSON.stringify({ sessionId: 'sess-live', createdAt: 1, agentPreset: 'cordis' }))
+    // This is what a Cordis context does without an injection: reading the property THROWS, so optional
+    // chaining is no defence at all.
+    const ctx = {}
+    for (const name of ['agents', 'sessions', 'agentPresets', 'agentDefaultModel']) {
+      Object.defineProperty(ctx, name, {
+        get() {
+          throw new Error('cannot get property "' + name + '" without inject')
+        },
+      })
+    }
+    const outcome = await invokeAction(serviceWith(ctx, path), 'conversation/read', {}, {})
+    assert.equal(outcome.ok, true, 'the window still gets an answer')
+    assert.equal(outcome.value.state, 'unreadable')
+    assert.equal(outcome.value.sessionId, 'sess-live')
+  })
+})
+
+test('and creating one there reports what this host cannot do, not what Cordis could not read', async () => {
+  await tempConversation(async ({ path }) => {
+    const ctx = {}
+    for (const name of ['agents', 'agentPresets', 'agentDefaultModel']) {
+      Object.defineProperty(ctx, name, {
+        get() {
+          throw new Error('cannot get property "' + name + '" without inject')
+        },
+      })
+    }
+    const outcome = await invokeAction(serviceWith(ctx, path), 'conversation/say', { text: 'hello' }, {})
+    assert.equal(outcome.ok, false)
+    assert.match(outcome.error, /cannot create the standing conversation/)
+  })
+})
+
 test('a conversation that exists but cannot be read is reported as such, not as empty', async () => {
   await tempConversation(async ({ path }) => {
     writeFileSync(path, JSON.stringify({ sessionId: 'sess-gone' }))

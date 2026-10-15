@@ -12,6 +12,7 @@ import { randomBytes } from 'node:crypto'
 
 import { denPath } from './atom.js'
 import { ensureConversation, promptConversation, readStandingConversation, sayInConversation } from './conversation.js'
+import { serviceOf } from './grant.js'
 import { summarizeFromDisk, TASKS_FILE } from './tasks-store.js'
 
 export const PANEL_ACTIONS = [
@@ -49,7 +50,8 @@ export function statusSnapshot(service, { sessionId, nextTriggerAt } = {}) {
 
   let autonomy = null
   if (sessionId) {
-    const agent = service.ctx?.agents?.get?.(sessionId)
+    const panelAgents = serviceOf(service.ctx, 'agents')
+    const agent = typeof panelAgents?.get === 'function' ? panelAgents.get(sessionId) : undefined
     if (agent) autonomy = service.grantFor(agent) ?? null
   }
 
@@ -231,7 +233,8 @@ export async function invokeAction(service, action, payload = {}, { sessionId, n
         service.noteEvent({ type: 'panel-autonomy-expired' })
         return { ok: false, error: 'the autonomy token expired; request a new one' }
       }
-      const agent = liveSessionId ? service.ctx?.agents?.get?.(liveSessionId) : undefined
+      const liveAgents = serviceOf(service.ctx, 'agents')
+      const agent = liveSessionId && typeof liveAgents?.get === 'function' ? liveAgents.get(liveSessionId) : undefined
       if (!agent) {
         return { ok: false, error: 'no live conversation for this token: autonomy is granted per conversation' }
       }

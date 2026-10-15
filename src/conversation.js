@@ -24,7 +24,7 @@
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
 import { denPath, readJson, writeJsonAtomic } from './atom.js'
-import { sessionEvents } from './grant.js'
+import { serviceOf, sessionEvents } from './grant.js'
 
 /** How many messages the window is handed by default. The transcript itself keeps everything. */
 export const DEFAULT_READ_LIMIT = 40
@@ -99,8 +99,10 @@ export function readConversation(session, { limit = DEFAULT_READ_LIMIT } = {}) {
 export function readStandingConversation(ctx, { limit = DEFAULT_READ_LIMIT, path = conversationPath() } = {}) {
   const record = readConversationRecord(path)
   if (!record) return { sessionId: null, state: 'absent', messages: [], total: 0, truncated: false, lastError: '' }
-  const live = typeof ctx?.agents?.get === 'function' ? ctx.agents.get(record.sessionId) : undefined
-  const session = live?.session ?? (typeof ctx?.sessions?.get === 'function' ? ctx.sessions.get(record.sessionId) : null)
+  const agents = serviceOf(ctx, 'agents')
+  const sessions = serviceOf(ctx, 'sessions')
+  const live = typeof agents?.get === 'function' ? agents.get(record.sessionId) : undefined
+  const session = live?.session ?? (typeof sessions?.get === 'function' ? sessions.get(record.sessionId) : null)
   if (!session) return { sessionId: record.sessionId, state: 'unreadable', messages: [], total: 0, truncated: false, lastError: '' }
   const read = readConversation(session, { limit })
   return Object.assign({ sessionId: record.sessionId, state: live ? 'live' : 'stored' }, read)
@@ -206,7 +208,7 @@ export function appendToSession(session, message) {
  * they change it.
  */
 export function resolveAgentOptions(ctx) {
-  const service = ctx && ctx.agentDefaultModel
+  const service = serviceOf(ctx, 'agentDefaultModel')
   if (!service || typeof service.currentSelection !== 'function') return undefined
   let selection
   try {
@@ -229,7 +231,7 @@ export function resolveAgentOptions(ctx) {
  * when this host offers no preset service, so the caller can tell no-preset from preset-named-empty.
  */
 export async function resolveAgentPreset(ctx) {
-  const service = ctx && ctx.agentPresets
+  const service = serviceOf(ctx, 'agentPresets')
   if (!service || typeof service.list !== 'function') return ''
   let presets
   try {
@@ -253,6 +255,7 @@ export async function resolveAgentPreset(ctx) {
 export async function ensureConversation(ctx, { cwd = '', path = conversationPath() } = {}) {
   const preset = await resolveAgentPreset(ctx)
   const agentOptions = resolveAgentOptions(ctx)
+  const agents = serviceOf(ctx, 'agents')
   const record = readConversationRecord(path)
   // A session created before this plugin knew about presets cannot assemble a prompt at all: the host
   // ends every turn with 'prompt variable "{{model}}" has no value for this assembly'. Resuming it
@@ -260,7 +263,7 @@ export async function ensureConversation(ctx, { cwd = '', path = conversationPat
   // otherwise a recreate would produce an equally dead session on every single call.
   const unusable = Boolean(record && preset && !record.agentPreset)
   if (record) {
-    const live = typeof ctx?.agents?.get === 'function' ? ctx.agents.get(record.sessionId) : undefined
+    const live = typeof agents?.get === 'function' ? agents.get(record.sessionId) : undefined
     // A live agent is proof enough, whatever the record says about presets.
     if (live) {
       return { agent: live, sessionId: record.sessionId, state: 'live', handle: null, agentPreset: record.agentPreset || preset || null, replaced: null }
@@ -268,12 +271,12 @@ export async function ensureConversation(ctx, { cwd = '', path = conversationPat
     if (unusable) {
       // Fall through to creation below.
     } else {
-      if (typeof ctx?.agents?.resume !== 'function') {
+      if (typeof agents?.resume !== 'function') {
         throw new Error('dsh-den: this host cannot resume the standing conversation')
       }
       // Carried on resume too: a resumed session assembles prompts like any other, and the options
       // are the host's current selection, so a model change is picked up on the next start.
-      const handle = await ctx.agents.resume({
+      const handle = await agents.resume({
         resumeSessionId: record.sessionId,
         ...(agentOptions ? { agentOptions } : {}),
       })
@@ -281,7 +284,7 @@ export async function ensureConversation(ctx, { cwd = '', path = conversationPat
     }
   }
 
-  if (typeof ctx?.agents?.create !== 'function') {
+  if (typeof agents?.create !== 'function') {
     throw new Error('dsh-den: this host cannot create the standing conversation')
   }
   // The id is generated here and written before the turn is used, so a crash between the two leaves
@@ -294,7 +297,7 @@ export async function ensureConversation(ctx, { cwd = '', path = conversationPat
   // all; the cwd is only where it does it.
   if (cwd && isAbsolute(cwd)) meta.cwd = cwd
   if (preset) meta.agentPreset = preset
-  const handle = await ctx.agents.create({
+  const handle = await agents.create({
     sessionId,
     ...(agentOptions ? { agentOptions } : {}),
     meta: Object.keys(meta).length ? meta : undefined,

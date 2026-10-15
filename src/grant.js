@@ -101,6 +101,33 @@ function messageText(event) {
  * This is the gate every grant/revoke path must pass. It intentionally checks the
  * live registry and status rather than trusting the caller's own claim.
  */
+/**
+ * One service off a context, whether or not it was injected.
+ *
+ * `ctx.get(name)` is the documented optional access ("requiresUndefinedCheck") and returns undefined
+ * rather than throwing. Reading `ctx.name` on a Cordis context whose injection is absent does NOT
+ * return undefined — it throws `cannot get property "name" without inject`. Optional chaining cannot
+ * catch that, which is exactly how a Cordis error reached the window where an honest "unreadable"
+ * belonged. The property read stays as a fallback so plain test contexts keep working, and it is
+ * guarded so a throwing getter is still just "no such service".
+ */
+export function serviceOf(ctx, name) {
+  if (!ctx) return undefined
+  if (typeof ctx.get === 'function') {
+    try {
+      const found = ctx.get(name)
+      if (found !== undefined) return found
+    } catch (error) {
+      /* a context that refuses to answer is a context without the service */
+    }
+  }
+  try {
+    return ctx[name]
+  } catch (error) {
+    return undefined
+  }
+}
+
 export function isDirectHumanDriver(ctx, agent, messageId) {
   return driverIsLiveDirectHuman(ctx, agent) && citedHumanMessage(agent, messageId) !== undefined
 }
@@ -112,7 +139,7 @@ export function isDirectHumanDriver(ctx, agent, messageId) {
  * an id, and it still has to clear every one of these checks.
  */
 function driverIsLiveDirectHuman(ctx, agent) {
-  const agents = ctx?.agents
+  const agents = serviceOf(ctx, 'agents')
   if (!agents || !agent?.session) return false
   if (typeof agents.get === 'function' && agents.get(agent.id) !== agent) return false
   if (typeof agents.currentInitiator === 'function' && agents.currentInitiator() !== agent) return false
