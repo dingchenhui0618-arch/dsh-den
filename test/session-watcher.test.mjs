@@ -20,6 +20,7 @@ const {
   MAX_TAIL_BYTES,
   alertKey,
   observeSessionActivity,
+  pruneAlerted,
   scanSessionLogs,
   shouldAlert,
   summariseTail,
@@ -205,4 +206,32 @@ test('a sighting becomes a wake in the den conversation, never in the watched on
   assert.equal(typeof stored.prompt, 'string', 'the schema requires it, so it must be there')
   assert.equal(stored.maySpeak, true, 'a once trigger defaults to silent, which this one must override')
   assert.equal(MAX_TAIL_BYTES, 4 * 1024 * 1024)
+})
+
+test('alerts are pruned to the sessions still on disk and capped to the most recent', () => {
+  const kept = pruneAlerted(
+    { 'sess-a:turn@10': 10, 'sess-gone:turn@20': 20, 'sess-b:turn@30': 30 },
+    new Set(['sess-a', 'sess-b']),
+  )
+  assert.deepEqual(Object.keys(kept).sort(), ['sess-a:turn@10', 'sess-b:turn@30'], 'a departed session is forgotten')
+
+  const many = {}
+  for (let i = 0; i < 10; i += 1) many[`sess-${i}:turn@${i}`] = i
+  const capped = pruneAlerted(many, new Set(), { max: 3 })
+  assert.deepEqual(Object.keys(capped).sort(), ['sess-7:turn@7', 'sess-8:turn@8', 'sess-9:turn@9'], 'the newest survive')
+
+  assert.deepEqual(pruneAlerted({ 'sess-a:size@5': 5 }, new Set(['sess-a'])), { 'sess-a:size@5': 5 }, 'size keys still work')
+})
+
+test('a session that leaves the disk leaves the scan state with it', () => {
+  withStore(({ root, dirOf, write }) => {
+    write('sess-alive', [asked('hi')])
+    write('sess-doomed', [asked('bye')])
+    const first = observeSessionActivity({ root, seen: {}, now: 1000 })
+    assert.equal(Object.keys(first.seen).length, 2)
+
+    rmSync(dirOf('sess-doomed'), { recursive: true, force: true })
+    const second = observeSessionActivity({ root, seen: first.seen, now: 2000 })
+    assert.deepEqual(Object.keys(second.seen), ['sess-alive'], 'state does not accumulate the machine history')
+  })
 })

@@ -206,6 +206,27 @@ export function shouldAlert(item, alerted = {}) {
   return !Object.prototype.hasOwnProperty.call(alerted, alertKey(item))
 }
 
+/** How many recent alerts are kept. An unbounded map in a resident process is a leak by definition. */
+export const MAX_ALERTED = 500
+
+/**
+ * Drop alerts for sessions that are no longer on disk, and cap what remains to the most recent few.
+ *
+ * The key is `sessionId:turn@<instant>`, and a session id never contains a colon, so the session can be
+ * recovered from the key without keeping a second index.
+ */
+export function pruneAlerted(alerted = {}, alive = new Set(), { max = MAX_ALERTED } = {}) {
+  const kept = []
+  for (const [key, at] of Object.entries(alerted)) {
+    const cut = key.lastIndexOf(':')
+    const sessionId = cut > 0 ? key.slice(0, cut) : key
+    if (alive.size && !alive.has(sessionId)) continue
+    kept.push([key, Number(at) || 0])
+  }
+  kept.sort((a, b) => b[1] - a[1])
+  return Object.fromEntries(kept.slice(0, max))
+}
+
 /**
  * The wake this sighting becomes.
  *

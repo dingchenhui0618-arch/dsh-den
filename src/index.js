@@ -42,7 +42,15 @@ import { denHome, denPath, listJsonFiles, reapStaleTempFiles, readJson, toLossle
 import { currentGrant, recordGrant, sessionEvents } from './grant.js'
 import { ackNotice as markNoticeDelivered, allNotices, isExpired, pendingNotices, queueNotice, sweepExpiredNotices } from './notices.js'
 import { installGate, RISK, classifyCall, recordAudit, auditPath } from './gate.js'
-import { alertKey, observeSessionActivity, shouldAlert, watchWakeFor, watcherSeenPath } from './watcher.js'
+import {
+  DEFAULT_MAX_SESSIONS,
+  alertKey,
+  observeSessionActivity,
+  pruneAlerted,
+  shouldAlert,
+  watchWakeFor,
+  watcherSeenPath,
+} from './watcher.js'
 import { KernelLease } from './resident.js'
 import { DenKernel, evaluateGates, readLedger, ledgerPath } from './kernel.js'
 import { deleteTrigger, dueTriggers, listTriggers, nextTriggerAt, normalizeTrigger, saveTrigger } from './triggers.js'
@@ -279,7 +287,22 @@ export class DenService {
    */
   scanSessions({ now = Date.now(), conversationPath: ownPath = this.conversationPath } = {}) {
     const storePath = watcherSeenPath()
-    const store = readJson(storePath) || {}
+    /**
+     * A malformed state file must cost one baseline scan, not the whole feature. `readJson` throws on
+     * unparseable JSON — the approved-switch reading had exactly this defect and had to be wrapped for the
+     * same reason — and an uncaught throw here means `watch-failed` on every heartbeat forever, while every
+     * other part of the plugin still reports healthy.
+     */
+    let store = {}
+    try {
+      store = readJson(storePath) || {}
+    } catch (error) {
+      this.noteEvent({
+        type: 'watch-state-unreadable',
+        message: String(error?.message || error).slice(0, 160),
+      })
+      store = {}
+    }
     const own = readConversationRecord(ownPath)
     const exclude = own?.sessionId ? [own.sessionId] : []
     const result = observeSessionActivity({ seen: store.sessions || {}, exclude, now })
@@ -297,7 +320,10 @@ export class DenService {
         this.noteEvent({ type: 'watch-trigger-failed', message: String(error?.message || error).slice(0, 160) })
       }
     }
-    writeJsonAtomic(storePath, { version: 1, scannedAt: now, sessions: result.seen, alerted })
+    // Pruned before writing: an alerted key whose session has left the machine can never fire again, and the
+    // map otherwise grows by one entry per failing turn for the life of the installation.
+    const keptAlerted = pruneAlerted(alerted, new Set(Object.keys(result.seen)))
+    writeJsonAtomic(storePath, { version: 1, scannedAt: now, sessions: result.seen, alerted: keptAlerted })
     // `watchState`, not `watchSummary`: a field that shares the method's name shadows it, and then the
     // method returns itself before the first scan has run.
     this.watchState = {
@@ -307,6 +333,8 @@ export class DenService {
       changes: result.changes.length,
       attention: result.attention.length,
       queued,
+      // A store larger than the scan limit is reported, not hidden behind a complete-looking number.
+      capped: result.watched >= DEFAULT_MAX_SESSIONS,
       lastError: result.attention.length ? result.attention[0].error : '',
     }
     if (queued) this.noteEvent({ type: 'watch-woke', queued })

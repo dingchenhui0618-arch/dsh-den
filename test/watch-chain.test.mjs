@@ -210,6 +210,36 @@ test('the heartbeat delivers the wake the watcher scheduled, into the den conver
   assert.match(notices[0].text, /failed|refused/, 'and it says what happened')
 })
 
+test('an unreadable state file costs one baseline scan, not a dead watcher', () => {
+  rmSync(join(home, 'den', 'triggers'), { recursive: true, force: true })
+  rmSync(join(home, 'den', 'ledger'), { recursive: true, force: true })
+  rmSync(join(home, 'den', 'pacing.json'), { force: true })
+
+  const other = 'third-other-session'
+  const otherDir = join(home, 'sessions', '--C-Users-someone-project--', other)
+  const otherLog = join(otherDir, 'session.v4.jsonl.zstd')
+  mkdirSync(otherDir, { recursive: true })
+  writeFileSync(otherLog, frame([asked('hi'), fine()]))
+
+  // A state file that cannot be parsed at all: the shape a kill mid-write leaves behind.
+  writeFileSync(watcherSeenPath(), '{"version":1,"sessions":{"half-writ')
+
+  const { service, conversationPath } = serviceForTest()
+  const first = service.scanSessions({ now: 1000, conversationPath })
+  assert.equal(first.adopted >= 1, true, 'it degraded to a baseline rather than throwing out of the heartbeat')
+  assert.deepEqual(first.attention, [], 'and it accused nobody')
+  assert.deepEqual(dueTriggers(2000), [])
+
+  // And the feature still works afterwards: the unreadable file did not cost the watcher.
+  appendFileSync(otherLog, frame([failed('a failure after the corrupt state')]))
+  const second = service.scanSessions({ now: 3000, conversationPath })
+  assert.equal(second.attention.length, 1, 'the watcher recovered')
+  const due = dueTriggers(4000)
+  assert.equal(due.length, 1)
+  assert.equal(due[0].trigger.sessionId, DEN)
+  assert.match(due[0].trigger.prompt, /after the corrupt state/)
+})
+
 test.after(() => {
   rmSync(home, { recursive: true, force: true })
   if (previousHome === undefined) delete process.env.DSH_HOME
