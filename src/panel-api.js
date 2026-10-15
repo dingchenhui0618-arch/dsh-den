@@ -265,7 +265,10 @@ export async function invokeAction(service, action, payload = {}, { sessionId, n
       try {
         // A human turn, so it is not charged against the daily budget: that budget rations what
         // den starts on its own. The host picks the working directory, so none is invented here.
-        const standing = await ensureConversation(service.ctx, standingPath ? { path: standingPath } : {})
+        const standing = await ensureConversation(
+          service.ctx,
+          standingPath ? { path: standingPath, sessionId: liveSessionId || '' } : { sessionId: liveSessionId || '' },
+        )
         const admitted = await promptConversation(service.ctx, standing.sessionId, text)
         // Admitted by the host when it can be; queued on the agent when it cannot, and the answer
         // says which, so a window that shows nothing can be told apart from a window that failed.

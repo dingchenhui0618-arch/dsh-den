@@ -660,7 +660,9 @@ export function createDeliver(ctx, service) {
       try {
         const standing = await ensureConversation(
           ctx,
-          service?.conversationPath ? { path: service.conversationPath } : {},
+          service?.conversationPath
+            ? { path: service.conversationPath, sessionId: trigger.sessionId }
+            : { sessionId: trigger.sessionId },
         )
         if (standing?.sessionId) {
           wake = standing.agent

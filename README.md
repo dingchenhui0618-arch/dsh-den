@@ -388,6 +388,14 @@ These were read out of the running Host rather than assumed, and two of them cha
   never named here, so den follows the model the human is actually using and follows it when they
   change it. The plan was to pass only the preset, and the declaration was not enough to show why that
   would fail: the header field and the model come in through different arguments of the same call.
+- **The prompt needed two variables, and the log named them one at a time.** The deployment persona is
+  `You are a coding agent powered by the {{model}} model.` plus `Your working directory is {{cwd}}.`, and
+  the host resolves them strictly: a session missing either cannot assemble a prompt at all. After the
+  model was supplied, the next failure was exactly `prompt variable "{{cwd}}" has no value for this
+  assembly (section "deployment:persona-suffix")`. The workspace now comes from the human's own session —
+  published, or through the `observeSession` observation the host itself uses to read a header — with
+  den's own home as the last resort, and the source is recorded. A record without a cwd is replaced
+  rather than resumed, because a session header is immutable.
 - **The standing conversation had no model, and the log said so in the host's own words.** Three turns
   had run and ended with `turn/end { reason: { kind: 'error', error: { message: 'prompt variable
   "{{model}}" has no value for this assembly (section "deployment:persona-prefix")' } } }` — because
@@ -496,3 +504,19 @@ This is an **honest positioning, not a green-field claim.** `dsh-muse` publishes
 ## License
 
 MIT
+
+## The approval gate can be switched off
+
+The gate classifies every tool call and turns risky ones into `ask` decisions. Where the host has
+approval prompts disabled, an `ask` is not a question — it is a refusal — so the gate can stop tool
+calls belonging to sessions that have nothing to do with den. One file decides, read when the plugin
+loads:
+
+```json
+{ "approval": "off" }
+```
+
+at `<den home>/approval.json` (`~/.dsh/den/approval.json` by default). Missing, unreadable, malformed
+or any other value leaves the gate **on**: only an explicit `off` disables anything, and it disables
+both the `ask` waterfall and the hard-secrets `deny`. `den_status` reports which state is in force as
+`gate: mounted | not-mounted`. It takes effect when the plugin loads, so a restart, not a tool call.

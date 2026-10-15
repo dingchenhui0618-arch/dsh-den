@@ -249,22 +249,72 @@ export async function resolveAgentPreset(ctx) {
 }
 
 /**
+ * Where the standing conversation works.
+ *
+ * The deployment persona is a template — "You are a coding agent powered by the {{model}} model." and
+ * "Your working directory is {{cwd}}." — and the host resolves it strictly against registered prompt
+ * variables, so a session with no cwd cannot assemble a prompt at all: the turn dies before the model
+ * is called. That is measured, not theoretical: with the model supplied, the next failure on this host
+ * was 'prompt variable "{{cwd}}" has no value for this assembly (section "deployment:persona-suffix")'.
+ *
+ * The human's own session is the honest source, because den should work where they work. That session
+ * may not be published in the store yet, so `sessionQuery.observeSession` is the second attempt — it is
+ * how the host itself reads a header, down to `observation.header.cwd`. Den's own home is the last
+ * resort: any absolute directory is better than a conversation that can never answer, and which source
+ * was used is written into the record so it is never a mystery.
+ */
+export async function resolveWorkspaceCwd(ctx, { configured = '', sessionId = '' } = {}) {
+  if (typeof configured === 'string' && configured && isAbsolute(configured)) {
+    return { cwd: configured, source: 'config' }
+  }
+  const sessions = serviceOf(ctx, 'sessions')
+  const published = sessionId && typeof sessions?.get === 'function' ? sessions.get(sessionId) : null
+  for (const candidate of [published?.header?.cwd, published?.meta?.cwd, published?.cwd]) {
+    if (typeof candidate === 'string' && candidate && isAbsolute(candidate)) {
+      return { cwd: candidate, source: 'session' }
+    }
+  }
+  const query = serviceOf(ctx, 'sessionQuery')
+  if (sessionId && query && typeof query.observeSession === 'function') {
+    let observation = null
+    try {
+      observation = await query.observeSession(sessionId)
+      const cwd = observation?.header?.cwd
+      if (typeof cwd === 'string' && cwd && isAbsolute(cwd)) return { cwd, source: 'session' }
+    } catch (error) {
+      /* an observation this host will not make is not a workspace */
+    } finally {
+      try {
+        if (typeof observation?.dispose === 'function') await observation.dispose()
+        else if (typeof observation?.[Symbol.dispose] === 'function') observation[Symbol.dispose]()
+      } catch (error) {
+        /* releasing is best effort */
+      }
+    }
+  }
+  return { cwd: denPath(), source: 'den-home' }
+}
+
+/**
  * Get the standing conversation, creating it on first use.
  *
  * `state` reports which of them happened, because they are not the same event: `live` (already
  * running), `resumed` (loaded from disk by the host), `created` (born now, possibly replacing a
  * record that could never work — see `replaced`).
  */
-export async function ensureConversation(ctx, { cwd = '', path = conversationPath() } = {}) {
+export async function ensureConversation(ctx, { cwd = '', sessionId = '', path = conversationPath() } = {}) {
   const preset = await resolveAgentPreset(ctx)
   const agentOptions = resolveAgentOptions(ctx)
   const agents = serviceOf(ctx, 'agents')
+  const workspace = await resolveWorkspaceCwd(ctx, { configured: cwd, sessionId })
   const record = readConversationRecord(path)
   // A session created before this plugin knew about presets cannot assemble a prompt at all: the host
-  // ends every turn with 'prompt variable "{{model}}" has no value for this assembly'. Resuming it
-  // reproduces that failure forever, so it is replaced — but only when this host offers a preset,
-  // otherwise a recreate would produce an equally dead session on every single call.
-  const unusable = Boolean(record && preset && !record.agentPreset)
+  // ends every turn with 'prompt variable "{{model}}" has no value for this assembly'. One created
+  // without a cwd cannot either: 'prompt variable "{{cwd}}" has no value … (deployment:persona-suffix)'.
+  // A session header is immutable, so resuming either one reproduces its failure forever; they are
+  // replaced instead — but only when this host offers a preset, otherwise a recreate would produce an
+  // equally dead session on every single call.
+  const unusable = Boolean(record && preset && (!record.agentPreset || !record.cwd))
   if (record) {
     const live = typeof agents?.get === 'function' ? agents.get(record.sessionId) : undefined
     // A live agent is proof enough, whatever the record says about presets.
@@ -292,31 +342,33 @@ export async function ensureConversation(ctx, { cwd = '', path = conversationPat
   }
   // The id is generated here and written before the turn is used, so a crash between the two leaves
   // either no conversation or one that is resumed — never a second, silently different one.
-  const sessionId = randomUUID()
+  const newSessionId = randomUUID()
   const meta = {}
-  // The session store validates meta.cwd and throws on a non-absolute path — it keys storage
-  // directories off it — so a relative one from configuration is dropped here rather than turning
-  // every creation into a host error. The preset is what makes the conversation able to answer at
-  // all; the cwd is only where it does it.
-  if (cwd && isAbsolute(cwd)) meta.cwd = cwd
+  // The session store validates meta.cwd and throws on a non-absolute path, and the prompt needs it:
+  // `resolveWorkspaceCwd` therefore always returns an absolute directory, and which source it came from
+  // is recorded below. The preset is what makes the conversation able to answer; the cwd is where.
+  meta.cwd = workspace.cwd
   if (preset) meta.agentPreset = preset
   const handle = await agents.create({
-    sessionId,
+    sessionId: newSessionId,
     ...(agentOptions ? { agentOptions } : {}),
     meta: Object.keys(meta).length ? meta : undefined,
   })
   writeJsonAtomic(path, {
-    sessionId,
+    sessionId: newSessionId,
     createdAt: Date.now(),
     agentPreset: preset || null,
+    cwd: workspace.cwd,
+    cwdSource: workspace.source,
     replacedSessionId: unusable ? record.sessionId : undefined,
   })
   return {
     agent: handle.agent,
-    sessionId,
+    sessionId: newSessionId,
     state: 'created',
     handle,
     agentPreset: preset || null,
+    cwd: workspace.cwd,
     replaced: unusable ? record.sessionId : null,
   }
 }

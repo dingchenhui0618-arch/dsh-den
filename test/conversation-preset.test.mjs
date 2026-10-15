@@ -2,9 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 
-const { ensureConversation, resolveAgentPreset } = await import('../src/conversation.js')
+const { ensureConversation,
+  resolveWorkspaceCwd, resolveAgentPreset } = await import('../src/conversation.js')
 
 /** A conversation file of its own per test. */
 async function tempPath(run) {
@@ -46,6 +47,43 @@ test('the preset is the host default, and a broken one is never chosen', async (
   assert.equal(await resolveAgentPreset(onlyBroken), '', 'a broken preset is not a preset')
 })
 
+test('the workspace is the human\'s, in that order of preference, and always absolute', async () => {
+  const absolute = await resolveWorkspaceCwd({}, { configured: 'D:/Projects' })
+  assert.deepEqual(absolute, { cwd: 'D:/Projects', source: 'config' }, 'an absolute configured cwd wins')
+  const relative = await resolveWorkspaceCwd({}, { configured: 'relative/path' })
+  assert.equal(relative.source, 'den-home', 'a relative one is not a workspace')
+  assert.ok(isAbsolute(relative.cwd), 'and the fallback is still absolute')
+
+  const published = { sessions: { get: () => ({ header: { cwd: 'D:/Projects/dsh-den' } }) } }
+  assert.deepEqual(
+    await resolveWorkspaceCwd(published, { sessionId: 'sess-1' }),
+    { cwd: 'D:/Projects/dsh-den', source: 'session' },
+    'den works where the human works',
+  )
+
+  const observed = {
+    sessionQuery: { observeSession: async () => ({ header: { cwd: 'D:/Projects/elsewhere' }, dispose: async () => {} }) },
+  }
+  assert.deepEqual(
+    await resolveWorkspaceCwd(observed, { sessionId: 'sess-2' }),
+    { cwd: 'D:/Projects/elsewhere', source: 'session' },
+    'or from the observation the host itself would read',
+  )
+})
+
+test('a record with no cwd is replaced, because a session header cannot be changed', async () => {
+  await tempPath(async (path) => {
+    writeFileSync(path, JSON.stringify({ sessionId: 'preset-but-no-cwd', createdAt: 1, agentPreset: 'cordis' }))
+    const ctx = fakeCtx()
+    const result = await ensureConversation(ctx, { path })
+    assert.equal(result.state, 'created')
+    assert.equal(result.replaced, 'preset-but-no-cwd')
+    assert.equal(ctx.calls.resume.length, 0, 'resuming it would reproduce the same failure forever')
+    assert.ok(isAbsolute(ctx.calls.create[0].meta.cwd), 'the new one has a workspace')
+    assert.equal(JSON.parse(readFileSync(path, 'utf8')).cwdSource, 'den-home')
+  })
+})
+
 test('the model comes from the host\'s current selection, which is what makes {{model}} resolve', async () => {
   await tempPath(async (path) => {
     const ctx = fakeCtx()
@@ -66,7 +104,7 @@ test('a host with no current selection still creates, and says so by sending no 
 
 test('a resumed conversation is given the selection too, so a model change is picked up', async () => {
   await tempPath(async (path) => {
-    writeFileSync(path, JSON.stringify({ sessionId: 'good-session', createdAt: 1, agentPreset: 'cordis' }))
+    writeFileSync(path, JSON.stringify({ sessionId: 'good-session', createdAt: 1, agentPreset: 'cordis', cwd: 'D:/Projects' }))
     const ctx = fakeCtx()
     const result = await ensureConversation(ctx, { path })
     assert.equal(result.state, 'resumed')
@@ -77,11 +115,11 @@ test('a resumed conversation is given the selection too, so a model change is pi
   })
 })
 
-test('a relative cwd from configuration is dropped, not sent to a store that would throw', async () => {
+test('a relative cwd from configuration falls back to an absolute workspace', async () => {
   await tempPath(async (path) => {
     const ctx = fakeCtx()
     const result = await ensureConversation(ctx, { cwd: 'relative/project', path })
-    assert.equal(ctx.calls.create[0].meta.cwd, undefined, 'the store rejects a non-absolute cwd')
+    assert.ok(isAbsolute(ctx.calls.create[0].meta.cwd), 'the store receives an absolute fallback path')
     assert.equal(ctx.calls.create[0].meta.agentPreset, 'cordis', 'and the preset still goes')
     assert.equal(result.agentPreset, 'cordis')
   })
@@ -127,7 +165,7 @@ test('a record from before presets is replaced, not resumed into the same failur
 
 test('a record that already names a preset is resumed, and nothing is created', async () => {
   await tempPath(async (path) => {
-    writeFileSync(path, JSON.stringify({ sessionId: 'good-session', createdAt: 1, agentPreset: 'cordis' }))
+    writeFileSync(path, JSON.stringify({ sessionId: 'good-session', createdAt: 1, agentPreset: 'cordis', cwd: 'D:/Projects' }))
     const ctx = fakeCtx()
     const result = await ensureConversation(ctx, { path })
     assert.equal(result.state, 'resumed')

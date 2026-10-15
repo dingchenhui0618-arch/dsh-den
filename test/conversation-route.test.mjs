@@ -42,7 +42,7 @@ function serviceWith(ctx, path, counters = {}) {
 
 test('a turn that ended in an error is reported to the window in the host\'s own words', async () => {
   await tempConversation(async ({ path }) => {
-    writeFileSync(path, JSON.stringify({ sessionId: 'sess-live', createdAt: 1, agentPreset: 'cordis' }))
+    writeFileSync(path, JSON.stringify({ sessionId: 'sess-live', createdAt: 1, agentPreset: 'cordis', cwd: 'D:/Projects' }))
     const session = {
       snapshotEvents: () => [
         { type: 'user/message', seq: 1, data: { role: 'user', content: [{ type: 'text', text: 'are you there' }] } },
@@ -63,7 +63,7 @@ test('a turn that ended in an error is reported to the window in the host\'s own
 
 test('a later turn that completed clears the failure, because it is the LAST turn that is reported', async () => {
   await tempConversation(async ({ path }) => {
-    writeFileSync(path, JSON.stringify({ sessionId: 'sess-live', createdAt: 1, agentPreset: 'cordis' }))
+    writeFileSync(path, JSON.stringify({ sessionId: 'sess-live', createdAt: 1, agentPreset: 'cordis', cwd: 'D:/Projects' }))
     const session = {
       snapshotEvents: () => [
         { type: 'turn/end', seq: 1, data: { turn: 1, reason: { kind: 'error', error: { message: 'boom' } } } },
@@ -148,7 +148,7 @@ test('a first message creates the conversation, delivers it, and writes the id d
 
 test('a context that throws when a service is missing is "unreadable", not a Cordis error', async () => {
   await tempConversation(async ({ path }) => {
-    writeFileSync(path, JSON.stringify({ sessionId: 'sess-live', createdAt: 1, agentPreset: 'cordis' }))
+    writeFileSync(path, JSON.stringify({ sessionId: 'sess-live', createdAt: 1, agentPreset: 'cordis', cwd: 'D:/Projects' }))
     // This is what a Cordis context does without an injection: reading the property THROWS, so optional
     // chaining is no defence at all.
     const ctx = {}
@@ -168,7 +168,7 @@ test('a context that throws when a service is missing is "unreadable", not a Cor
 
 test('a throwing context is not a delivery path either, but the words are recorded first', async () => {
   await tempConversation(async ({ path }) => {
-    writeFileSync(path, JSON.stringify({ sessionId: 'sess-live', createdAt: 1, agentPreset: 'cordis' }))
+    writeFileSync(path, JSON.stringify({ sessionId: 'sess-live', createdAt: 1, agentPreset: 'cordis', cwd: 'D:/Projects' }))
     const appended = []
     const session = { append: (type, data) => appended.push({ type, data }), snapshotEvents: () => [] }
     const ctx = { agents: { get: () => ({ id: 'sess-live', session }) } }
@@ -271,8 +271,8 @@ test('den keeps the conversation\'s id, not a copy of its transcript', async () 
     const record = JSON.parse(written)
     assert.deepEqual(
       Object.keys(record).sort(),
-      ['agentPreset', 'createdAt', 'sessionId'],
-      'the record is an id, a date and the preset it was created with — still no transcript',
+      ['agentPreset', 'createdAt', 'cwd', 'cwdSource', 'sessionId'],
+      'the record is an id, date, preset and workspace metadata — still no transcript',
     )
     assert.ok(!written.includes('are you awake?'), 'and the message itself is nowhere in den\'s file')
 
@@ -285,7 +285,7 @@ test('den keeps the conversation\'s id, not a copy of its transcript', async () 
 
 test('with no session controller the words are still recorded, and the missing delivery is named', async () => {
   await tempConversation(async ({ path }) => {
-    writeFileSync(path, JSON.stringify({ sessionId: 'sess-live', createdAt: 1, agentPreset: 'cordis' }))
+    writeFileSync(path, JSON.stringify({ sessionId: 'sess-live', createdAt: 1, agentPreset: 'cordis', cwd: 'D:/Projects' }))
     const appended = []
     const session = { append: (type, data) => appended.push({ type, data }), snapshotEvents: () => [] }
     const ctx = { agents: { get: () => ({ id: 'sess-live', session }) } }
@@ -299,7 +299,7 @@ test('with no session controller the words are still recorded, and the missing d
 
 test('a host that does expose a followup is used, and the route says which delivery it was', async () => {
   await tempConversation(async ({ path }) => {
-    writeFileSync(path, JSON.stringify({ sessionId: 'sess-live', createdAt: 1, agentPreset: 'cordis' }))
+    writeFileSync(path, JSON.stringify({ sessionId: 'sess-live', createdAt: 1, agentPreset: 'cordis', cwd: 'D:/Projects' }))
     const delivered = []
     const session = { append: () => {}, snapshotEvents: () => [] }
     const ctx = { agents: { get: () => ({ id: 'sess-live', session, followup: (message) => delivered.push(message) }) } }

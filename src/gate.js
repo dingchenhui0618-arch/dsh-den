@@ -23,7 +23,8 @@
  * so there is nothing here to leak and nothing here that needs a secret.
  */
 
-import { writeJsonAtomic, denPath } from './atom.js'
+import { readJson, writeJsonAtomic, denPath  } from './atom.js'
+import { join } from 'node:path'
 
 /**
  * Risk classes, ordered by severity. `deny` outranks `ask`, which outranks
@@ -630,6 +631,33 @@ export function recordAudit(entry, existing = []) {
 }
 
 /**
+ * Whether the gate is mounted at all, read from `<den home>/approval.json`.
+ *
+ * The gate turns risky tool calls into `ask`, and in a session whose host has approval prompts disabled
+ * an `ask` is not a question — it is a refusal. That is the right default, and the wrong setting for
+ * someone who wants their own tool calls to run unattended, so it is switchable:
+ *
+ *   { "approval": "off" }   — no gate is installed at all, for any session in this profile
+ *
+ * Fail-closed by design: a missing, unreadable, malformed, or differently-valued file keeps the gate on,
+ * so this file can only ever be read as permission to stop guarding — never as a reason to guard less by
+ * accident. Turning it off also turns off the hard-secrets `deny`, which is the point of "freely" and is
+ * worth saying out loud rather than discovering later.
+ */
+export function approvalEnabled(dir = denPath()) {
+  let found = null
+  try {
+    found = readJson(join(dir, 'approval.json'))
+  } catch (error) {
+    // A file that cannot be parsed is not permission to stop guarding, and it must not be a reason the
+    // plugin fails to load either.
+    return true
+  }
+  if (!found || typeof found !== 'object') return true
+  return String(found.approval ?? '').trim().toLowerCase() !== 'off'
+}
+
+/**
  * Install the gate on a Host context.
  *
  * Two installs, on purpose:
@@ -647,9 +675,13 @@ export function recordAudit(entry, existing = []) {
  * @param {object} options
  * @param {object} options.tools the tool registry (`ctx.tools`)
  * @param {(entry: object) => void} [options.onDecision] observability sink
- * @returns {() => void} disposer removing both
+ * @param {string} [options.dir] den home, for the approval switch; defaults to `denPath()`
+ * @returns {(() => void)|null} disposer removing both, or null when the switch says off
  */
-export function installGate(ctx, { tools, onDecision } = {}) {
+export function installGate(ctx, { tools, onDecision, dir } = {}) {
+  // Checked before anything is registered, so "off" means the registry is never touched — not that the
+  // listeners are installed and then politely return `next()`.
+  if (!approvalEnabled(dir)) return null
   const disposers = []
 
   const preExecute = (exec, next) => {
