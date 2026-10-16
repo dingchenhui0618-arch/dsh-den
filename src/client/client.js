@@ -124,6 +124,12 @@ window.__ModuleLoader__.load({
         tasksShort: 'in progress',
         tasksStuck: 'stuck',
         tasksWaiting: 'waiting on you',
+        petActivity: 'Activity',
+        petPermission: 'Permission',
+        petSignals: 'signals',
+        petNoSignals: 'no new signals',
+        petPermissionArmed: 'Tools guarded · risky or remote actions stop here for your confirmation.',
+        petPermissionDirect: 'Tools pass through · the approval gate is off for this profile.',
         details: 'details',
         scheduleNone: 'none — say "check CI every 30 minutes" in the conversation and the den will add it',
         scheduleNew: 'New',
@@ -215,6 +221,12 @@ window.__ModuleLoader__.load({
         tasksShort: '进行中',
         tasksStuck: '卡住',
         tasksWaiting: '等你',
+        petActivity: '活动',
+        petPermission: '权限',
+        petSignals: '个信号',
+        petNoSignals: '没有新信号',
+        petPermissionArmed: '工具受保护 · 危险或远程动作会停在这里等你确认。',
+        petPermissionDirect: '工具直通 · 当前 profile 已关闭审批闸门。',
         details: '详情',
         grantDockGranted: '本会话已授予',
         grantDockNotGranted: '本会话未授予',
@@ -1732,6 +1744,122 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /**
+     * The small information layer that makes the floating den feel like a resident companion.
+     *
+     * It deliberately stays separate from the transcript: activity is a glanceable status rail,
+     * while the conversation below remains the place where a person talks to den. The permission
+     * card is derived from the real gate snapshot, so it explains the safety boundary without
+     * inventing a pending tool call.
+     */
+    function DenMiniInsights(props) {
+      var t = props.t
+      var d = props.status || {}
+      var kernel = d.kernel || {}
+      var gate = d.gate || {}
+      var notices = d.notices || {}
+      var tasks = d.tasks || {}
+      var running = Boolean(kernel.running)
+      var tone = d.kernelDeferred ? 'warn' : running ? 'success' : 'error'
+      var kernelLabel = d.kernelDeferred
+        ? t('kernelWaiting')
+        : running
+          ? t('kernelOn')
+          : t('kernelOff')
+      var signalCount = (Number(notices.pending && notices.pending.length) || 0) + (Number(tasks.active) || 0)
+      var activity = [
+        {
+          label: kernelLabel,
+          detail: kernel.lastTickAt ? t('lastTick') + ' ' + fmtTime(kernel.lastTickAt, t) : t('residentDeferred'),
+        },
+      ]
+      if (signalCount > 0) {
+        activity.push({ label: t('owedShort') + ' ' + String(Number(notices.pending && notices.pending.length) || 0), detail: t('petSignals') + ' · ' + String(signalCount) })
+      } else {
+        activity.push({ label: t('petNoSignals'), detail: t('petActivity') })
+      }
+      if (Number(tasks.blocked) > 0 || Number(tasks.waiting) > 0) {
+        activity.push({
+          label: t('tasksShort') + ' ' + String(Number(tasks.active) || 0),
+          detail: (Number(tasks.blocked) > 0 ? t('tasksStuck') + ' ' + String(tasks.blocked) : '') +
+            (Number(tasks.waiting) > 0 ? (Number(tasks.blocked) > 0 ? ' · ' : '') + t('tasksWaiting') + ' ' + String(tasks.waiting) : ''),
+        })
+      }
+
+      function tabButton(key, label) {
+        return React.createElement(
+          'button',
+          {
+            type: 'button',
+            'data-dsh-role': 'pet-tab',
+            'aria-pressed': props.tab === key,
+            onClick: function () { props.onTab(key) },
+            style: {
+              minHeight: 24,
+              padding: '3px 7px',
+              border: '1px solid ' + (props.tab === key ? 'var(--dsw-alias-border-l1)' : 'transparent'),
+              borderRadius: 999,
+              background: props.tab === key ? 'var(--dsw-alias-bg-layer-3)' : 'transparent',
+              color: props.tab === key ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-tertiary)',
+              cursor: 'pointer',
+              font: 'inherit',
+              fontSize: 10,
+            },
+          },
+          label,
+        )
+      }
+
+      var content = props.tab === 'permission'
+        ? React.createElement(
+            'div',
+            {
+              'data-dsh-role': 'permission-card',
+              role: 'status',
+              style: {
+                padding: '7px 8px',
+                borderRadius: 8,
+                border: '1px solid ' + (gate.mounted ? 'var(--dsw-alias-border-l2)' : 'var(--dsw-alias-state-warn-primary)'),
+                background: 'var(--dsw-alias-bg-layer-2)',
+                color: gate.mounted ? 'var(--dsw-alias-label-secondary)' : 'var(--dsw-alias-state-warn-primary)',
+                fontSize: 10,
+                lineHeight: 1.35,
+              },
+            },
+            gate.mounted ? t('petPermissionArmed') : t('petPermissionDirect'),
+          )
+        : React.createElement(
+            'div',
+            { style: { display: 'grid', gap: 3 } },
+            activity.map(function (item, index) {
+              return React.createElement(
+                'div',
+                { key: 'pet-activity-' + index, style: { display: 'flex', alignItems: 'baseline', gap: 7, minWidth: 0, fontSize: 10, lineHeight: 1.35 } },
+                React.createElement('span', { 'aria-hidden': true, style: { flex: '0 0 auto', width: 6, height: 6, borderRadius: 999, background: index === 0 ? TONE_TOKEN[tone] : 'var(--dsw-alias-state-success-primary)' } }),
+                React.createElement('span', { style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--dsw-alias-label-secondary)' } }, item.label),
+                React.createElement('span', { style: { marginLeft: 'auto', color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' } }, item.detail),
+              )
+            }),
+          )
+
+      return React.createElement(
+        'div',
+        { style: { flex: '0 0 auto', padding: '6px 9px 7px', borderBottom: '1px solid var(--dsw-alias-border-l2)', background: 'var(--dsw-alias-bg-layer-1)' } },
+        React.createElement(
+          'div',
+          { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 7, marginBottom: 4 } },
+          React.createElement(StatusBadge, { tone: tone, label: kernelLabel, detail: gate.mounted ? t('gateArmed') : t('gateDirect') }),
+          React.createElement(
+            'div',
+            { style: { display: 'flex', gap: 2, flex: '0 0 auto' } },
+            tabButton('activity', t('petActivity')),
+            tabButton('permission', t('petPermission')),
+          ),
+        ),
+        content,
+      )
+    }
+
       ctx.slots.inject('shell.overlay', function () {
         /**
          * The floating window: a panel when open, one line of information when shut.
@@ -1879,6 +2007,9 @@ window.__ModuleLoader__.load({
             var snapshot = React.useState(null)
             var status = snapshot[0]
             var setStatus = snapshot[1]
+            var miniTabState = React.useState('activity')
+            var miniTab = miniTabState[0]
+            var setMiniTab = miniTabState[1]
 
             React.useEffect(function () {
               if (!open || !cardRef.current || typeof window === 'undefined' || typeof window.ResizeObserver !== 'function') return undefined
@@ -1902,10 +2033,6 @@ window.__ModuleLoader__.load({
             }, [open])
 
             React.useEffect(function () {
-              if (open) {
-                setStatus(null)
-                return undefined
-              }
               var alive = true
               function pull() {
                 act('status', {}).then(function (res) {
@@ -1913,7 +2040,7 @@ window.__ModuleLoader__.load({
                 }).catch(function () {})
               }
               pull()
-              var timer = setInterval(pull, MINI_POLL_MS)
+              var timer = setInterval(pull, open ? MINI_POLL_MS * 2 : MINI_POLL_MS)
               return function () {
                 alive = false
                 clearInterval(timer)
@@ -2015,6 +2142,7 @@ window.__ModuleLoader__.load({
                     '–',
                   ),
                 ),
+                React.createElement(DenMiniInsights, { t: t, status: status, tab: miniTab, onTab: setMiniTab }),
                 React.createElement(DenConversation, { t: t, act: act }),
                                 // The strip, not the panel: the grant has to stay reachable from the surface that is
                                 // always on screen, but its numbers and schedules belong on den's page.

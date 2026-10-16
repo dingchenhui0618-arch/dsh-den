@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>den · React Bits interaction preview</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #111315;
+      --bg-deep: #0b0d0e;
+      --panel: #181c1f;
+      --panel-raised: #202529;
+      --panel-soft: #15191b;
+      --line: #30373b;
+      --line-soft: #252b2f;
+      --text: #eef2f0;
+      --muted: #8c9798;
+      --dim: #606b6c;
+      --green: #76d29a;
+      --green-strong: #a2f0bb;
+      --amber: #efbc6b;
+      --red: #f08484;
+      --blue: #8fb6e7;
+      --radius-lg: 18px;
+      --radius-md: 12px;
+      --radius-sm: 8px;
+      --shadow: 0 24px 60px rgba(0, 0, 0, .34), 0 4px 14px rgba(0, 0, 0, .28);
+      font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: var(--bg-deep);
+      color: var(--text);
+      overflow: hidden;
+    }
+    button, input { font: inherit; }
+    button { color: inherit; }
+
+    .app {
+      display: grid;
+      grid-template-columns: 72px minmax(0, 1fr);
+      height: 100vh;
+      min-width: 720px;
+    }
+
+    .rail {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      padding: 16px 10px;
+      background: #0d1011;
+      border-right: 1px solid var(--line-soft);
+    }
+    .brand-mark, .rail-button, .den-mark {
+      display: grid;
+      place-items: center;
+      border-radius: 12px;
+    }
+    .brand-mark {
+      width: 38px;
+      height: 38px;
+      color: var(--green-strong);
+      font-weight: 700;
+      letter-spacing: -.08em;
+      border: 1px solid #394640;
+      background: #17221b;
+    }
+    .rail-divider { width: 32px; height: 1px; background: var(--line-soft); margin: 6px 0; }
+    .rail-button {
+      width: 42px;
+      height: 42px;
+      border: 1px solid transparent;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      transition: border-color .16s ease, background .16s ease, color .16s ease;
+    }
+    .rail-button:hover, .rail-button:focus-visible { background: #191e20; border-color: var(--line); color: var(--text); outline: none; }
+    .rail-button.active { background: #203128; border-color: #3d684d; color: var(--green-strong); }
+    .rail-spacer { flex: 1; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); box-shadow: 0 0 0 3px rgba(96, 107, 108, .12); }
+    .status-dot.running { background: var(--green); box-shadow: 0 0 0 3px rgba(118, 210, 154, .14); }
+    .status-dot.waiting { background: var(--amber); box-shadow: 0 0 0 3px rgba(239, 188, 107, .14); }
+    .status-dot.approval { background: var(--red); box-shadow: 0 0 0 3px rgba(240, 132, 132, .14); }
+
+    .workspace {
+      position: relative;
+      min-width: 0;
+      overflow: hidden;
+      background: var(--bg);
+    }
+    .topbar {
+      height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 26px;
+      border-bottom: 1px solid var(--line-soft);
+      background: rgba(17, 19, 21, .94);
+    }
+    .crumbs { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
+    .crumbs strong { color: var(--text); font-size: 14px; }
+    .preview-badge {
+      padding: 6px 10px;
+      border: 1px solid #3d4a42;
+      border-radius: 999px;
+      background: #18241c;
+      color: var(--green-strong);
+      font-size: 11px;
+      letter-spacing: .03em;
+    }
+
+    .canvas {
+      position: relative;
+      height: calc(100vh - 64px);
+      padding: 38px clamp(28px, 5vw, 76px);
+      overflow: auto;
+    }
+    .hero { max-width: 620px; }
+    .eyebrow { color: var(--green); font-size: 12px; letter-spacing: .16em; text-transform: uppercase; }
+    h1 { margin: 12px 0 10px; font-size: clamp(28px, 4vw, 44px); line-height: 1.05; letter-spacing: -.045em; font-weight: 650; }
+    .lede { max-width: 560px; margin: 0; color: var(--muted); line-height: 1.7; font-size: 14px; }
+    .workspace-grid {
+      display: grid;
+      grid-template-columns: minmax(280px, 1fr) minmax(220px, 300px);
+      gap: 18px;
+      max-width: 900px;
+      margin-top: 34px;
+    }
+    .surface { border: 1px solid var(--line-soft); border-radius: var(--radius-lg); background: var(--panel-soft); }
+    .surface-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid var(--line-soft); }
+    .surface-head h2 { margin: 0; font-size: 13px; font-weight: 600; }
+    .surface-head span { color: var(--dim); font-size: 11px; }
+    .signal-list { padding: 4px 0; }
+    .signal { display: flex; align-items: center; gap: 12px; min-height: 62px; padding: 10px 18px; border-bottom: 1px solid rgba(48, 55, 59, .55); }
+    .signal:last-child { border-bottom: 0; }
+    .signal-icon { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 9px; color: var(--blue); background: #1a2228; font-size: 13px; }
+    .signal-copy { min-width: 0; }
+    .signal-copy strong { display: block; font-size: 12px; font-weight: 600; }
+    .signal-copy span { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .signal-time { margin-left: auto; color: var(--dim); font-size: 10px; }
+    .mode-card { padding: 18px; }
+    .mode-card p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+    .mode-controls { display: grid; gap: 8px; margin-top: 16px; }
+    .mode-button {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      width: 100%;
+      padding: 10px 11px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: #1b2023;
+      color: var(--muted);
+      text-align: left;
+      cursor: pointer;
+      transition: border-color .16s ease, background .16s ease, color .16s ease;
+    }
+    .mode-button:hover, .mode-button:focus-visible { border-color: #50645a; color: var(--text); outline: none; }
+    .mode-button.active { border-color: #477453; background: #1c2d23; color: var(--green-strong); }
+    .mode-button small { margin-left: auto; color: var(--dim); font-size: 10px; }
+    .caption { margin-top: 18px; color: var(--dim); font-size: 11px; line-height: 1.6; }
+
+    .pet {
+      position: absolute;
+      z-index: 20;
+      top: 24px;
+      right: 28px;
+      width: 286px;
+      height: 216px;
+      min-width: 240px;
+      min-height: 170px;
+      max-width: calc(100% - 32px);
+      max-height: calc(100% - 32px);
+      overflow: hidden;
+      resize: both;
+      border: 1px solid #485158;
+      border-radius: var(--radius-lg);
+      background: #171b1e;
+      box-shadow: var(--shadow);
+    }
+    .pet.collapsed { width: 44px; height: 44px; min-width: 44px; min-height: 44px; resize: none; border-radius: 15px; overflow: visible; }
+    .pet-header { display: flex; align-items: center; gap: 9px; height: 42px; padding: 0 10px; border-bottom: 1px solid var(--line); background: #20262a; cursor: grab; user-select: none; }
+    .pet-header:active { cursor: grabbing; }
+    .pet.collapsed .pet-header { width: 44px; height: 44px; padding: 0; border: 0; border-radius: 15px; justify-content: center; background: #203128; }
+    .den-icon { display: grid; place-items: center; width: 22px; height: 22px; border: 1px solid #638c70; border-radius: 8px; color: var(--green-strong); background: #18291f; font-size: 11px; font-weight: 700; letter-spacing: -.08em; }
+    .pet.collapsed .den-icon { width: 24px; height: 24px; }
+    .pet-title { min-width: 0; flex: 1; }
+    .pet-title strong { display: block; font-size: 12px; font-weight: 650; }
+    .pet-title span { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
+    .pet-status { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; }
+    .pet-action { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; }
+    .pet-action:hover, .pet-action:focus-visible { border-color: var(--line); background: #2b3337; color: var(--text); outline: none; }
+    .pet.collapsed .pet-title, .pet.collapsed .pet-status, .pet.collapsed .pet-action { display: none; }
+    .pet.collapsed .pet-header::after { content: ""; position: absolute; top: 5px; right: 5px; width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 2px #203128; }
+    .pet.collapsed[data-mode="waiting"] .pet-header::after { background: var(--amber); box-shadow: 0 0 0 2px #2c2618; }
+    .pet.collapsed[data-mode="approval"] .pet-header::after { background: var(--red); box-shadow: 0 0 0 2px #2d1c1c; }
+    .pet.collapsed[data-mode="quiet"] .pet-header::after { background: var(--dim); box-shadow: 0 0 0 2px #22272a; }
+    .pet-body { display: flex; flex-direction: column; height: calc(100% - 42px); min-height: 0; }
+    .pet.collapsed .pet-body { display: none; }
+    .pet-summary { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line-soft); }
+    .summary-label { color: var(--muted); font-size: 11px; }
+    .summary-value { color: var(--text); font-size: 11px; font-weight: 600; }
+    .summary-spacer { flex: 1; }
+    .status-label { padding: 4px 7px; border: 1px solid #3e6250; border-radius: 999px; color: var(--green-strong); background: #1b2d21; font-size: 10px; }
+    .status-label.waiting { border-color: #665333; color: #f0c782; background: #2c2618; }
+    .status-label.approval { border-color: #6c4040; color: #f4a1a1; background: #2d1c1c; }
+    .pet-tabs { display: flex; gap: 14px; padding: 0 12px; border-bottom: 1px solid var(--line-soft); }
+    .pet-tab { position: relative; padding: 8px 0 7px; border: 0; background: transparent; color: var(--dim); font-size: 10px; cursor: pointer; }
+    .pet-tab.active { color: var(--text); }
+    .pet-tab.active::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; border-radius: 2px; background: var(--green); }
+    .pet-content { flex: 1; min-height: 0; overflow: auto; padding: 9px 12px; }
+    .activity-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 7px 0; }
+    .activity-mark { position: relative; display: flex; justify-content: center; }
+    .activity-mark::before { content: ""; width: 7px; height: 7px; margin-top: 3px; border: 2px solid #719b7d; border-radius: 50%; background: #18241c; }
+    .activity-row:not(:last-child) .activity-mark::after { content: ""; position: absolute; top: 14px; bottom: -10px; width: 1px; background: #334039; }
+    .activity-copy strong { display: block; font-size: 10px; font-weight: 600; }
+    .activity-copy span { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.4; }
+    .activity-time { color: var(--dim); font-size: 9px; }
+    .approval-card { padding: 10px; border: 1px solid #684848; border-radius: 10px; background: #281b1d; }
+    .approval-card strong { display: block; font-size: 10px; color: #f3adad; }
+    .approval-card p { margin: 5px 0 9px; color: #cba7a7; font-size: 10px; line-height: 1.5; }
+    .approval-actions { display: flex; gap: 7px; }
+    .tiny-button { padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: #22282b; color: var(--muted); font-size: 9px; cursor: pointer; }
+    .tiny-button.primary { border-color: #5b8d68; background: #203a27; color: var(--green-strong); }
+    .chat-line { display: flex; gap: 7px; align-items: flex-start; padding: 5px 0; }
+    .chat-avatar { flex: 0 0 auto; display: grid; place-items: center; width: 19px; height: 19px; border: 1px solid var(--line); border-radius: 7px; color: var(--green-strong); background: #203128; font-size: 8px; font-weight: 700; }
+    .chat-line.user .chat-avatar { color: var(--blue); background: #1e2935; }
+    .chat-bubble { padding: 7px 8px; border: 1px solid var(--line-soft); border-radius: 8px 8px 8px 2px; background: #20262a; color: #d9e0dd; font-size: 10px; line-height: 1.45; }
+    .chat-line.user .chat-bubble { border-radius: 8px 8px 2px 8px; background: #223329; }
+    .prompt { display: flex; align-items: center; gap: 7px; margin: 0 10px 10px; padding: 7px; border: 1px solid var(--line); border-radius: 10px; background: #121617; }
+    .prompt input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 10px; }
+    .prompt input::placeholder { color: var(--dim); }
+    .prompt button { display: grid; place-items: center; width: 24px; height: 24px; border: 1px solid #46634e; border-radius: 7px; background: #203128; color: var(--green-strong); cursor: pointer; }
+    .shortcut-row { display: flex; gap: 5px; padding: 0 10px 9px; overflow: auto; }
+    .shortcut { flex: 0 0 auto; padding: 4px 6px; border: 1px solid var(--line-soft); border-radius: 999px; color: var(--dim); background: transparent; font-size: 9px; cursor: pointer; }
+    .shortcut:hover { border-color: #4c5d55; color: var(--text); }
+    .toast { position: fixed; right: 24px; bottom: 22px; z-index: 50; max-width: 280px; padding: 10px 12px; border: 1px solid #3d5847; border-radius: 10px; background: #1b2b21; color: var(--green-strong); font-size: 11px; opacity: 0; transform: translateY(8px); pointer-events: none; transition: opacity .18s ease, transform .18s ease; }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+    @media (max-width: 900px) {
+      .app { grid-template-columns: 60px minmax(0, 1fr); min-width: 0; }
+      .rail { padding-inline: 7px; }
+      .rail-button { width: 38px; height: 38px; }
+      .canvas { padding: 28px 22px; }
+      .workspace-grid { grid-template-columns: 1fr; max-width: 560px; }
+      .pet { right: 18px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app" aria-label="den 本机预览">
+    <aside class="rail" aria-label="应用侧栏">
+      <div class="brand-mark" aria-label="DSH">ds</div>
+      <div class="rail-divider"></div>
+      <button class="rail-button" type="button" aria-label="工作区">⌘</button>
+      <button class="rail-button" type="button" aria-label="会话">◌</button>
+      <button class="rail-button active" type="button" aria-label="den" aria-current="page"><span class="status-dot running" data-status-dot></span></button>
+      <button class="rail-button" type="button" aria-label="设置">⋯</button>
+      <div class="rail-spacer"></div>
+      <button class="rail-button" type="button" aria-label="帮助">?</button>
+    </aside>
+
+    <section class="workspace">
+      <header class="topbar">
+        <div class="crumbs"><span>DSH</span><span>/</span><strong>den 常驻面板</strong></div>
+        <span class="preview-badge">本机预览 · 未同步</span>
+      </header>
+      <div class="canvas" id="canvas">
+        <section class="hero">
+          <div class="eyebrow">operator companion / local only</div>
+          <h1>让 den 先在角落里陪着你。</h1>
+          <p class="lede">从 React Bits Pro 的 AI Chat、Agent Activity、Tool Calls、Approval 和 Notifications 信息层次中提取一条更轻的桌宠路径：一眼看到状态，需要时再打开对话。</p>
+        </section>
+
+        <div class="workspace-grid">
+          <section class="surface">
+            <div class="surface-head"><h2>最近信号</h2><span>本机数据</span></div>
+            <div class="signal-list">
+              <div class="signal"><div class="signal-icon">↗</div><div class="signal-copy"><strong>会话已经恢复</strong><span>den 仍在观察 dsh-den 的本地运行态</span></div><span class="signal-time">刚刚</span></div>
+              <div class="signal"><div class="signal-icon">⌁</div><div class="signal-copy"><strong>工具栏等待输入</strong><span>没有自动循环，下一步交给你决定</span></div><span class="signal-time">2 分钟</span></div>
+              <div class="signal"><div class="signal-icon">✓</div><div class="signal-copy"><strong>UI 迁移已完成</strong><span>compact pill、拖动和安全边距已验证</span></div><span class="signal-time">今天</span></div>
+            </div>
+          </section>
+          <section class="surface mode-card">
+            <div class="surface-head" style="padding:0 0 14px;border-bottom:0"><h2>交互状态</h2><span>点击切换</span></div>
+            <p>用这里的状态按钮检查 den 的视觉语气和需要你介入的时机。</p>
+            <div class="mode-controls" role="group" aria-label="切换 den 状态">
+              <button class="mode-button active" data-mode="running" type="button"><span class="status-dot running"></span>运行中<small>quiet</small></button>
+              <button class="mode-button" data-mode="waiting" type="button"><span class="status-dot waiting"></span>等待你<small>soft prompt</small></button>
+              <button class="mode-button" data-mode="approval" type="button"><span class="status-dot approval"></span>需要确认<small>interrupt</small></button>
+              <button class="mode-button" data-mode="quiet" type="button"><span class="status-dot"></span>安静<small>sleep</small></button>
+            </div>
+            <div class="caption">拖动 den 的顶部栏移动；拖动右下角调整尺寸；收起后只留下图标和状态点。</div>
+          </section>
+        </div>
+
+        <section class="pet" id="pet" aria-label="den 桌宠窗口">
+          <header class="pet-header" id="petDragHandle">
+            <span class="den-icon" aria-hidden="true">dn</span>
+            <div class="pet-title"><strong>den</strong><span>本机常驻 · 仅此设备</span></div>
+            <div class="pet-status"><span class="status-dot running" data-status-dot></span><span data-status-text>运行中</span></div>
+            <button class="pet-action" id="collapsePet" type="button" aria-label="收起 den">−</button>
+          </header>
+          <div class="pet-body">
+            <div class="pet-summary"><span class="summary-label">正在观察</span><span class="summary-value" data-summary-value>3 个信号</span><span class="summary-spacer"></span><span class="status-label" data-status-label>运行中</span></div>
+            <nav class="pet-tabs" aria-label="den 面板视图">
+              <button class="pet-tab active" type="button" data-tab="activity">活动</button>
+              <button class="pet-tab" type="button" data-tab="chat">对话</button>
+              <button class="pet-tab" type="button" data-tab="permissions">权限</button>
+            </nav>
+            <div class="pet-content" id="petContent">
+              <div data-view="activity">
+                <div class="activity-row"><div class="activity-mark"></div><div class="activity-copy"><strong>恢复本地会话</strong><span>DSH 已完成常规重载，等待新的指令。</span></div><span class="activity-time">刚刚</span></div>
+                <div class="activity-row"><div class="activity-mark"></div><div class="activity-copy"><strong>检查工具栏</strong><span>工具调用入口保持关闭，未触发自动循环。</span></div><span class="activity-time">2m</span></div>
+                <div class="activity-row"><div class="activity-mark"></div><div class="activity-copy"><strong>保留 UI 修复</strong><span>compact pill、拖动和状态点已经就位。</span></div><span class="activity-time">今天</span></div>
+              </div>
+              <div data-view="chat" hidden>
+                <div class="chat-line"><span class="chat-avatar">dn</span><div class="chat-bubble">我会待在角落里。需要我解释状态时，点开就好。</div></div>
+                <div class="chat-line user"><span class="chat-avatar">你</span><div class="chat-bubble">把当前活动说得更清楚。</div></div>
+                <div class="chat-line"><span class="chat-avatar">dn</span><div class="chat-bubble">现在没有自动循环；最后一次 UI 验证通过，远端也没有同步。</div></div>
+              </div>
+              <div data-view="permissions" hidden>
+                <div class="approval-card"><strong>工具栏处于手动确认模式</strong><p>需要执行工具时，den 先把动作、目标和风险放在这里，等你选择。</p><div class="approval-actions"><button class="tiny-button primary" type="button" data-toast="已保留为手动确认">保留</button><button class="tiny-button" type="button" data-toast="本次预览没有执行工具">查看动作</button></div></div>
+              </div>
+            </div>
+            <div class="shortcut-row"><button class="shortcut" type="button" data-fill="查看活动">查看活动</button><button class="shortcut" type="button" data-fill="解释状态">解释状态</button><button class="shortcut" type="button" data-fill="运行自检">运行自检</button></div>
+            <form class="prompt" id="promptForm"><label class="sr-only" for="promptInput">发送给 den</label><input id="promptInput" placeholder="问 den 一句…" autocomplete="off" /><button type="submit" aria-label="发送">↗</button></form>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      const pet = document.getElementById('pet');
+      const canvas = document.getElementById('canvas');
+      const handle = document.getElementById('petDragHandle');
+      const toast = document.getElementById('toast');
+      const storageKey = 'dsh-den-reactbits-preview';
+      const labels = { running: '运行中', waiting: '等待你', approval: '需要确认', quiet: '安静' };
+      let state = { mode: 'running', collapsed: false, x: null, y: null, width: 286, height: 216 };
+      let drag = null;
+      let suppressClick = false;
+      let toastTimer;
+
+      try { state = { ...state, ...(JSON.parse(localStorage.getItem(storageKey) || '{}')) }; } catch (_) {}
+
+      function showToast(message) {
+        toast.textContent = message;
+        toast.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => toast.classList.remove('show'), 2200);
+      }
+
+      function clampPosition() {
+        if (state.x == null || state.y == null) return;
+        const maxX = Math.max(12, canvas.clientWidth - pet.offsetWidth - 12);
+        const maxY = Math.max(12, canvas.clientHeight - pet.offsetHeight - 12);
+        state.x = Math.max(12, Math.min(state.x, maxX));
+        state.y = Math.max(12, Math.min(state.y, maxY));
+        pet.style.left = state.x + 'px';
+        pet.style.top = state.y + 'px';
+        pet.style.right = 'auto';
+      }
+
+      function persist() { localStorage.setItem(storageKey, JSON.stringify(state)); }
+
+      function applyState() {
+        pet.classList.toggle('collapsed', state.collapsed);
+        pet.dataset.mode = state.mode;
+        if (state.collapsed) {
+          pet.style.width = '44px';
+          pet.style.height = '44px';
+        } else {
+          if (state.width) pet.style.width = state.width + 'px';
+          if (state.height) pet.style.height = state.height + 'px';
+        }
+        document.querySelectorAll('[data-status-dot]').forEach((dot) => {
+          dot.classList.remove('running', 'waiting', 'approval');
+          if (state.mode !== 'quiet') dot.classList.add(state.mode);
+        });
+        document.querySelectorAll('[data-status-text]').forEach((el) => el.textContent = labels[state.mode]);
+        document.querySelectorAll('[data-status-label]').forEach((el) => {
+          el.textContent = labels[state.mode];
+          el.classList.toggle('waiting', state.mode === 'waiting');
+          el.classList.toggle('approval', state.mode === 'approval');
+        });
+        document.querySelectorAll('[data-mode]').forEach((button) => button.classList.toggle('active', button.dataset.mode === state.mode));
+        const summary = document.querySelector('[data-summary-value]');
+        if (summary) summary.textContent = state.mode === 'approval' ? '1 个决定' : state.mode === 'quiet' ? '没有新信号' : state.mode === 'waiting' ? '1 个提示' : '3 个信号';
+        if (state.mode === 'approval') {
+          document.querySelector('[data-view="permissions"]').hidden = false;
+          document.querySelector('[data-view="activity"]').hidden = true;
+          document.querySelector('[data-view="chat"]').hidden = true;
+          document.querySelectorAll('.pet-tab').forEach((tab) => tab.classList.toggle('active', tab.dataset.tab === 'permissions'));
+        }
+        clampPosition();
+      }
+
+      document.querySelectorAll('[data-mode]').forEach((button) => button.addEventListener('click', () => {
+        state.mode = button.dataset.mode;
+        applyState();
+        persist();
+        showToast('den 状态已切换为「' + labels[state.mode] + '」');
+      }));
+
+      document.getElementById('collapsePet').addEventListener('click', (event) => {
+        event.stopPropagation();
+        state.collapsed = true;
+        applyState();
+        persist();
+        showToast('den 已收起，点击图标重新展开');
+      });
+
+      pet.addEventListener('click', (event) => {
+        if (suppressClick) {
+          suppressClick = false;
+          return;
+        }
+        if (state.collapsed && !drag) {
+          state.collapsed = false;
+          applyState();
+          persist();
+          showToast('den 已展开');
+        }
+      });
+
+      handle.addEventListener('pointerdown', (event) => {
+        if (state.collapsed && event.button !== 0) return;
+        const rect = pet.getBoundingClientRect();
+        const canvasRect = canvas.getBoundingClientRect();
+        drag = { startX: event.clientX, startY: event.clientY, originX: rect.left - canvasRect.left, originY: rect.top - canvasRect.top, moved: false };
+        handle.setPointerCapture(event.pointerId);
+      });
+      handle.addEventListener('pointermove', (event) => {
+        if (!drag) return;
+        const dx = event.clientX - drag.startX;
+        const dy = event.clientY - drag.startY;
+        if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
+        state.x = drag.originX + dx;
+        state.y = drag.originY + dy;
+        clampPosition();
+      });
+      handle.addEventListener('pointerup', (event) => {
+        if (!drag) return;
+        const wasMoved = drag.moved;
+        drag = null;
+        if (wasMoved) { persist(); suppressClick = true; event.stopPropagation(); }
+      });
+      handle.addEventListener('pointercancel', () => { drag = null; });
+
+      pet.addEventListener('pointerup', () => {
+        if (!state.collapsed && !drag) return;
+        if (state.collapsed && !drag) return;
+      });
+
+      new ResizeObserver(() => {
+        if (!state.collapsed) {
+          state.width = pet.offsetWidth;
+          state.height = pet.offsetHeight;
+          clampPosition();
+          persist();
+        }
+      }).observe(pet);
+
+      document.querySelectorAll('.pet-tab').forEach((tab) => tab.addEventListener('click', () => {
+        document.querySelectorAll('.pet-tab').forEach((item) => item.classList.toggle('active', item === tab));
+        document.querySelectorAll('[data-view]').forEach((view) => view.hidden = view.dataset.view !== tab.dataset.tab);
+      }));
+
+      document.querySelectorAll('[data-fill]').forEach((button) => button.addEventListener('click', () => {
+        const input = document.getElementById('promptInput');
+        input.value = button.dataset.fill;
+        input.focus();
+      }));
+      document.querySelectorAll('[data-toast]').forEach((button) => button.addEventListener('click', () => showToast(button.dataset.toast)));
+      document.getElementById('promptForm').addEventListener('submit', (event) => {
+        event.preventDefault();
+        const input = document.getElementById('promptInput');
+        if (!input.value.trim()) return;
+        showToast('预览已收到：「' + input.value.trim() + '」');
+        input.value = '';
+      });
+
+      window.addEventListener('resize', clampPosition);
+      applyState();
+    })();
+  </script>
+</body>
+</html>
