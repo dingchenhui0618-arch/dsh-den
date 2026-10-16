@@ -1083,6 +1083,14 @@ fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false, width: 28
 const rememberedSizeWindow = mount(bootWindow({ scripted: { status: healthyStatus() } }).component, {})
 const rememberedSizeCard = findAll(rememberedSizeWindow.tree, (node) => node.props?.style?.position === 'absolute' && node.props?.style?.resize === 'both')[0]
 check(rememberedSizeCard?.props?.style?.width === 280 && rememberedSizeCard?.props?.style?.height === 190, 'and reopens at the dimensions the person chose')
+fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false, width: 280, height: 190, sizeVersion: 2 }))
+const legacyCustomWindow = mount(bootWindow({ scripted: { status: healthyStatus() } }).component, {})
+const legacyCustomCard = findAll(legacyCustomWindow.tree, (node) => node.props?.style?.position === 'absolute' && node.props?.style?.resize === 'both')[0]
+check(legacyCustomCard?.props?.style?.width === 280 && legacyCustomCard?.props?.style?.height === 190, 'and keeps a custom size from the previous preference version')
+fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false, width: 300, height: 210, sizeVersion: 2 }))
+const legacyDefaultWindow = mount(bootWindow({ scripted: { status: healthyStatus() } }).component, {})
+const legacyDefaultCard = findAll(legacyDefaultWindow.tree, (node) => node.props?.style?.position === 'absolute' && node.props?.style?.resize === 'both')[0]
+check(legacyDefaultCard?.props?.style?.width === 260 && legacyDefaultCard?.props?.style?.height === 180, 'and migrates the old built-in size to the new compact default')
 const resizeTarget = { getBoundingClientRect: () => ({ width: 412, height: 318 }) }
 if (rememberedSizeCard?.props?.ref) rememberedSizeCard.props.ref.current = resizeTarget
 await rememberedSizeWindow.settle()

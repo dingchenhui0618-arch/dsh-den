@@ -1764,9 +1764,13 @@ window.__ModuleLoader__.load({
               var width = Number(miniPref('width'))
               var height = Number(miniPref('height'))
               var savedVersion = Number(miniPref('sizeVersion'))
+              var validSavedSize = Number.isFinite(width) && Number.isFinite(height) && width >= MINI_MIN_WIDTH && height >= MINI_MIN_HEIGHT
+              // Version 2's 300×210 was the old built-in default. Reset that one value so the
+              // visual refresh takes effect, while preserving any footprint the human chose by hand.
+              var legacyDefault = savedVersion === 2 && width === 300 && height === 210
               return {
-                width: savedVersion === MINI_SIZE_VERSION && Number.isFinite(width) && width >= MINI_MIN_WIDTH ? width : MINI_DEFAULT_WIDTH,
-                height: savedVersion === MINI_SIZE_VERSION && Number.isFinite(height) && height >= MINI_MIN_HEIGHT ? height : MINI_DEFAULT_HEIGHT,
+                width: validSavedSize && !legacyDefault ? width : MINI_DEFAULT_WIDTH,
+                height: validSavedSize && !legacyDefault ? height : MINI_DEFAULT_HEIGHT,
               }
             })
             var size = sizeState[0]
