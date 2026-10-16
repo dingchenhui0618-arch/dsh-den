@@ -46,8 +46,40 @@ window.__ModuleLoader__.load({
       en: {
         nav: 'den',
         title: 'den — resident assistant',
-        panelEyebrow: 'RESIDENT CONTROL',
-        panelSubtitle: 'Signals first. Details when you need them.',
+        /* The two sentences at the top of the page. Four status shapes, none of them carrying a
+         * timestamp or a score: this is the part a person with no code background reads. */
+        topLooked: 'den is running, and just took a look around',
+        topIdle: 'den is running, nothing to do right now',
+        topStopped: 'den is stopped (you asked it to rest)',
+        topNeedsYou: 'den needs one sentence from you to go on',
+        topUnknown: 'den has not answered yet — one moment',
+        topNothing: 'nothing needs you; I keep watching',
+        topShushed: 'all right, I will not bother you',
+        topNoticeLead: 'den has something to tell you: ',
+        topMorePrefix: ' (and ',
+        topMoreSuffix: ' more)',
+        topShush: 'not now',
+        topStaleCode: 'I am running an older copy of my own code — restart DSH and I catch up',
+        topHave: '',
+        topStepsWaiting: ' step(s) waiting on you',
+        topStepsStuck: ' step(s) stuck',
+        topChecksDue: ' self-check(s) came due',
+        /* Errors, in one Chinese sentence that names the next step. Anything the table does not
+         * know is reported as the last one here, with the original kept under [details]. */
+        errorUnknown: 'that did not work — I wrote it down',
+        errorRaw: 'the original words',
+        errNeedsConversation: 'this needs a conversation first — say one sentence to den in the box below, then try again',
+        errNoStanding: 'den has no conversation of its own yet — say one sentence to it in the box first, and then this can be written down',
+        errNoNotice: 'that reminder is not on the list any more — I will read it again',
+        errHostOlder: 'the page and den are not the same copy — restart DSH and this works',
+        errNoRoute: 'the page has not reached den yet — restart DSH and try',
+        errHttpPrefix: 'the page could not reach den (HTTP ',
+        errHttpSuffix: ') — restart DSH and try',
+        errToken: 'that token can no longer be used — mint a new one',
+        errFiveMinutes: 'the shortest interval is 5 minutes — make the number bigger',
+        errScheduleForm: 'a self-check needs a name and a thing to check — fill in both',
+        errNothingToSay: 'there is nothing written yet — write one sentence first',
+        measurements: 'measurements',
         refreshing: 'refreshing…',
         refresh: 'Refresh',
         autonomy: 'acting on my own',
@@ -161,8 +193,38 @@ window.__ModuleLoader__.load({
       zh: {
         nav: 'den',
         title: 'den —— 常驻助理',
-        panelEyebrow: '常驻控制台',
-        panelSubtitle: '先看信号，再决定是否展开细节。',
+        /* 面板顶部那两句话。四选一，不带时间戳、不带分数 —— 这一段是给不做工程的人看的。 */
+        topLooked: 'den 在跑,刚看过一遍',
+        topIdle: 'den 在跑,现在没什么事',
+        topStopped: 'den 停着(你让它歇的)',
+        topNeedsYou: 'den 需要你一句话才能继续',
+        topUnknown: '还没问上 den —— 稍等一下',
+        topNothing: '没事要你决定,我继续盯着',
+        topShushed: '好,先不打扰你',
+        topNoticeLead: 'den 有话想跟你说:',
+        topMorePrefix: '(还有 ',
+        topMoreSuffix: ' 条)',
+        topShush: '先别',
+        topStaleCode: '我这台跑的还是旧代码 —— 重启一下 DSH 我就对上了',
+        topHave: '有 ',
+        topStepsWaiting: ' 步在等你',
+        topStepsStuck: ' 步卡住了',
+        topChecksDue: ' 个自检到点了',
+        /* 错误一律说成一句中文 + 下一步。表里没有的，落到最后那条，原文收在 [详情] 里。 */
+        errorUnknown: '没成功,我记下来了',
+        errorRaw: '原文',
+        errNeedsConversation: '这一步要先有一个对话 —— 在下面的消息框里跟 den 说一句,再回来点一次',
+        errNoStanding: 'den 还没有自己的会话 —— 先在消息框里跟它说一句,这条就能记下',
+        errNoNotice: '这条提醒已经不在列表里了 —— 我再读一遍',
+        errHostOlder: '页面和 den 的宿主不是同一份 —— 重启 DSH 就好了',
+        errNoRoute: '页面还没接上 den 的宿主 —— 重启一下 DSH 再试',
+        errHttpPrefix: '页面没连上 den 的宿主(HTTP ',
+        errHttpSuffix: ') —— 重启一下 DSH 再试',
+        errToken: '这个令牌不能用了 —— 重新生成一个',
+        errFiveMinutes: '间隔最短 5 分钟 —— 把分钟数改大一点',
+        errScheduleForm: '自检要有名字和「检查什么」两栏 —— 都填上',
+        errNothingToSay: '还没写字 —— 先写一句再发',
+        measurements: '技术指标',
         refreshing: '刷新中…',
         refresh: '刷新',
         autonomy: '能不能自己动手',
@@ -297,6 +359,159 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /* -------------------------------------- 人话:一句话状态,和一件最该做的事 */
+
+    /**
+     * The one sentence at the top of den's page. Four shapes, and nothing else.
+     *
+     * Why this replaces two status badges, a metric rail and eight rows: the page was a control
+     * room, and the person it is for does not read control rooms. The user put it exactly that way
+     * (2026-10-17): "你自省一下 你觉得现在这个状态的 den 属于 gui 界面的感觉吗 我希望没有太多
+     * 代码基础的人也能做到". So the reading is fixed and small — running and just looked, running and
+     * idle, stopped because it was told to rest, or stopped because it needs one sentence from the
+     * human before it can go on — and the measurements moved behind `[详情]`.
+     *
+     * Deliberately absent: a timestamp, a count, and the word for any of this plugin's internals.
+     */
+    function statusSentence(d, t) {
+      if (!d) return t('topUnknown')
+      // A heartbeat waiting for a way to speak is the one state the human can clear by typing, so
+      // it gets its own sentence rather than being folded into "stopped".
+      if (d.kernelDeferred) return t('topNeedsYou')
+      var running = Boolean(d.kernel && d.kernel.running)
+      if (!running || Number(d.dailyTurnBudget) === 0) return t('topStopped')
+      // A host that stood down because another host holds residency is running and has nothing to
+      // do; saying "just took a look" there would claim work it is not doing.
+      if (d.residency && d.residency.held === false) return t('topIdle')
+      return Number(d.ledger && d.ledger.turns) > 0 ? t('topLooked') : t('topIdle')
+    }
+
+    /**
+     * The notices this surface can actually mark read.
+     *
+     * Client-side narrowing, and the reason is a measured click rather than a theory: `notices/ack`
+     * accepts a notice only from the conversation it is filed under, and `status.notices.pending` is
+     * den's *whole* list rather than one conversation's (`notices.js` says so in as many words). So a
+     * surface that holds a conversation and shows the whole list can render a card whose button
+     * comes back refused — visible, clickable, and red.
+     *
+     * With no conversation in hand this narrows nothing, and that is not a loophole: there the host
+     * resolves the conversation itself, from den's standing conversation or from the record's own
+     * owner (`panel-api.js`, commit 0d8c53a), which is the surface the human actually meets — den's
+     * own page and the floating window both live outside every conversation.
+     */
+    function handleableNotices(list, sessionId) {
+      var all = Array.isArray(list) ? list : []
+      if (!sessionId) return all
+      return all.filter(function (item) {
+        return Boolean(item) && item.sessionId === sessionId
+      })
+    }
+
+    /**
+     * The one thing worth the person's attention, and what can be pressed about it.
+     *
+     * Ordered by what a human can do something about: something den said and nobody has read, a
+     * process running older code than the tree (the human restarts DSH, nobody else can), then the
+     * work parked on them, then the self-checks that came due. When none of those is true the line
+     * says so rather than rendering an empty row.
+     *
+     * `key` names the thing, so "先别" can put *this* one away without silencing the next one.
+     */
+    function topThing(d, sessionId, t) {
+      if (!d) return { key: null, text: t('topNothing'), actions: [] }
+      var owed = handleableNotices(d.notices && d.notices.pending, sessionId)
+      if (owed.length) {
+        return {
+          key: 'notice:' + String(owed[0].id || ''),
+          // 一次只说一条,但要说清还有几条没说的 —— 否则「只有这一条」和「还有四条」在面板上长得一样。
+          text:
+            t('topNoticeLead') +
+            String(owed[0].text || '') +
+            (owed.length > 1 ? t('topMorePrefix') + String(owed.length - 1) + t('topMoreSuffix') : ''),
+          actions: ['read', 'shush'],
+          notice: owed[0],
+        }
+      }
+      if (d.freshness && d.freshness.known === true && d.freshness.stale) {
+        return { key: 'stale-code', text: t('topStaleCode'), actions: ['shush'] }
+      }
+      var tasks = d.tasks || {}
+      if (Number(tasks.waiting) > 0) {
+        return { key: 'steps-waiting', text: t('topHave') + String(tasks.waiting) + t('topStepsWaiting'), actions: ['shush'] }
+      }
+      if (Number(tasks.blocked) > 0) {
+        return { key: 'steps-blocked', text: t('topHave') + String(tasks.blocked) + t('topStepsStuck'), actions: ['shush'] }
+      }
+      if (Number(d.triggers && d.triggers.due) > 0) {
+        return { key: 'checks-due', text: t('topHave') + String(d.triggers.due) + t('topChecksDue'), actions: ['shush'] }
+      }
+      return { key: null, text: t('topNothing'), actions: [] }
+    }
+
+    /**
+     * Every interface error, said as one Chinese sentence that names the next step.
+     *
+     * What this replaces: `error.message` printed verbatim. The user's screenshot carried
+     * `acknowledging a notice needs a conversation` on a click whose whole effect is local, and a
+     * sentence like that is not a message to a person — it is the host's internal precondition,
+     * wearing the panel's red. The table is short on purpose and each entry answers "and now what?";
+     * anything it does not know is reported as `没成功,我记下来了`, with the host's own words kept for
+     * whoever opens `[详情]`.
+     *
+     * Keys, not translations: a `say` function so a sentence can carry a number out of the message
+     * (the HTTP status) rather than being a lookup with a placeholder nobody fills.
+     */
+    var ERROR_SAY = [
+      {
+        match: /needs a conversation|must belong to a conversation|no live conversation/i,
+        say: function (t) { return t('errNeedsConversation') },
+      },
+      {
+        match: /no standing conversation/i,
+        say: function (t) { return t('errNoStanding') },
+      },
+      {
+        match: /no such notice/i,
+        say: function (t) { return t('errNoNotice') },
+      },
+      {
+        match: /not with JSON|may not be mounted/i,
+        say: function (t, message) {
+          var status = /HTTP (\d+)/.exec(message)
+          return status ? t('errHttpPrefix') + status[1] + t('errHttpSuffix') : t('errNoRoute')
+        },
+      },
+      {
+        match: /unknown action|not implemented|DEN_ACTION_FAILED/i,
+        say: function (t) { return t('errHostOlder') },
+      },
+      {
+        match: /autonomy|token/i,
+        say: function (t) { return t('errToken') },
+      },
+      {
+        match: /at least 5 minutes/i,
+        say: function (t) { return t('errFiveMinutes') },
+      },
+      {
+        match: /needs a title and a prompt/i,
+        say: function (t) { return t('errScheduleForm') },
+      },
+      {
+        match: /nothing to say/i,
+        say: function (t) { return t('errNothingToSay') },
+      },
+    ]
+
+    function explainError(raw, t) {
+      var message = String(raw === null || raw === undefined ? '' : raw)
+      for (var i = 0; i < ERROR_SAY.length; i += 1) {
+        if (ERROR_SAY[i].match.test(message)) return ERROR_SAY[i].say(t, message)
+      }
+      return t('errorUnknown')
+    }
+
     /* The one-click copy control for a minted token.
      *
      * Written once because this strip renders in two branches of the same component — the dock
@@ -364,39 +579,14 @@ window.__ModuleLoader__.load({
      * The dot is deliberately a semantic token rather than a hard-coded colour: the host owns
      * the light/dark palette, while den owns the meaning of the state. A single status primitive
      * also keeps the main page and the floating surface from drifting apart again.
+     *
+     * `StatusBadge` — the pill with a dot, a two-word verdict and a trailing reading — used to sit
+     * here and was what the top of den's page was made of: `常驻中 · 心跳运行中 上次心跳 …` and
+     * `工具受保护`, side by side. It is gone with the console, and nothing replaced it: the sentence
+     * at the top of the page says the same verdict in words a person reads without a legend, and the
+     * same facts are one press away under `[详情]`. The floating window never used this component —
+     * it has its own dot and its own three-state word — so no surface lost a light with it.
      */
-    function StatusBadge(props) {
-      var color = TONE_TOKEN[props.tone || 'success'] || TONE_TOKEN.success
-      return React.createElement(
-        'span',
-        {
-          role: 'status',
-          style: {
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 7,
-            minHeight: 24,
-            padding: '3px 9px',
-            borderRadius: 999,
-            border: '1px solid var(--dsw-alias-border-l2)',
-            background: 'var(--dsw-alias-bg-layer-2)',
-            color: 'var(--dsw-alias-label-secondary)',
-            fontSize: 11,
-            fontWeight: 600,
-            letterSpacing: '0.01em',
-            whiteSpace: 'nowrap',
-          },
-        },
-        React.createElement('span', {
-          'aria-hidden': true,
-          style: { width: 7, height: 7, borderRadius: 999, background: color, boxShadow: '0 0 0 3px var(--dsw-alias-bg-layer-2)' },
-        }),
-        React.createElement('span', null, props.label),
-        props.detail
-          ? React.createElement('span', { style: { color: 'var(--dsw-alias-label-tertiary)', fontWeight: 400 } }, props.detail)
-          : null,
-      )
-    }
 
     /** A small signal card; values lead, labels recede, and the detail line explains the number. */
     function Metric(props) {
@@ -518,14 +708,40 @@ window.__ModuleLoader__.load({
     /**
      * The preference shape, bumped whenever the window's own size changes.
      *
-     * Version 3's 260×180 was the built-in default until the pet was redrawn at 286×216. A stored
-     * size is the human's decision and outlives a redesign, so the reset is keyed on the *old default*
-     * rather than on the version number alone: a footprint somebody dragged to by hand is kept, and
-     * only the window nobody ever resized follows the new design.
+     * Version 3's 260×180 was the built-in default until the pet was redrawn at 286×216, and version
+     * 4's 286×216 is the default this one replaces. A stored size is the human's decision and
+     * outlives a redesign, so the reset is keyed on the *old default* rather than on the version
+     * number alone: a footprint somebody dragged to by hand is kept, and only the window nobody ever
+     * resized follows the new design.
      */
-    var MINI_SIZE_VERSION = 4
+    var MINI_SIZE_VERSION = 5
     var MINI_DEFAULT_WIDTH = 286
-    var MINI_DEFAULT_HEIGHT = 216
+    /**
+     * Why the default is 340 and not 216.
+     *
+     * 216 was measured to be too short to hold a conversation: the bar (42), the activity rail with
+     * its border (27) and the composer with its shortcut row (~96) spend ~180px of the card before
+     * the first message, and the transcript is what pays — roughly 36px left, which is less than one
+     * message, let alone two. A window whose body cannot show two messages is not a window you can
+     * read a reply in, and the person it is for will not resize their way to finding that out.
+     *
+     * The arithmetic is deliberately kept as constants rather than prose, so the claim can be
+     * re-checked (the offline harness does exactly that) and so the next person to touch this knows
+     * which numbers the default answers to. It is arithmetic, not a layout measurement: the harness
+     * has no browser, and a comment claiming pixels it never measured would be this project's
+     * recurring mistake.
+     */
+    var MINI_DEFAULT_HEIGHT = 340
+    /** What one message costs at the shipped type: label row (~13), bubble padding (12), one line of 13px text (~20), margins (8). */
+    var MINI_MESSAGE_ROW_HEIGHT = 48
+    /** Everything above the transcript: title bar 42, rail 27, composer box 34, shortcut row 22, card padding/rounding 55. */
+    var MINI_CHROME_HEIGHT = 180
+    /** Two messages is the floor: fewer than that and the window cannot show a question and its answer. */
+    var MINI_TWO_MESSAGES_HEIGHT = MINI_MESSAGE_ROW_HEIGHT * 2
+    /** Version 4's built-in default, kept so a window nobody resized follows the new one. */
+    var MINI_PREV_DEFAULT_WIDTH = 286
+    var MINI_PREV_DEFAULT_HEIGHT = 216
+    var MINI_PREV_SIZE_VERSION = 4
     var MINI_LEGACY_DEFAULT_WIDTH = 260
     var MINI_LEGACY_DEFAULT_HEIGHT = 180
     var MINI_LEGACY_SIZE_VERSION = 3
@@ -602,11 +818,28 @@ window.__ModuleLoader__.load({
        * The user's report: "你这个 den 的状态有点复杂了". The rows were all true and none of them
        * were readable at a glance — residency, ledger, approval gate and memory scenarios are the
        * words of this plugin's insides, not of a person deciding whether to let it act. Folding them
-       * is not hiding them: the measurements are one press away, for whoever wants to audit.
+       * is not hiding them: the measurements are one press away, for whoever wants to audit. The
+       * fold is now the *only* place they are drawn: the signal cards, the rows, the freshness
+       * verdict and the heartbeat's last error all live inside it.
        */
       var detailOpenState = React.useState(false)
       var detailOpen = detailOpenState[0]
       var setDetailOpen = detailOpenState[1]
+
+      /**
+       * Which of the one-thing lines the human has already put away.
+       *
+       * 先别 is local and nothing else: it hides *this* line, it sends no request, and it changes
+       * nothing about the den — the notice stays unread, the step stays parked. It is deliberately
+       * keyed on the thing rather than a bare boolean, so putting one down does not silence the
+       * next thing that needs the person.
+       */
+      var dismissState = React.useState(null)
+      var dismissed = dismissState[0]
+      var setDismissed = dismissState[1]
+
+      /** The rows and cards of `[详情]`, collected first and drawn only when the fold is open. */
+      var measurementNodes = []
 
       var sessionId = props.sessionId
       var act = props.act
@@ -898,7 +1131,10 @@ window.__ModuleLoader__.load({
        * ends — a notice only reaches zero once a human has read it and said so.
        */
       function noticesBlock() {
-        var owed = (d && d.notices && d.notices.pending) || []
+        // The same narrowing the top line uses, from the same function: this strip sits in a seat
+        // that *does* hold a conversation, and a notice it cannot mark read would be a button that
+        // comes back refused. See `handleableNotices`.
+        var owed = handleableNotices(d && d.notices && d.notices.pending, sessionId)
         if (!owed.length) return null
         return React.createElement(
           'div',
@@ -1013,7 +1249,7 @@ window.__ModuleLoader__.load({
             ? React.createElement('span', { style: { flexBasis: '100%' } }, t('autonomyTokenHint'))
             : null,
           action.error
-            ? React.createElement('span', { style: { flexBasis: '100%', color: 'var(--dsw-alias-state-warn-primary)' } }, action.error)
+            ? React.createElement('span', { style: { flexBasis: '100%', color: 'var(--dsw-alias-state-warn-primary)' } }, explainError(action.error, t))
             : null,
           ),
           stripOnly ? null : noticesBlock(),
@@ -1022,19 +1258,17 @@ window.__ModuleLoader__.load({
       }
 
       var gateMounted = Boolean(d && d.gate && d.gate.mounted)
-      var headerKernelTone = !d || d.kernelDeferred || !(d.kernel && d.kernel.running)
-        ? 'error'
-        : d.residency && d.residency.held === false
-          ? 'warn'
-          : 'success'
-      var headerKernelLabel = !d
-        ? t('unavailable')
-        : d.kernelDeferred
-          ? t('kernelWaiting')
-          : d.kernel && d.kernel.running
-            ? t('residentOn')
-            : t('residentOff')
-      var headerKernelDetail = d && d.kernel && d.kernel.lastTickAt ? t('lastTick') + ' ' + fmtTime(d.kernel.lastTickAt, t) : null
+      /**
+       * The page, in two sentences and one fold.
+       *
+       * `[详情]` is a single control now. The page used to carry two things called 详情 side by side —
+       * a bare label and the button that did something — in the middle of a signal rail, which is
+       * how a person ends up reading two names for one thing and pressing neither. The single
+       * button sits on the row the one thing to do is on, and it is the only 详情 on this surface.
+       */
+      var sentence = statusSentence(d, t)
+      var thing = topThing(d, sessionId, t)
+      var shushed = Boolean(thing.key) && dismissed === thing.key
       var children = [
         React.createElement(
           'div',
@@ -1043,7 +1277,7 @@ window.__ModuleLoader__.load({
             style: {
               display: 'flex',
               flexDirection: 'column',
-              gap: 12,
+              gap: 10,
               padding: '2px 0 14px',
               borderBottom: '1px solid var(--dsw-alias-border-l2)',
             },
@@ -1074,9 +1308,16 @@ window.__ModuleLoader__.load({
             React.createElement(
               'div',
               { style: { minWidth: 0, flex: '1 1 auto' } },
-              React.createElement('div', { style: { color: 'var(--dsw-alias-label-tertiary)', fontSize: 10, fontWeight: 700, letterSpacing: '0.12em' } }, t('panelEyebrow')),
-              React.createElement('h2', { style: { margin: '3px 0 2px', fontSize: 18, lineHeight: 1.2, letterSpacing: '-0.02em', color: 'var(--dsw-alias-label-primary)' } }, t('title')),
-              React.createElement('div', { style: { color: 'var(--dsw-alias-label-secondary)', fontSize: 12, lineHeight: 1.45 } }, t('panelSubtitle')),
+              React.createElement('h2', { style: { margin: 0, fontSize: 16, lineHeight: 1.2, letterSpacing: '-0.02em', color: 'var(--dsw-alias-label-primary)' } }, t('title')),
+              // 第一句人话。没有时间戳、没有分数：就是不写代码的人也读得懂的那一句。
+              React.createElement(
+                'div',
+                {
+                  'data-dsh-role': 'plain-status',
+                  style: { marginTop: 4, color: 'var(--dsw-alias-label-primary)', fontSize: 15, fontWeight: 600, lineHeight: 1.35 },
+                },
+                sentence,
+              ),
             ),
             React.createElement(
               Button,
@@ -1090,15 +1331,37 @@ window.__ModuleLoader__.load({
               view.phase === 'refreshing' ? '…' : '↻',
             ),
           ),
+          // 第二句人话 + 它带的动作 + 唯一的那个 [详情]。
           React.createElement(
             'div',
-            { style: { display: 'flex', flexWrap: 'wrap', gap: 7 } },
-            React.createElement(StatusBadge, { tone: headerKernelTone, label: headerKernelLabel, detail: headerKernelDetail }),
-            React.createElement(StatusBadge, {
-              tone: gateMounted ? 'success' : 'warn',
-              label: gateMounted ? t('gateArmed') : t('gateDirect'),
-              detail: gateMounted ? null : t('gateDirectHint'),
-            }),
+            {
+              'data-dsh-role': 'next-thing',
+              style: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, minHeight: 30 },
+            },
+            React.createElement(
+              'span',
+              {
+                style: {
+                  minWidth: 0,
+                  flex: '1 1 180px',
+                  fontSize: 13,
+                  lineHeight: 1.45,
+                  color: shushed ? 'var(--dsw-alias-label-tertiary)' : 'var(--dsw-alias-label-secondary)',
+                },
+              },
+              shushed ? t('topShushed') : thing.text,
+            ),
+            !shushed && thing.actions.indexOf('read') >= 0 && thing.notice
+              ? React.createElement(Button, { onClick: function () { onAckNotice(thing.notice.id) }, disabled: busy }, t('noticeReadIt'))
+              : null,
+            !shushed && thing.actions.length
+              ? React.createElement(Button, { onClick: function () { setDismissed(thing.key) }, disabled: busy }, t('topShush'))
+              : null,
+            React.createElement(
+              Button,
+              { compact: true, onClick: function () { setDetailOpen(!detailOpen) }, 'aria-label': t('details') },
+              detailOpen ? t('scheduleClose') : t('details'),
+            ),
           ),
         ),
       ]
@@ -1107,15 +1370,16 @@ window.__ModuleLoader__.load({
         children.push(
           React.createElement(
             'div',
-            { key: 'e', style: { color: 'var(--dsw-alias-state-error-primary)', margin: '8px 0' } },
-            t('unavailable') + ': ' + view.error,
+            { key: 'e', 'data-dsh-role': 'failure', style: { color: 'var(--dsw-alias-state-error-primary)', margin: '8px 0', fontSize: 12 } },
+            explainError(view.error, t),
           ),
         )
       }
 
       if (action.error) {
         children.push(
-          React.createElement('div', { key: 'ae', style: { color: 'var(--dsw-alias-state-error-primary)', margin: '8px 0', fontSize: 12 } }, action.error),
+          // 同一张表:面板上永远是一句中文 + 下一步,原文在 [详情] 里(见 `explainError` 与下面的 rawFailures)。
+          React.createElement('div', { key: 'ae', 'data-dsh-role': 'failure', style: { color: 'var(--dsw-alias-state-error-primary)', margin: '8px 0', fontSize: 12 } }, explainError(action.error, t)),
         )
       }
       if (busy) {
@@ -1180,22 +1444,13 @@ window.__ModuleLoader__.load({
         var running = Boolean(d && d.kernel && d.kernel.running)
 
         /**
-         * Anything other than "fine" opens the measurements by itself.
+         * The signal rail and the rows, drawn only inside `[详情]`.
          *
-         * Folding the rows must not hide a fault: a stopped heartbeat, a deferred wake, a host that
-         * stood down or a process older than the code it serves are exactly the states a person has
-         * to see without knowing to look. Only the healthy case stays collapsed.
-         */
-        var abnormal =
-          !running ||
-          Boolean(d && d.kernelDeferred) ||
-          Boolean(d && d.residency && d.residency.held === false) ||
-          Boolean(d && d.freshness && d.freshness.stale)
-
-        /**
-         * The signal rail is the focal point of the page: four quiet cards answer the useful questions
-         * without making the operator decode a paragraph of dots. The values stay short, while the
-         * detail line carries the timestamp, budget or recovery hint that makes each number actionable.
+         * Everything technical on this page is here and nowhere else: the four signal cards, the
+         * rows, the freshness verdict, the reclaimed-file counts and the heartbeat's own last error.
+         * They used to be the page — a signal rail at the top, then a wall of rows — and that is
+         * what made this a console rather than a GUI. Nothing was deleted: it is one press away, in
+         * the same order, for whoever wants to audit it.
          */
         var taskMetric = d && d.tasks && Number(d.tasks.total) > 0 && Number.isFinite(d.tasks.active)
           ? React.createElement(Metric, {
@@ -1207,17 +1462,17 @@ window.__ModuleLoader__.load({
               tone: Number(d.tasks.blocked) > 0 ? 'warn' : 'success',
             })
           : null
-        children.push(
+        measurementNodes.push(
           React.createElement(
             'div',
             {
               key: 'signals',
-              'aria-label': t('panelSubtitle'),
+              'aria-label': t('measurements'),
               style: {
                 display: 'grid',
                 gridTemplateColumns: 'repeat(auto-fit, minmax(132px, 1fr))',
                 gap: 8,
-                margin: '14px 0 8px',
+                margin: '4px 0 8px',
               },
             },
             React.createElement(Metric, {
@@ -1244,58 +1499,46 @@ window.__ModuleLoader__.load({
               tone: owedCount ? 'warn' : undefined,
             }),
             taskMetric,
-            React.createElement(
-              'div',
-              { style: { gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, minHeight: 30 } },
-              React.createElement('span', { style: { color: 'var(--dsw-alias-label-tertiary)', fontSize: 11 } }, t('details')),
-              React.createElement(
-                Button,
-                { compact: true, onClick: function () { setDetailOpen(!detailOpen) }, 'aria-label': t('details') },
-                detailOpen ? t('scheduleClose') : t('details'),
-              ),
-            ),
           ),
-          noticesBlock(),
         )
 
-        if (detailOpen || abnormal) {
-          children.push(
-            React.createElement(
-              'div',
-              { key: 'rows', style: { marginTop: 6 } },
-              React.createElement(Row, { label: t('autonomy'), value: autonomyText, tone: autonomyTone }),
-              React.createElement(Row, { label: t('nextCheck'), value: fmtTime(d.nextCheckAt, t) }),
-              React.createElement(Row, { label: t('turns'), value: String((d.ledger && d.ledger.turns) || 0) }),
-              React.createElement(Row, {
-                label: t('notices'),
-                value: (d.notices ? d.notices.deliverable : 0) + ' / ' + (d.notices ? d.notices.total : 0),
-              }),
-              React.createElement(Row, {
-                label: t('gate'),
-                value: gateMounted ? t('gateMounted') : t('gateUnmounted'),
-                tone: gateMounted ? 'success' : 'warn',
-              }),
-              React.createElement(Row, {
-                label: t('kernel'),
-                value: kernelValue,
-                tone: kernelTone,
-              }),
-              React.createElement(Row, { label: t('scenarios'), value: scenarios.length ? scenarios.join(', ') : t('none') }),
-            ),
-          )
-        }
+        measurementNodes.push(
+          React.createElement(
+            'div',
+            { key: 'rows', style: { marginTop: 6 } },
+            React.createElement(Row, { label: t('autonomy'), value: autonomyText, tone: autonomyTone }),
+            React.createElement(Row, { label: t('nextCheck'), value: fmtTime(d.nextCheckAt, t) }),
+            React.createElement(Row, { label: t('turns'), value: String((d.ledger && d.ledger.turns) || 0) }),
+            React.createElement(Row, {
+              label: t('notices'),
+              value: (d.notices ? d.notices.deliverable : 0) + ' / ' + (d.notices ? d.notices.total : 0),
+            }),
+            React.createElement(Row, {
+              label: t('gate'),
+              // 闸门那一行说的是「工具受保护 / 工具直通」这两句白话,而不是 mounted 这类字段名 ——
+              // 界面上不出现代码里的词,是这一轮改动的硬要求之一。
+              value: gateMounted ? t('gateArmed') : t('gateUnmounted'),
+              tone: gateMounted ? 'success' : 'warn',
+            }),
+            React.createElement(Row, {
+              label: t('kernel'),
+              value: kernelValue,
+              tone: kernelTone,
+            }),
+            React.createElement(Row, { label: t('scenarios'), value: scenarios.length ? scenarios.join(', ') : t('none') }),
+          ),
+        )
 
         /**
          * Whether the process drawing this panel loaded the code it is drawn from.
          *
          * Not a diagnostic for the den's own work: it is here because a panel that looks
          * healthy is exactly what makes a stale host invisible. The restart that fixes it is
-         * the human's to make, so the fact has to reach the human, in the one place they are
-         * already looking. An instance that cannot judge itself says so rather than reading
-         * as current — `known: false` is not a pass.
+         * the human's to make, so the fact has to reach the human — the sentence at the top says
+         * it in words when it is stale, and the verdict itself is on this row.
          */
         var fresh = d && d.freshness ? d.freshness : null
-        children.push(
+        measurementNodes.push(
           React.createElement(Row, {
             key: 'fresh',
             label: t('codeFreshness'),
@@ -1309,10 +1552,10 @@ window.__ModuleLoader__.load({
         )
 
         if (d.reapedTempFiles) {
-          children.push(React.createElement(Row, { key: 'r', label: t('recovered'), value: String(d.reapedTempFiles) }))
+          measurementNodes.push(React.createElement(Row, { key: 'r', label: t('recovered'), value: String(d.reapedTempFiles) }))
         }
         if (d.reapedNotices) {
-          children.push(
+          measurementNodes.push(
             React.createElement(Row, {
               key: 'rn',
               label: t('reapedNotices'),
@@ -1321,7 +1564,7 @@ window.__ModuleLoader__.load({
           )
         }
         if (d.kernel && d.kernel.lastError) {
-          children.push(
+          measurementNodes.push(
             React.createElement(
               'div',
               { key: 'err', style: { marginTop: 6, color: 'var(--dsw-alias-state-error-primary)', fontSize: 12 } },
@@ -1329,7 +1572,51 @@ window.__ModuleLoader__.load({
             ),
           )
         }
+      }
 
+      /* -------------------------------------------------------------- [详情] */
+
+      /**
+       * The one fold, and what it holds.
+       *
+       * It is closed unless the human opens it — including when something is wrong. The rows used to
+       * open themselves on a fault, which is the right reflex for a console and the wrong one here:
+       * a stopped heartbeat now says `den 停着(你让它歇的)` in the sentence at the top, so nothing has
+       * to unfold at a person to be told. The measurements stay one press away, and the host's own
+       * words behind every Chinese error sentence are kept down here rather than dropped.
+       */
+      var rawFailures = []
+      if (view.phase === 'error' && view.error) rawFailures.push(String(view.error))
+      if (action.error) rawFailures.push(String(action.error))
+      var detailNodes = measurementNodes
+      if (rawFailures.length) {
+        detailNodes = detailNodes.concat([
+          React.createElement(
+            'div',
+            {
+              key: 'raw',
+              'data-dsh-role': 'raw-error',
+              style: { marginTop: 8, fontSize: 11, lineHeight: 1.5, color: 'var(--dsw-alias-label-tertiary)', wordBreak: 'break-word' },
+            },
+            t('errorRaw') + ': ' + rawFailures.join(' | '),
+          ),
+        ])
+      }
+      if (detailOpen) {
+        children.push(
+          React.createElement(
+            'div',
+            {
+              key: 'detail',
+              'data-dsh-role': 'measurements',
+              style: { marginTop: 6, paddingTop: 10, borderTop: '1px solid var(--dsw-alias-border-l2)' },
+            },
+            detailNodes,
+          ),
+        )
+      }
+
+      if (d) {
         /* ------------------------------------------------------- controls */
 
         // Compact mode returned above, so this page is never the one holding a conversation - and it
@@ -1618,6 +1905,11 @@ window.__ModuleLoader__.load({
             // has a remedy a human can act on. Printing the host's error text teaches nothing.
             var older = /unknown action|not implemented|DEN_ACTION_FAILED/i.test(message)
             setView({ phase: older ? 'older' : 'error', data: null, error: message })
+            // The window's own `[详情]` keeps the host's words: the line on screen is the Chinese
+            // sentence `explainError` returns, and the raw text is handed up to the rail's fold
+            // rather than thrown away. `older` needs none — it has its own sentence and the same
+            // remedy, and printing `unknown action "conversation/read"` beside it would only undo it.
+            if (!older && typeof props.onError === 'function') props.onError(message)
           })
       }
 
@@ -1810,7 +2102,11 @@ window.__ModuleLoader__.load({
             )
           : null,
         view.phase === 'error' && view.error
-          ? React.createElement('div', { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)', margin: '2px 0' } }, view.error)
+          ? React.createElement(
+              'div',
+              { 'data-dsh-role': 'pet-failure', style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)', margin: '2px 0', wordBreak: 'break-word' } },
+              explainError(view.error, t),
+            )
           : null,
         // No box of its own, and no line telling the reader there is a box below: the window's one
         // input sits directly under this view with its own placeholder, and a hint that points at
@@ -1954,6 +2250,12 @@ window.__ModuleLoader__.load({
             : t('budgetOff')
           : t('hostOlder'),
       })
+      // The host's own words for the last interface failure, kept where the rest of the measurements
+      // are rather than printed on the line above it. The line says the same thing in Chinese
+      // (`explainError`, in the transcript), and this is what it was translated from.
+      if (props.rawError) {
+        rows.push({ label: t('errorRaw'), detail: String(props.rawError) })
+      }
 
       return React.createElement(
         'div',
@@ -2018,6 +2320,8 @@ window.__ModuleLoader__.load({
                 // Hung from the rail (`top: '100%'`) and bounded: an unfolded measurement sheet covers
                 // the transcript for as long as it is open instead of taking height from it. The bound
                 // is 68px — the four rows — so the sheet stops above the composer rather than over it.
+                // A fifth row appears when there is a raw interface error to keep (`rawError`), and it
+                // scrolls inside this bound rather than growing the sheet over the composer.
                 style: {
                   position: 'absolute',
                   top: '100%',
@@ -2212,13 +2516,18 @@ window.__ModuleLoader__.load({
               var height = Number(miniPref('height'))
               var savedVersion = Number(miniPref('sizeVersion'))
               var validSavedSize = Number.isFinite(width) && Number.isFinite(height) && width >= MINI_MIN_WIDTH && height >= MINI_MIN_HEIGHT
-              // The previous version's built-in default was 260×180. Reset exactly that value so the
-              // redrawn window takes effect, while preserving any footprint the human chose by hand.
-              var legacyDefault = savedVersion === MINI_LEGACY_SIZE_VERSION &&
-                width === MINI_LEGACY_DEFAULT_WIDTH && height === MINI_LEGACY_DEFAULT_HEIGHT
+              // A stored footprint is the human's own decision, so the reset is keyed on a built-in
+              // default rather than on the version number: only a window nobody ever resized follows
+              // the new design. Two of them are known — 260×180 from version 3, and 286×216 from
+              // version 4, which is the size that could not hold two messages.
+              var oldDefault =
+                (savedVersion === MINI_PREV_SIZE_VERSION &&
+                  width === MINI_PREV_DEFAULT_WIDTH && height === MINI_PREV_DEFAULT_HEIGHT) ||
+                (savedVersion === MINI_LEGACY_SIZE_VERSION &&
+                  width === MINI_LEGACY_DEFAULT_WIDTH && height === MINI_LEGACY_DEFAULT_HEIGHT)
               return {
-                width: validSavedSize && !legacyDefault ? width : MINI_DEFAULT_WIDTH,
-                height: validSavedSize && !legacyDefault ? height : MINI_DEFAULT_HEIGHT,
+                width: validSavedSize && !oldDefault ? width : MINI_DEFAULT_WIDTH,
+                height: validSavedSize && !oldDefault ? height : MINI_DEFAULT_HEIGHT,
               }
             })
             var size = sizeState[0]
@@ -2382,6 +2691,16 @@ window.__ModuleLoader__.load({
             var pendingState = React.useState(null)
             var sent = pendingState[0]
             var setSent = pendingState[1]
+            /**
+             * The host's own words for a failed read, so the rail's `[详情]` can keep them.
+             *
+             * It lives on the window rather than in the transcript because the fold that shows it is
+             * the rail's, one sibling up: the transcript reports what failed, the rail is where the
+             * measurements — and now the original text behind the Chinese sentence — are folded.
+             */
+            var rawErrorState = React.useState(null)
+            var rawError = rawErrorState[0]
+            var setRawError = rawErrorState[1]
 
             function say() {
               var body = String(typed || '').trim()
@@ -2566,6 +2885,10 @@ window.__ModuleLoader__.load({
                       return { busy: previous.busy, phase: phase }
                     })
                   },
+                  // The host's own words for a failed read, kept for the rail's `[详情]`: the window
+                  // says the same thing in Chinese (`explainError`) and does not print the raw text
+                  // where a person is reading a conversation.
+                  onError: setRawError,
                 }),
               )
 
@@ -2609,7 +2932,7 @@ window.__ModuleLoader__.load({
                 // verdict in words, and a sentence of activity — with the measurements folded under
                 // it. It replaced a two-word tab strip, and it is *not* a view: the transcript below it
                 // is on screen at the same time, which was the whole point of the change.
-                React.createElement(DenActivityRail, { t: t, status: status, mode: petMode }),
+                React.createElement(DenActivityRail, { t: t, status: status, mode: petMode, rawError: rawError }),
                 React.createElement(
                   'div',
                   { 'data-dsh-role': 'pet-content', style: { flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' } },
@@ -2734,13 +3057,22 @@ window.__ModuleLoader__.load({
 
       ctx.slots.inject('main', function () {
         return ctx.slots.register({ name: 'main', key: PANEL_KEY }, function Bound(props) {
-          // No session is resolved here on purpose. This seat is root-scoped and keyed, and the shell's
-          // own catalog states the rule: "The reserved `conversation` key hosts the Conversation; other
-          // keys receive no Session binding." A status page that needs a conversation must live
-          // somewhere a conversation is handed to it, and trying to discover one from here produced
-          // three wrong shapes that a matching test double happily agreed with.
-          void props
-          return React.createElement(DenPanel, { t: t, act: act, sessionId: null })
+          // No session is *discovered* here on purpose. This seat is root-scoped and keyed, and the
+          // shell's own catalog states the rule: "The reserved `conversation` key hosts the
+          // Conversation; other keys receive no Session binding." A status page that needs a
+          // conversation must live somewhere a conversation is handed to it, and trying to discover
+          // one from here produced three wrong shapes that a matching test double happily agreed
+          // with.
+          //
+          // What it does do is pass through the one the shell handed it, if it ever hands one. That
+          // is not discovery — it is refusing to claim "no conversation" about a component that was
+          // given one, and it is what makes the seat's own rule testable instead of assumed. With
+          // the shell as it is today this is `null` either way: the whole difference is that the
+          // panel now narrows the reminder list to what *its* conversation can mark read whenever
+          // it does hold one (`handleableNotices`), instead of offering a button the host would
+          // refuse.
+          var handed = props && typeof props.sessionId === 'string' && props.sessionId ? props.sessionId : null
+          return React.createElement(DenPanel, { t: t, act: act, sessionId: handed })
         })
       })
     }

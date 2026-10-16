@@ -481,14 +481,69 @@ if (process.env.DEN_DEBUG) {
 
 const text = panel.text()
 check(text.includes('常驻助理') && !text.includes('Den ——'), 'the panel renders its title, lowercase to match the nav entry')
-check(text.includes('常驻控制台') && text.includes('先看信号'), 'the status page opens with a clear control-room hierarchy')
+
+/* --- 顶部只有两句人话,技术指标全在 [详情] 里 ------------------------------ */
+
+/**
+ * 默认视图 = 不写代码的人打开面板看到的那一屏。
+ *
+ * 这一组断言钉的是「它还是不是 GUI」这件事,所以用的都是负向正则:板面上不许出现回合分数、ISO
+ * 时间戳、本插件内部的字段名,以及任何整句英文错误。用户原话(2026-10-17):
+ * 「你自省一下 你觉得现在这个状态的 den 属于 gui 界面的感觉吗 我希望没有太多代码基础的人也能做到」。
+ *
+ * 三个正则,写在这里而不是散在下面,是因为它们就是这套改动的验收标准:
+ *   回合分数   /回合\s*\d+\s*\/\s*\d+/           —— 「回合 3/24」这种读数属于 [详情]
+ *   ISO 时间戳 /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/   —— 时刻同理
+ *   英文整句   /[A-Za-z]{3,}(?:\s+[A-Za-z'’]{2,}){3,}/ —— 四个以上连续的英文词,即一整句接口原文
+ */
+const TURN_FRACTION = /回合\s*\d+\s*\/\s*\d+/
+const ISO_STAMP = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/
+const EN_SENTENCE = /[A-Za-z]{3,}(?:\s+[A-Za-z'’]{2,}){3,}/
+check(!TURN_FRACTION.test(text), `折叠时面板文本不匹配 ${TURN_FRACTION} —— 回合分数收进 [详情]`)
+check(!ISO_STAMP.test(text), `折叠时面板文本不出现 ISO 时间戳 ${ISO_STAMP}`)
+check(!text.includes('探针'), '折叠时面板文本不出现「探针」这类含义不明的字样')
+check(!text.includes('mounted'), '折叠时面板文本不出现 mounted 这类代码里的字段名')
+check(!text.includes('未进桌'), '折叠时面板文本不出现「未进桌」这种连作者都说不清的字样')
+check(!EN_SENTENCE.test(text), `折叠时面板文本不出现整句英文接口错误(判据 ${EN_SENTENCE})`)
+check(!text.includes('常驻控制台') && !text.includes('先看信号'), 'and it no longer opens with a control-room hierarchy')
+
+// 一句状态白话,四选一里恰好一句。健康快照 = 在跑,今天自己醒过,所以是「刚看过一遍」。
+const STATUS_SENTENCES = ['den 在跑,刚看过一遍', 'den 在跑,现在没什么事', 'den 停着(你让它歇的)', 'den 需要你一句话才能继续']
+const statusHits = STATUS_SENTENCES.filter((sentence) => text.includes(sentence))
+check(statusHits.length === 1, `顶部恰好一句状态白话,四选一(saw ${JSON.stringify(statusHits)})`)
+check(statusHits[0] === 'den 在跑,刚看过一遍', 'and a running den that has already looked around says exactly that')
+const plainStatus = findAll(panel.tree, (node) => node.props?.['data-dsh-role'] === 'plain-status')
+check(plainStatus.length === 1, 'the sentence has a place of its own at the top of the page')
+check(
+  STATUS_SENTENCES.includes(textOf(plainStatus[0]).trim()),
+  `and nothing is appended to it there — no timestamp, no score (saw ${JSON.stringify(textOf(plainStatus[0]))})`,
+)
+
+// 一件最该做的事 + 至少一个可点动作。健康快照里有一件卡在人的手上的事。
+check(text.includes('有 1 步在等你'), 'the second plain sentence names the one thing waiting on the person')
+check(
+  panel.buttons().some((button) => textOf(button).trim() === '先别') ||
+    panel.buttons().some((button) => textOf(button).trim() === '读过了'),
+  'and it carries a pressable action rather than a bare statement',
+)
+
+// [详情] 收成一个,默认折叠。原来那个「标签 + 按钮」并排两处 详情 的写法就死在这条上。
+const detailLabels = leafText(panel.tree).filter((leaf) => leaf.trim() === '详情')
+check(detailLabels.length === 1, `面板上只有一个 [详情] 控件(saw ${detailLabels.length})`)
+check(
+  panel.buttons().filter((button) => textOf(button).trim() === '详情').length === 1,
+  'and it is that one button, not a label standing beside a button',
+)
+check(
+  findAll(panel.tree, (node) => node.props?.['data-dsh-role'] === 'measurements').length === 0,
+  'which is closed on arrival: the measurements group is not in the tree at all',
+)
+for (const folded of ['上次心跳', '工具受保护', '回合']) {
+  check(!text.includes(folded), `折叠时看不到「${folded}」—— 它在 [详情] 里`)
+}
 check(panel.buttons().some((button) => textOf(button).trim() === '↻'), 'the page exposes an explicit refresh control')
-check(findAll(panel.tree, (node) => node.props?.style?.gridTemplateColumns === 'repeat(auto-fit, minmax(132px, 1fr))').length === 1, 'the summary uses a responsive signal rail instead of a flat paragraph')
-check(text.includes('工具受保护'), 'the approval state is stated in plain language when the gate is armed')
-check(text.includes('进行中 2'), 'the plain line carries the task count once there is work')
-check(text.includes('卡住 1'), 'a stuck step rides on that same line, not behind details')
-  check(text.includes('等你 1'), 'and the step that is waiting on the person is on that line too')
-  check(text.includes('怎么用'), 'the panel itself says how to ask, so the person does not have to be told')// Looking for the *string* would pass on the copy that says where the control is, so this looks for a
+check(text.includes('怎么用'), 'the panel itself says how to ask, so the person does not have to be told')
+// Looking for the *string* would pass on the copy that says where the control is, so this looks for a
 // button: an affordance the page would have to render to be clickable.
 check(
   !panel.buttons().some((button) => textOf(button).trim() === '授予'),
@@ -496,7 +551,6 @@ check(
 )
 check(text.includes('浮窗里授予'), 'and it says where the grant control is instead')
 check(text.includes('自检'), 'the panel renders the self-check section')
-check(text.includes('运行中'), 'a running heartbeat is reported as running')
 check(text.includes('今天') === false, 'no stray copy is invented')
 
 /* --- the snapshot request carries the session ------------------------------ */
@@ -520,6 +574,170 @@ check(
   'and it asks without naming a conversation, since it has none to name',
 )
 
+/* --- 点开 [详情],读数才出现 ----------------------------------------------- */
+
+/**
+ * 同一个面板,点没点那一下的差别:这就是「默认折叠」的判据 —— 收起时技术指标不在文本里,点了才出现。
+ *
+ * 新挂一个面板而不是复用上面那个:上面那个的 `text` 快照还在被别的断言引用,而点击会改变它的树;
+ * 这一段在请求断言之后,所以它重挂时清空 `calls` 不会让任何人读到错的请求。
+ */
+const foldedPanel = mount(
+  boot({
+    scripted: {
+      status: healthyStatus({ dailyTurnBudget: 24 }),
+      'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } },
+    },
+  }),
+  {},
+)
+await foldedPanel.settle()
+const closedText = foldedPanel.text()
+check(!closedText.includes('上次心跳'), 'the measurements are not drawn until the fold is pressed')
+check(!TURN_FRACTION.test(closedText), 'and neither is the turn budget fraction')
+await foldedPanel.click('详情')
+const openText = foldedPanel.text()
+check(openText.includes('上次心跳') && openText.includes('工具受保护'), 'pressing [详情] brings the measurements out')
+check(TURN_FRACTION.test(openText) && openText.includes('回合 3/24'), 'including the turn count against the day\u2019s cap, in the folded sheet')
+check(
+  findAll(foldedPanel.tree, (node) => node.props?.style?.gridTemplateColumns === 'repeat(auto-fit, minmax(132px, 1fr))').length === 1,
+  'and the readings keep the responsive signal rail instead of collapsing into a flat paragraph',
+)
+check(openText.includes('工具受保护'), 'the approval state is still stated in plain language when the gate is armed')
+check(openText.includes('进行中 2'), 'the signal cards carry the task counts once there is work')
+check(openText.includes('卡住 1'), 'a stuck step rides on the same card')
+check(openText.includes('等你 1'), 'and the step that is waiting on the person is on that card too')
+check(
+  findAll(foldedPanel.tree, (node) => node.props?.['data-dsh-role'] === 'measurements').length === 1,
+  'and everything technical lives in exactly one group',
+)
+await foldedPanel.click('收起')
+check(!foldedPanel.text().includes('上次心跳'), 'pressing it again puts the readings away')
+
+/* --- 带会话的面板只显示它能处理的提醒 -------------------------------------- */
+
+/**
+ * 「看得见、点不动、点了变红」这三件事的顺序。
+ *
+ * `status.notices.pending` 是 den 的**全部**提醒,不是某一个会话的(`notices.js` 明说了);
+ * 而带着会话去 ack 时,宿主只认这个会话名下的那几条(`panel-api.js`)。所以一个带着会话的座位
+ * 如果照单全收,就会画出点了会变红的按钮。客户端这一层因此先筛:它只留下负载里标着自己会话的
+ * 那几条 —— 判据用 `notice.sessionId`,没有这个字段就不算它能处理的。
+ *
+ * 没有会话时一条都不筛,这不是漏:那时宿主自己会把会话解析出来(先看 den 的常驻会话,再看这条
+ * 记录自己的 owner),而且那正是人真正会看到的面板 —— 状态页和浮窗都在所有会话之外。
+ */
+const NOTICES_MIXED = {
+  notices: {
+    total: 2,
+    deliverable: 2,
+    expired: 0,
+    pending: [
+      { id: 'notice-other', text: '这是别的会话的提醒', createdAt: 1, sessionId: 'session-other' },
+      { id: 'notice-mine', text: '这是我这个会话的提醒', createdAt: 2, sessionId: 'session-active' },
+    ],
+  },
+}
+const boardWithSession = mount(
+  boot({ scripted: { status: healthyStatus(NOTICES_MIXED), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } } }),
+  { sessionId: 'session-active' },
+)
+await boardWithSession.settle()
+const boundText = boardWithSession.text()
+check(boundText.includes('这是我这个会话的提醒'), 'a surface holding a conversation shows the notice that conversation can acknowledge')
+check(!boundText.includes('这是别的会话的提醒'), 'and leaves out the notice filed under another conversation')
+check(
+  !boundText.includes('(还有'),
+  'so its count is one notice, not the whole list — nothing on the page would come back refused',
+)
+check(!boundText.includes('有 1 步在等你'), 'and the notice takes the top line ahead of the steps parked on the person')
+
+const boardWithoutSession = mount(
+  boot({ scripted: { status: healthyStatus(NOTICES_MIXED), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } } }),
+  {},
+)
+await boardWithoutSession.settle()
+const unboundText = boardWithoutSession.text()
+check(
+  unboundText.includes('这是别的会话的提醒'),
+  'a surface with no conversation keeps the whole list, oldest first, because the host resolves the conversation there',
+)
+check(unboundText.includes('(还有 1 条)'), 'and it says how many more are owed rather than showing one and hiding the rest')
+check(
+  boardWithoutSession.buttons().some((button) => textOf(button).trim() === '读过了'),
+  'and it still offers the read receipt, because that click is answered by the host, not refused',
+)
+
+/* --- 四种状态各有一句人话,四种都对得上 -------------------------------------- */
+
+/**
+ * 四句话各自的触发条件,一条一条走,因为「四选一」的断言只在默认面板上验过一次:
+ *   den 在跑,刚看过一遍      —— 心跳在跑,而且今天真的动过
+ *   den 在跑,现在没什么事    —— 心跳在跑,今天一步都没走
+ *   den 停着(你让它歇的)    —— 心跳停了,或者当天预算被人调成 0
+ *   den 需要你一句话才能继续 —— 守着的不是它(常驻被让出去 / 唤醒投递通道没通)
+ * 一个分支写错,面板就会对着一个停机的心跳说「在跑」,而这是这一屏唯一要传达的事。
+ */
+const freshButStill = mount(
+  boot({
+    scripted: {
+      status: healthyStatus({ ledger: { turns: 0, spoken: 0, skipped: 0, refused: 0 } }),
+      'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } },
+    },
+  }),
+  {},
+)
+await freshButStill.settle()
+check(freshButStill.text().includes('den 在跑,现在没什么事'), 'a heartbeat that has not had to do anything today says running and idle')
+
+const stoodDown = mount(
+  boot({
+    scripted: {
+      status: healthyStatus({ kernel: { running: false, lastTickAt: 1, lastError: null } }),
+      'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } },
+    },
+  }),
+  {},
+)
+await stoodDown.settle()
+check(stoodDown.text().includes('den 停着(你让它歇的)'), 'a heartbeat that is not running says stopped, and says whose doing that was')
+check(!stoodDown.text().includes('den 在跑'), 'and never says it is running while it is not')
+
+const noBudget = mount(
+  boot({
+    scripted: {
+      status: healthyStatus({ dailyTurnBudget: 0 }),
+      'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } },
+    },
+  }),
+  {},
+)
+await noBudget.settle()
+check(noBudget.text().includes('den 停着(你让它歇的)'), 'a budget of zero is the same answer as a stopped heartbeat, because it is the same fact')
+
+const nothingOwed = mount(
+  boot({
+    scripted: {
+      status: healthyStatus({
+        notices: { total: 0, deliverable: 0, expired: 0, pending: [] },
+        tasks: { active: 0, blocked: 0, waiting: 0, total: 0 },
+        triggers: { total: 0, invalid: 0, due: 0 },
+      }),
+      'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } },
+    },
+  }),
+  {},
+)
+await nothingOwed.settle()
+check(
+  nothingOwed.text().includes('没事要你决定,我继续盯着'),
+  'with nothing owing a decision the page says so in one sentence instead of showing an empty console',
+)
+check(
+  nothingOwed.buttons().every((button) => textOf(button).trim() !== '先别' && textOf(button).trim() !== '读过了'),
+  'and offers nothing to press, because there is nothing to decide',
+)
+
 /* --- the panel says whether the running process loaded this code ----------- */
 
 /**
@@ -527,7 +745,10 @@ check(
  *
  * A healthy-looking panel is precisely what makes a stale host invisible, so the verdict has
  * to reach the panel: the human is the only one who can restart DSH, and this is the one place
- * they are already looking.
+ * they are already looking. It reaches them in the sentence at the top — "我这台跑的还是旧代码 ——
+ * 重启一下 DSH 我就对上了" — and the row it was read from is one press away under [详情], which is
+ * what `readings()` below is for. The rows no longer unfold themselves on a fault: a person who is
+ * not an operator should not be handed eight measurements because a heartbeat stopped.
  */
 async function mainPanelWith(freshness, overrides = {}) {
   const component = boot({
@@ -538,24 +759,39 @@ async function mainPanelWith(freshness, overrides = {}) {
   })
   const mounted = mount(component, {})
   await mounted.settle()
-  return mounted.text()
+  return mounted
 }
 
-const staleText = await mainPanelWith({ known: true, stale: true, newestSourceFile: 'client\\client.js', toleranceMs: 1000 })
-check(staleText.includes('比代码树旧'), 'a stale instance is reported as stale where the human is already looking')
-check(staleText.includes('client\\client.js'), 'and it names the file that is newer than the running process')
+/** The measurements of one mounted page: what it says folded, and what it says once pressed open. */
+async function readings(handle) {
+  const closed = handle.text()
+  await handle.click('详情')
+  return { closed, open: handle.text() }
+}
 
-const currentText = await mainPanelWith({ known: true, stale: false, newestSourceFile: 'src/index.js' })
-check(currentText.includes('与代码树一致'), 'a current instance says so, on the same row')
+const stalePanel = await mainPanelWith({ known: true, stale: true, newestSourceFile: 'client\\client.js', toleranceMs: 1000 })
+const stale = await readings(stalePanel)
+check(stale.closed.includes('重启一下 DSH'), 'a stale instance says what to do about it in the sentence at the top')
+check(!stale.closed.includes('比代码树旧'), 'and does not unfold the measurements at the person to say it')
+check(stale.open.includes('比代码树旧'), 'the row itself is one press away, under [详情]')
+check(stale.open.includes('client\\client.js'), 'and it names the file that is newer than the running process')
 
-const unknownText = await mainPanelWith({ known: false, stale: null, detail: 'this instance did not say when it loaded' })
-check(unknownText.includes('判断不了'), 'an instance that cannot judge itself says so')
+const currentPanel = await mainPanelWith({ known: true, stale: false, newestSourceFile: 'src/index.js' })
+const current = await readings(currentPanel)
+check(current.open.includes('与代码树一致'), 'a current instance says so, on the same row')
+check(!current.closed.includes('重启一下 DSH'), 'and a current one does not offer a restart nobody needs')
+
+const unknownPanel = await mainPanelWith({ known: false, stale: null, detail: 'this instance did not say when it loaded' })
+const unknown = await readings(unknownPanel)
+check(unknown.open.includes('判断不了'), 'an instance that cannot judge itself says so')
 check(
-  !unknownText.includes('与代码树一致'),
+  !unknown.open.includes('与代码树一致'),
   'which is the point: "I cannot tell" must not render as "fine"',
 )
-const directToolsText = await mainPanelWith(null, { gate: { mounted: false, recent: [] } })
-check(directToolsText.includes('工具直通'), 'an explicitly disabled approval gate is explained as direct tool access, not as a red failure')
+const directToolsPanel = await mainPanelWith(null, { gate: { mounted: false, recent: [] } })
+const directTools = await readings(directToolsPanel)
+check(directTools.open.includes('工具直通'), 'an explicitly disabled approval gate is explained as direct tool access, not as a red failure')
+check(!directTools.closed.includes('工具直通'), 'and that explanation is not what the page opens with')
 
 /* --- the floating window sits in the one seat the shell gives it -------- */
 
@@ -583,7 +819,7 @@ await dockWindow.settle()
 // visible to the person the page is for. Pinned here so the next rewrite of that line is caught.
 check(
   dockWindow.tree !== undefined &&
-    findAll(dockWindow.tree, (node) => node.props?.style?.width === 286 && node.props?.style?.height === 216).length === 1,
+    findAll(dockWindow.tree, (node) => node.props?.style?.width === 286 && node.props?.style?.height === 340).length === 1,
   'the window the preview page draws is the mounted card, not the descriptor object that carries no tree',
 )
 const dockStatus = calls.find((entry) => (entry.body?.action ?? 'status') === 'status')
@@ -913,8 +1149,13 @@ const panel6 = mount(
   { sessionId: 'session-active' },
 )
 await panel6.settle()
-check(panel6.text().includes('等待投递通道'), 'a deferred heartbeat is shown as waiting, not as running')
-check(panel6.text().includes('3/24'), 'the retry progress is shown')
+// 一句人话先说:心跳在等一条能开口的路,而这件事只有人能给。行话(「等待投递通道」)和重试进度
+// 都留在 [详情] 里 —— 不是不报,是不拿它当开场白。
+check(panel6.text().includes('den 需要你一句话才能继续'), 'a deferred heartbeat is said in words a person can act on: den needs one sentence')
+check(!panel6.text().includes('等待投递通道'), 'and opens with none of the plugin\u2019s own vocabulary for it')
+await panel6.click('详情')
+check(panel6.text().includes('等待投递通道'), 'the row itself is one press away, under [详情]')
+check(panel6.text().includes('3/24'), 'and the retry progress is shown there')
 
 const panel7 = mount(
   boot({
@@ -929,7 +1170,9 @@ const panel7 = mount(
   { sessionId: 'session-active' },
 )
 await panel7.settle()
-check(panel7.text().includes('已放弃'), 'giving up on the heartbeat is stated plainly')
+check(panel7.text().includes('den 需要你一句话才能继续'), 'giving up on the heartbeat is still said as something the person can clear')
+await panel7.click('详情')
+check(panel7.text().includes('已放弃'), 'and the verdict itself is stated plainly, one press down')
 
 /* --- a standby host is reported as standby, not as a fault ---------------- */
 
@@ -947,7 +1190,11 @@ const standbyPanel = mount(
   { sessionId: 'session-active' },
 )
 await standbyPanel.settle()
-check(standbyPanel.text().includes('待命'), 'a host that stood down says standby instead of "running"')
+// A standby host is running and has nothing to do — "刚看过一遍" would claim work it is not doing.
+check(standbyPanel.text().includes('den 在跑,现在没什么事'), 'a host that stood down reports running and idle, not "just looked"')
+check(!standbyPanel.text().includes('待命'), 'and the word for it is not what the page opens with')
+await standbyPanel.click('详情')
+check(standbyPanel.text().includes('待命'), 'the row under [详情] says standby instead of "running"')
 check(standbyPanel.text().includes('4242'), 'and names the process that holds residency')
 
 const holdingPanel = mount(
@@ -960,6 +1207,8 @@ const holdingPanel = mount(
   { sessionId: 'session-active' },
 )
 await holdingPanel.settle()
+// 展开之后再看:收起时「待命」本来就不在文本里,拿它当判据等于没判。
+await holdingPanel.click('详情')
 check(!holdingPanel.text().includes('待命'), 'while the host that holds residency is not labelled standby')
 
 /* --- no session is no impediment, because there is nothing to grant --------- */
@@ -1099,6 +1348,39 @@ check(
   findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'pet-details').length === 0,
   'and folding it back leaves the window as it was found',
 )
+
+/* --- 浮窗的一致性:正文是对话,细线上的白话不带时刻与分数 ------------------ */
+
+// 6231a88 做过的两件事,这里只做一致性检查,不改浮窗的写法:
+//   1. 窗口的正文就是对话 —— 它不是状态页,也没有要先点的页签;
+//   2. 顶部那条细线上的白话里不出现时刻,也不出现「回合 3/24」这种分数。读数在 [详情] 里,
+//      细线上只留一句人话。
+const railLine = railTextOf(panelTalk)
+check(panelTalk.text().includes('are you awake?'), 'the window\u2019s body is the conversation itself')
+check(
+  !TURN_FRACTION.test(railLine),
+  `the rail's plain line carries no fraction (saw ${JSON.stringify(railLine)})`,
+)
+check(
+  !ISO_STAMP.test(railLine) && !/\d{1,2}:\d{2}/.test(railLine),
+  `and no timestamp of any form (saw ${JSON.stringify(railLine)})`,
+)
+check(
+  railLine.includes('2 个信号') || railLine.includes('没有新信号'),
+  'it says what is happening in words a person reads without a legend',
+)
+// 用户截图里那半行「地主: 未进桌」就是这种字:作者以外没人看得懂,而且它出现在一屏本来要说的
+// 事情旁边。这里钉的是它不在,而不是它被翻译成了什么 —— 说得清的东西才配上屏。
+check(
+  !panelTalk.text().includes('未进桌') && !panelTalk.text().includes('地主'),
+  `the window carries no field nobody can read (saw 未进桌/地主: ${panelTalk.text().includes('未进桌')}/${panelTalk.text().includes('地主')})`,
+)
+// 原文保留的去处也是这一层：[详情] 里可以带上一次失败的原文,但它不许跑到细线或正文上。
+check(
+  !ISO_STAMP.test(panelTalk.text()),
+  'and the open window prints no ISO timestamp anywhere on its face',
+)
+
 check(panelTalk.inputs().length === 1, 'there is one place to type')
 check(
   (panelTalk.inputs()[0]?.props?.placeholder || '').includes('问 den 一句'),
@@ -1364,11 +1646,48 @@ reopened?.props?.onClick()
 await panelTalk.settle()
 check(findAll(panelTalk.tree, (n) => n.props?.style?.width === 286).length === 1, 'and the pill brings the window back')
 check(cardNodes[0]?.props?.style?.zIndex === 60, 'and sits above the page it floats over')
-check(cardNodes[0]?.props?.style?.height === 216, 'and starts with the desktop-pet footprint the design specifies')
+check(cardNodes[0]?.props?.style?.height === 340, 'and starts with the desktop-pet footprint the design specifies')
 check(cardNodes[0]?.props?.style?.resize === 'both', 'and exposes a native two-axis resize affordance')
 check(cardNodes[0]?.props?.style?.minWidth === 240 && cardNodes[0]?.props?.style?.minHeight === 170, 'and keeps the pet usable at its smallest size')
 check(cardNodes[0]?.props?.style?.borderRadius === 18, 'and is rounded like the design, not like a page card')
 check(cardNodes[0]?.props?.['aria-label'] === '常驻会话', 'and gives the floating pet an accessible identity')
+
+/**
+ * 为什么默认高度是 340 而不是 216 —— 用常量算,不假装能测布局。
+ *
+ * 这个测试跑在 node 里,没有浏览器:它量不到一个像素。所以「放得下两条消息」这句话在这里只能
+ * 这样钉:从 bundle 源码里读出三个声明好的常量(默认高度、卡片在消息区之前的固定开销、一条消息的
+ * 高度),做一次减法,要求剩下的高度至少是两条消息。算的是常量之间的关系,不是渲染结果 ——
+ * 谁把 340 改回去,或者把开销算少了,这条就红。真正的像素前提写在 client.js 那段注释里,
+ * 来源是用户在 286×216 上的实测(消息区只剩约 36px,放不下两条消息)。
+ */
+const clientSource = readFileSync(bundlePath, 'utf8')
+function declaredConstant(name) {
+  const match = new RegExp(`var ${name} = (\\d+)`).exec(clientSource)
+  return match ? Number(match[1]) : NaN
+}
+const defaultHeight = declaredConstant('MINI_DEFAULT_HEIGHT')
+const chromeHeight = declaredConstant('MINI_CHROME_HEIGHT')
+const messageRowHeight = declaredConstant('MINI_MESSAGE_ROW_HEIGHT')
+/** 两条消息 = 一条的两倍。源码里就是这么写的,所以这里也这么算,而不是再写一个数字。 */
+const twoMessages = messageRowHeight * 2
+check(defaultHeight === 340, `the default height constant is 340 (saw ${defaultHeight})`)
+check(
+  Number.isFinite(chromeHeight) && Number.isFinite(messageRowHeight),
+  `and the arithmetic it answers to is declared as constants rather than left in prose (chrome ${chromeHeight}, row ${messageRowHeight})`,
+)
+check(
+  /var MINI_TWO_MESSAGES_HEIGHT = MINI_MESSAGE_ROW_HEIGHT \* 2/.test(clientSource),
+  'two messages are declared as twice one message, so the floor cannot drift from the row height',
+)
+check(
+  defaultHeight - chromeHeight >= twoMessages,
+  `the transcript is left at least two messages tall (${defaultHeight} − ${chromeHeight} = ${defaultHeight - chromeHeight} ≥ ${twoMessages})`,
+)
+check(
+  defaultHeight > 216,
+  'and the previous 216 is below it, which is the measurement that produced this default',
+)
 
 fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false, width: 280, height: 190, sizeVersion: 4 }))
 const rememberedSizeWindow = mount(bootWindow({ scripted: { status: healthyStatus() } }).component, {})
@@ -1381,7 +1700,16 @@ check(legacyCustomCard?.props?.style?.width === 280 && legacyCustomCard?.props?.
 fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false, width: 260, height: 180, sizeVersion: 3 }))
 const legacyDefaultWindow = mount(bootWindow({ scripted: { status: healthyStatus() } }).component, {})
 const legacyDefaultCard = findAll(legacyDefaultWindow.tree, (node) => node.props?.style?.position === 'absolute' && node.props?.style?.resize === 'both')[0]
-check(legacyDefaultCard?.props?.style?.width === 286 && legacyDefaultCard?.props?.style?.height === 216, 'and migrates the old built-in size to the redrawn default')
+check(legacyDefaultCard?.props?.style?.width === 286 && legacyDefaultCard?.props?.style?.height === 340, 'and migrates version 3\u2019s built-in size to the current default')
+// Version 4 的内建默认就是 286×216 —— 那个装不下两条消息的尺寸。没人动过它的窗口跟着新设计走,
+// 而人手拖出来的尺寸(上面那条 280×190)照旧保留。
+fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false, width: 286, height: 216, sizeVersion: 4 }))
+const prevDefaultWindow = mount(bootWindow({ scripted: { status: healthyStatus() } }).component, {})
+const prevDefaultCard = findAll(prevDefaultWindow.tree, (node) => node.props?.style?.position === 'absolute' && node.props?.style?.resize === 'both')[0]
+check(
+  prevDefaultCard?.props?.style?.width === 286 && prevDefaultCard?.props?.style?.height === 340,
+  `and a window left at version 4\u2019s own default grows to the new one (saw ${prevDefaultCard?.props?.style?.width}×${prevDefaultCard?.props?.style?.height})`,
+)
 const resizeTarget = { getBoundingClientRect: () => ({ width: 412, height: 318 }) }
 if (rememberedSizeCard?.props?.ref) rememberedSizeCard.props.ref.current = resizeTarget
 await rememberedSizeWindow.settle()
@@ -1591,7 +1919,7 @@ check(pillLeft < 4000 && pillTop < 3000, `and is pulled back into view rather th
 check(pillLeft >= 0 && pillTop >= 0, 'and never lands at a negative offset')
 fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false }))
 
-/* --- a host failure is surfaced, not swallowed ---------------------------- */
+/* --- a host failure is surfaced, in Chinese, with the original one press away --- */
 
 const panel9 = mount(
   boot({
@@ -1603,7 +1931,40 @@ const panel9 = mount(
   { sessionId: 'session-active' },
 )
 await panel9.settle()
-check(panel9.text().includes('disk on fire'), 'a host error is shown to the human')
+check(panel9.text().includes('没成功,我记下来了'), 'a host failure the table does not know is reported as "that did not work — I wrote it down"')
+check(!panel9.text().includes('disk on fire'), 'and the host\u2019s own English sentence is not printed at the person')
+check(!EN_SENTENCE.test(panel9.text()), 'no interface failure reaches the page as a whole English sentence')
+await panel9.click('详情')
+check(panel9.text().includes('disk on fire'), 'while the original words are kept under [详情] rather than thrown away')
+
+/* --- a known refusal is said as the next thing to do ----------------------- */
+
+// 用户截图里那一句:`acknowledging a notice needs a conversation`,出现在一次「纯本地」的点击上
+// (标一条提醒为已读)。表里认识它,所以它变成一句中文 + 下一步;原文仍然收在 [详情] 里。
+const ackFailPanel = mount(
+  boot({
+    scripted: {
+      status: healthyStatus({ notices: { total: 1, deliverable: 1, expired: 0, pending: [{ id: 'notice-9', text: '磁盘快满了', createdAt: 1 }] } }),
+      'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } },
+      'notices/ack': { ok: false, error: { code: 'DEN_ACTION_FAILED', message: 'acknowledging a notice needs a conversation' } },
+    },
+  }),
+  {},
+)
+await ackFailPanel.settle()
+await ackFailPanel.click('读过了')
+const ackFailText = ackFailPanel.text()
+check(ackFailText.includes('这一步要先有一个对话'), 'a refusal den\u2019s panel knows how to read is said as a Chinese next step')
+check(/[\u4e00-\u9fa5]/.test(ackFailText), 'and what the page says about it is Chinese')
+check(
+  !ackFailText.includes('acknowledging a notice needs a conversation'),
+  'the exact sentence from the user\u2019s screenshot is not on the page',
+)
+await ackFailPanel.click('详情')
+check(
+  ackFailPanel.text().includes('acknowledging a notice needs a conversation'),
+  'and the host\u2019s own words survive under [详情], for whoever reads them',
+)
 
 /* --- a non-JSON reply is reported as a transport failure, not a parse error -- */
 
@@ -1624,6 +1985,13 @@ check(transportError.includes('404'), 'a non-JSON reply surfaces the HTTP status
 check(
   !transportError.includes('Unexpected token'),
   'and does not surface a JSON parse error in its place',
+)
+check(transportError.includes('重启一下 DSH'), 'and the sentence says what to do about it rather than what went wrong')
+check(!transportError.includes('mounted'), 'the raw transport text — which names the route as unmounted — is not on the page')
+await panel10.click('详情')
+check(
+  panel10.text().includes('may not be mounted'),
+  'it is kept under [详情] instead, where a person who wants the original can read it',
 )
 transport.raw = null
 
@@ -1681,14 +2049,16 @@ if (process.argv.includes('--demo')) {
   /**
    * The conversation at a size that can show it.
    *
-   * The default footprint is 286×216 and it is honest about what that costs: the bar, the rail and the
-   * composer take 143px of it, so the transcript holds one message (measured in a browser, 2026-10-16).
-   * A preview section whose subject is "the conversation is the body" has to show more than one line of
-   * it, so this card is the same window after the human has pulled the corner — 286×340, through the
-   * same preference blob the resize writes. ① below is the untouched footprint, and every check above
-   * still measures the window at 216.
+   * The conversation at a size that can show it.
+   *
+   * 286×340 is now the *default*, and the reason is measurable rather than aesthetic: at 286×216 the
+   * card spent ~180px before the first message (bar, rail, composer, shortcut row) and the user's own
+   * reading of the transcript box was ~36px — less than one message, let alone two. So this section is
+   * no longer "the window after the human dragged it": it is the window as it opens, written through
+   * the same preference blob the resize uses so the preview shows what the shell actually renders.
+   * ① below is the untouched footprint at that same default.
    */
-  fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false, width: 286, height: 340, sizeVersion: 4 }))
+  fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false, width: 286, height: 340, sizeVersion: 5 }))
   const demoChat = mount(
     bootWindow({
       scripted: {
@@ -1714,8 +2084,20 @@ if (process.argv.includes('--demo')) {
   await demoChat.settle()
   fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false }))
 
+  /**
+   * The panel's own fold, opened.
+   *
+   * The window's fold has a section of its own below; this is the page's, and it exists because the
+   * whole point of the change is that the readings are still there — one press away rather than
+   * gone. A preview that only showed the two-sentence page would let a reader conclude the numbers
+   * had been deleted.
+   */
+  const demoReadings = mount(component, {})
+  await demoReadings.settle()
+  await demoReadings.click('详情')
+
   const page = demoPage({
-    title: 'dsh-den 浮窗预览',
+    title: 'dsh-den 面板与浮窗预览',
     generatedBy: '由 tools/check-client-interaction.mjs 生成',
     sections: [
       {
@@ -1725,26 +2107,26 @@ if (process.argv.includes('--demo')) {
         // is the real case; it pairs with the `main, shell.overlay` injection check. (`grantPanel`
         // was named here and never existed: the reference threw a ReferenceError, so the harness
         // could not run at all and `docs/demo.html` could not be regenerated either.)
-        hint: '默认 286×216；按住顶部条移动，拖右下角调整大小；[–] 收成 44×44 的 den 图标',
+        hint: '默认 286×340（旧的 286×216 装不下两条消息）；按住顶部条移动，拖右下角调整大小；[–] 收成 44×44 的 den 图标',
         tall: true,
         // `dockWindow`, not `dock`: the descriptor carries `{component, options}` and no tree at all.
         tree: dockWindow.tree,
       },
       {
         label: '② 浮窗里的消息流：打开就是对话，不用切标签',
-        hint: '顶部那条细线就是活动（状态点 + 一句白话摘要 + [详情]），下面同时就是消息流。这张是拖大后的 286×340；默认 216 时这里只放得下一条消息，窗口本身会自动滚到最新一行',
+        hint: '顶部那条细线就是活动（状态点 + 一句白话摘要 + [详情]），下面同时就是消息流。这张就是默认的 286×340：消息区放得下两条消息，窗口自己滚到最新一行',
         tall: true,
         tree: demoChat.tree,
       },
       {
         label: '② 细线上的 [详情]：技术指标叠在细线下面，收起就回到对话',
-        hint: '默认折叠。展开后测量值在自己的滚动区里（心跳与上次心跳、有话想跟你说、回合数），它浮在消息流之上、不参与布局，所以 216px 的卡片不会因为展开而把消息挤没；收起后消息原位还在',
+        hint: '默认折叠。展开后测量值在自己的滚动区里（心跳与上次心跳、有话想跟你说、回合数），它浮在消息流之上、不参与布局，所以卡片不会因为展开而把消息挤没；收起后消息原位还在',
         tall: true,
         tree: demoDetails.tree,
       },
       {
         label: '② 一回合没成话：窗口把宿主的原因原话报出来',
-        hint: '空窗口不再沉默 —— 上一回合的失败原文显示在输入框上方（这里演示 {{model}} 无值那次）',
+        hint: '空窗口不再沉默 —— 上一回合的失败原文显示在输入框上方（这里演示 {{model}} 无值那次）。这一条是宿主的原话，不是接口报错，所以没被翻译',
         tall: true,
         tree: panelDead.tree,
       },
@@ -1756,8 +2138,13 @@ if (process.argv.includes('--demo')) {
       },
       {
         label: '整页面板（main）：打开 den 自己的页面时',
-        hint: '一行状态白话；八行技术指标收在 [详情] 里；异常状态自动展开',
+        hint: '只剩两句人话：一句状态（四选一，不带时间戳、不带分数），一件最该做的事（带 [读过了]/[先别]）。技术指标全部收在 [详情] 里，默认折叠',
         tree: demoMain.tree,
+      },
+      {
+        label: '整页面板（main）点开 [详情]：读数都还在，只是不挡人',
+        hint: '信号卡片 + 读数行 + 「运行中的代码」判定 + 失败原文，全在这一次点击之后；收起就回到上面那张',
+        tree: demoReadings.tree,
       },
     ],
   })
