@@ -470,7 +470,7 @@ export class DenKernel {
      * start is the one thing a person must not have to go looking for.
      */
     const taskPick = this.taskPath
-      ? pickTaskWork(loadTasks(this.taskPath).tasks, now)
+      ? pickTaskWork(loadTasks(this.taskPath).tasks, now, { tasksPath: this.taskPath })
       : { kind: 'idle' }
     if (taskPick.kind === 'blocked') {
       blockTaskOn(this.taskPath, { taskId: taskPick.task.id, reason: taskPick.reason, now })

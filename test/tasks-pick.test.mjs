@@ -35,3 +35,15 @@ test('a later step never overtakes an earlier one, and finished work is idle', (
   assert.equal(pickTaskWork([done], NOW).kind, 'idle')
   assert.equal(pickTaskWork([], NOW).kind, 'idle')
 })
+
+test('a task whose own conversation is gone reports into the standing one instead of blocking forever', () => {
+  const t = task({ sessionId: '', steps: [{ title: '跑测试', mode: 'auto' }] })
+  const pick = pickTaskWork([t], NOW, { fallbackSessionId: 'session-standing' })
+  assert.equal(pick.kind, 'step')
+  assert.equal(pick.task.sessionId, 'session-standing', 'the step now knows where to report')
+  assert.equal(t.sessionId, '', 'the stored task itself is not mutated by the fallback')
+  // An empty or absent fallback keeps the old, honest behaviour: blocked, with the reason on it.
+  assert.equal(pickTaskWork([t], NOW).kind, 'blocked')
+  assert.equal(pickTaskWork([t], NOW, { fallbackSessionId: '   ' }).kind, 'blocked')
+  assert.match(pickTaskWork([t], NOW).reason, /conversation/)
+})

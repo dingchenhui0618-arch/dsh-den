@@ -177,11 +177,19 @@ export function summarize(tasks = [], now = Date.now()) {
  * Only the *first* pending step of a task is ever considered, which is `nextDueStep`'s existing
  * rule: a later step must never overtake an earlier one.
  */
-export function pickTaskWork(tasks = [], now = Date.now()) {
+export function pickTaskWork(tasks = [], now = Date.now(), options = {}) {
+  // A task can outlive the conversation it was created in — den's standing conversation is what makes
+  // that survivable. Without a fallback the step is blocked on a fact only a person can fix, which is
+  // exactly what happened to the one task on den's own board (blockedReason: "this task has no
+  // conversation to speak in"). The fallback is resolved lazily: nothing is read unless some task
+  // actually lacks a conversation of its own.
   for (const task of openTasks(tasks)) {
     const step = nextDueStep(task, now)
     if (!step) continue
-    if (!String(task.sessionId ?? '').trim()) {
+    const own = String(task.sessionId ?? '').trim()
+    const sessionId =
+      own || String(options.fallbackSessionId ?? standingSessionIdFor(options.tasksPath) ?? '').trim()
+    if (!sessionId) {
       return {
         kind: 'blocked',
         task,
@@ -189,10 +197,26 @@ export function pickTaskWork(tasks = [], now = Date.now()) {
         reason: 'this task has no conversation to speak in, so its next step cannot be started',
       }
     }
+    // Only the fallback case needs a copy; a task that knows its own conversation is returned as it was.
+    const owner = own ? task : { ...task, sessionId }
     if (step.mode !== 'auto') {
-      return { kind: 'waiting', task, step }
+      return { kind: 'waiting', task: owner, step }
     }
-    return { kind: 'step', task, step }
+    return { kind: 'step', task: owner, step }
   }
   return { kind: 'idle' }
+}
+/**
+ * The standing conversation den reports into, read from the pointer file that sits beside the task
+ * file. Non-throwing on purpose: a missing or half-written pointer must not take the heartbeat down
+ * with it, and "no conversation recorded" has to stay a reportable state rather than a crash.
+ */
+function standingSessionIdFor(tasksPath) {
+  if (!tasksPath) return ''
+  try {
+    const pointerPath = String(tasksPath).replace(/[^\\/]+$/, '') + 'conversation.json'
+    return String(JSON.parse(readFileSync(pointerPath, 'utf8'))?.sessionId ?? '').trim()
+  } catch {
+    return ''
+  }
 }
