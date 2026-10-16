@@ -653,11 +653,9 @@ check(presetPanel.inputs().length === 1, 'and its only input is the message box,
 
 /* --- the resident is visible without opening anything -------------------------------------------- */
 
-// The user's reference shows the resident as a sidebar row with a status dot beside it. The row is
-// `sidebar.panellist`; the dot is `sidebar.toggle.badge`, whose live catalog entry describes it as
-// "Non-interactive notification inside the collapsed sidebar expand button". What is asserted is the
-// **seat**, not the colour: which tone is right depends on a status payload this harness fakes, and a
-// check that pins a fake's colour proves nothing about the host.
+// The resident is discoverable as a sidebar row, while the floating pet remains the always-on
+// compact surface. The row is `sidebar.panellist`; a separate toggle badge is intentionally not
+// added because den has its own status dot and that badge belongs to the shell's global toggle.
 // A probe with its own context: `boot()` would clear `calls` and reset the scripted replies, which the
 // checks further down still read.
 function registersSlot(name) {
@@ -665,7 +663,7 @@ function registersSlot(name) {
   exportsValue.apply(probe)
   return probe.slots.entries.some((entry) => entry.options && entry.options.name === name)
 }
-check(!registersSlot('sidebar.panellist'), 'den keeps out of the sidebar panel list: one surface, not a tab plus a window')
+check(registersSlot('sidebar.panellist'), 'den is discoverable from the sidebar panel list')
 check(!registersSlot('sidebar.toggle.badge'), 'and puts no dot in the sidebar toggle either')
 check(registersSlot('shell.overlay'), 'and a floating window in the shell overlay, outside every conversation frame')
 /* --- shut, the floating window still has to report ---------------------------- */

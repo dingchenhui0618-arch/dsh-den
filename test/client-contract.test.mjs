@@ -42,15 +42,10 @@ test('the bundle id is the package name, which is how the loader keys it', () =>
   assert.equal(match[1], pkg.name, 'a bundle id that differs from the package name will not resolve')
 })
 
-test('den occupies one surface, and the sidebar is not it', () => {
-  // This test used to hold the opposite shape: a sidebar row whose id equalled the main panel key,
-  // so that clicking the row opened the page. That shape meant four places to look at for one
-  // resident, which is what the person complained about, so the invariant is now an absence.
-  assert.doesNotMatch(bundle, /inject\('sidebar\.panellist'/, 'den must not occupy the sidebar panel list')
-  assert.doesNotMatch(bundle, /inject\('sidebar\.toggle\.badge'/, 'nor put a dot in the sidebar toggle')
+test('the sidebar entry and the main panel use the same key', () => {
+  const sidebar = bundle.match(/panellist[\s\S]{0,220}?id:\s*([A-Z_]+)/)
+  assert.ok(sidebar, 'the GUI must be discoverable from the sidebar')
 
-  // The page itself stays, keyed by the value the live client reported, so a stored selection still
-  // lands somewhere.
   const mainKey = bundle.match(/main[\s\S]{0,260}?key:\s*([A-Z_]+)/)
   assert.ok(mainKey, "the main registration must reference its key constant")
   const constant = (name) => {
@@ -58,8 +53,9 @@ test('den occupies one surface, and the sidebar is not it', () => {
     assert.ok(found, `${name} must be declared as a literal so this contract stays checkable`)
     return found[1]
   }
-  assert.equal(constant(mainKey[1]), 'dsh-den.status', 'the value the live client reported as an active occupant')
-  assert.doesNotMatch(bundle, /sidebar\.panellist[\s\S]{0,120}?order:/, 'and nothing re-adds a sidebar order')
+  assert.equal(constant(sidebar[1]), constant(mainKey[1]), 'the sidebar id must select the den main panel')
+  assert.equal(constant(sidebar[1]), 'dsh-den.status', 'the GUI key remains stable across reloads')
+  assert.match(bundle, /sidebar\.panellist[\s\S]{0,220}?order:\s*ORDER/, 'the sidebar has a stable order')
 })
 test('the bundle takes React from the factory argument and never from a global', () => {
   // The factory parameter is the loader's module resolver; the live registration

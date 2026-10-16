@@ -1524,6 +1524,17 @@ window.__ModuleLoader__.load({
         }
       })
 
+      // Keep a discoverable GUI entry in the shell sidebar. The floating pet is still the
+      // always-on surface, but a resident assistant also needs a stable place a human can find
+      // after the pill has been moved or collapsed. The id must match the main panel key or the
+      // shell will render an icon that selects nothing.
+      ctx.slots.inject('sidebar.panellist', function () {
+        return ctx.slots.register(
+          { name: 'sidebar.panellist', id: PANEL_KEY, order: ORDER, label: function () { return t('nav') } },
+          Icon,
+        )
+      })
+
 
     /**
      * The standing conversation, as the window shows it.

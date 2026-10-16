@@ -195,12 +195,16 @@ check(applyError === null, `apply() runs against a stand-in context${applyError 
 
 const sidebar = registrations.find((r) => r.options?.name === 'sidebar.panellist')
 const main = registrations.find((r) => r.options?.name === 'main')
-check(!sidebar, 'keeps out of the sidebar panel list: one surface, not a tab and a window')
+check(Boolean(sidebar), 'registers a discoverable GUI entry in the sidebar')
 check(Boolean(main), 'registers a main panel')
-check(injections.includes('shell.overlay') && injections.includes('main'), 'waits for the window and the page via inject()')
+check(injections.includes('sidebar.panellist') && injections.includes('shell.overlay') && injections.includes('main'), 'waits for the sidebar, window, and page via inject()')
 
-// The seats are enumerated rather than assumed. The claim is that den occupies one window plus its
-// page, so a third surface has to fail this file instead of quietly rendering somewhere else.
+if (sidebar && main) {
+  check(sidebar.options.id === main.options.key, 'the sidebar id selects the matching main panel')
+}
+
+// The seats are enumerated rather than assumed. Den has a discoverable sidebar entry, a full page,
+// and the compact floating pet; any extra surface should fail this file instead of rendering quietly.
 const overlay = registrations.find((r) => r.options?.name === 'shell.overlay')
 const named = registrations.map((r) => r.options?.name).sort()
 check(
@@ -208,7 +212,7 @@ check(
   'registers the floating window in the shell overlay seat',
 )
 check(
-  named.join(', ') === 'main, shell.overlay',
+  named.join(', ') === 'main, shell.overlay, sidebar.panellist',
   `registers into exactly these seats (${named.join(', ')})`,
 )
 check(main.options.key !== 'conversation', 'does not shadow the shipped conversation panel')
