@@ -576,6 +576,16 @@ check(
 )
 const dockWindow = mount(dock.component, {})
 await dockWindow.settle()
+// The preview page used to draw this section from `dock.tree`, and `dock` is the *registration
+// descriptor* — `bootWindow` returns `{component, options}` and nothing else, so there is no tree on it
+// and the section titled "the floating card" rendered as an empty box from the day it was written.
+// Nobody saw it: a section that draws nothing still renders, still passes every check, and is only
+// visible to the person the page is for. Pinned here so the next rewrite of that line is caught.
+check(
+  dockWindow.tree !== undefined &&
+    findAll(dockWindow.tree, (node) => node.props?.style?.width === 286 && node.props?.style?.height === 216).length === 1,
+  'the window the preview page draws is the mounted card, not the descriptor object that carries no tree',
+)
 const dockStatus = calls.find((entry) => (entry.body?.action ?? 'status') === 'status')
 check(
   dockStatus?.body?.sessionId == null,
@@ -592,9 +602,10 @@ check(text.includes('消息框里说一句'), 'and creating one is described as 
 // authority from the always-on surface was the one control the window should never have had.
 //
 // These are pinned as counts, not as "a label is missing". A checklist of forbidden strings passes the
-// moment somebody rewrites the copy, while a count of controls that are not collapse/expand/tabs/
-// shortcuts/composer fails the moment one is added back under any name at all.
-const WINDOW_CONTROL_LABELS = ['收起', '−', '活动', '对话', '查看活动', '解释状态', '运行自检', '发送', '↗']
+// moment somebody rewrites the copy, while a count of controls that are not collapse/details/shortcuts/
+// composer fails the moment one is added back under any name at all. `活动`/`对话` left this list with
+// the tab strip itself: they are no longer labels any control in this window may carry.
+const WINDOW_CONTROL_LABELS = ['收起', '−', '详情', '查看活动', '解释状态', '运行自检', '发送', '↗']
 const foreignWindowControls = (handle) =>
   handle
     .buttons()
@@ -649,6 +660,16 @@ async function windowMode(status) {
   return { handle, state: dot?.props?.['data-state'], color: String(dot?.props?.style?.background || '') }
 }
 
+/**
+ * The text of the window's always-on activity rail, as drawn.
+ *
+ * Read off the rail node rather than off the whole tree on purpose: `运行中` also occurs inside the
+ * measurements the fold hides (`常驻中 · 心跳运行中`), so a check that searched the tree could pass on a
+ * row nobody can see and report the one line that is always on screen as saying something it does not.
+ */
+const railTextOf = (handle) =>
+  textOf(findAll(handle.tree, (node) => node.props?.['data-dsh-role'] === 'pet-rail')[0])
+
 // `healthyStatus()` is den's healthy week: it carries a step parked on the person
 // (`tasks.waiting: 1`), which is exactly what the amber state is for — the pill's own state check
 // further down pins that reading. So a check about "nothing owed" has to say so in its fixture:
@@ -658,9 +679,12 @@ const NOTHING_OWED = { notices: { total: 0, deliverable: 0, expired: 0, pending:
 
 const idleDot = await windowMode({ ...healthyStatus().value, ...NOTHING_OWED })
 check(idleDot.state === 'running', `a live heartbeat with nothing owed is running (saw ${idleDot.state})`)
+// This used to read the activity *view*, which only existed once its tab had been pressed. The rail is
+// always on screen, so the claim is now the stronger one: the word that goes with the light is in the
+// line under the bar on the open, with nothing pressed to get it there.
 check(
-  idleDot.handle.text().includes('心跳运行中'),
-  'and the activity view still says in words what the green light means',
+  railTextOf(idleDot.handle).includes('运行中') && railTextOf(idleDot.handle).includes('没有新信号'),
+  `and the always-on rail says in words what the green light means (saw ${JSON.stringify(railTextOf(idleDot.handle))})`,
 )
 // The notice is put in `notices.pending`, which is the field the host fills with the text of what is
 // owed (`src/index.js`), and the to-do list is emptied so the amber light can only come from the
@@ -671,12 +695,22 @@ const waitingDot = await windowMode({
   notices: { total: 1, deliverable: 1, expired: 0, pending: [{ id: 'notice-1', text: '磁盘快满了', createdAt: 1 }] },
 })
 check(waitingDot.state === 'waiting', `an unread notice for the person is waiting, not running (saw ${waitingDot.state})`)
+// The other two states, in the same always-on line: the three words the design names have to be
+// readable on the rail, not only encoded in the colour of the light beside them.
+check(
+  railTextOf(waitingDot.handle).includes('等待你') && railTextOf(waitingDot.handle).includes('1 个信号'),
+  `and the rail names the amber state and what put it there (saw ${JSON.stringify(railTextOf(waitingDot.handle))})`,
+)
 const dueDot = await windowMode({ ...healthyStatus().value, ...NOTHING_OWED, triggers: { total: 1, invalid: 0, due: 1 } })
 check(dueDot.state === 'waiting', `a self-check that came due is waiting too (saw ${dueDot.state})`)
 const offDot = await windowMode({ ...healthyStatus().value, kernel: { running: false, lastTickAt: 1, lastError: null } })
 check(offDot.state === 'quiet', `a stopped heartbeat is quiet rather than a fault to chase (saw ${offDot.state})`)
 const spentDot = await windowMode({ ...healthyStatus().value, dailyTurnBudget: 0 })
 check(spentDot.state === 'quiet', `a zero daily budget is quiet, because den may start nothing today (saw ${spentDot.state})`)
+check(
+  railTextOf(spentDot.handle).includes('安静'),
+  `and the rail says 安静 rather than leaving the grey light unexplained (saw ${JSON.stringify(railTextOf(spentDot.handle))})`,
+)
 
 // The mode the old design called `approval` no longer exists in any input: a busy gate is not a
 // fourth state, because the light would ask for a decision this window cannot take. The rest of the
@@ -817,15 +851,13 @@ const sendButton = (handle) => handle.buttons().find((button) => button.props?.[
 check(Boolean(sendButton(panel3)), 'and one way to send what is typed')
 check(!panel3.text().includes('新建自检'), 'and no submit button')
 check(!panel3.buttons().some((button) => textOf(button).trim() === '新建'), 'and nothing that would open a form')
-// The empty state is on the conversation tab, so the tab has to be opened for it to be a claim about
-// anything: the window starts on activity, and a check that read the empty state without opening the
-// tab would be reading a view that is not on screen.
-findAll(panel3.tree, (node) => node.props?.['data-dsh-role'] === 'pet-tab')[1]?.props?.onClick()
-await panel3.settle()
-check(panel3.text().includes('还没有对话'), 'an empty conversation says how to start one')
+// The empty state is in the window's body, which is on screen the moment the window is, so this is a
+// claim about the open with no press in between. It used to need the conversation tab pressed first —
+// and that press is exactly what the user reported as the cost (2026-10-16).
+check(panel3.text().includes('还没有对话'), 'an empty conversation says how to start one, without opening anything')
 check(
   findAll(panel3.tree, (node) => node.props?.['data-dsh-role'] === 'pet-chat')[0]?.props?.style?.display === 'flex',
-  'and opening that tab is what puts the transcript on screen',
+  'and the transcript is the window body, drawn on the open instead of hidden behind a tab',
 )
 
 check(
@@ -979,32 +1011,35 @@ const panelTalk = mount(
   {},
 )
 await panelTalk.settle()
-// The window opens on activity, and the transcript lives on the conversation tab, so the tab has to
-// be opened before a claim about what the transcript shows is a claim about what is on screen. What
-// is being pinned below is the order itself: the read is asked for *because* the tab was opened.
+// The window used to ship a two-word tab strip, and the transcript was only mounted once `对话` had
+// been pressed — so opening the window showed activity and nothing else, which is the press the user
+// reported as the cost ("好了已经 活动/对话 都放在一起 这样还得切换才能看到对话内容多麻烦", 2026-10-16).
+// What is pinned here is the replacement fact, not a weaker one: there is no tab left to press, the
+// transcript is asked for *by the open itself*, and the rail's sentence is on screen with the messages.
 const petTabs = findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'pet-tab')
-check(petTabs.length === 2, 'the pet exposes activity and conversation views without adding another window')
+check(petTabs.length === 0, `the window offers no tab strip to switch views with (saw ${petTabs.length})`)
 check(
-  petTabs.map((node) => textOf(node).trim()).join('|') === '活动|对话',
-  `and those two views are activity and conversation (saw ${petTabs.map((node) => textOf(node).trim()).join('|')})`,
+  findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'pet-rail').length === 1,
+  'and the activity it used to be one of is a rail under the bar instead of a screen of its own',
+)
+const chatRequestsAtOpen = calls.filter((entry) => entry.body?.action === 'conversation/read').length
+check(
+  chatRequestsAtOpen >= 1,
+  `opening the window is what asks the host for the transcript, before anything in it is pressed (saw ${chatRequestsAtOpen} read(s))`,
+)
+check(
+  findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'pet-chat').length === 1,
+  'and the open, not a press, is what draws it',
 )
 check(
   !findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'permission-card').length,
   'and there is no permission card anywhere in it',
 )
+// The point of the change in one assertion: the messages and the rail's sentence are in the same
+// render, with no press between them. Both halves are named, so a rail that rendered empty fails.
 check(
-  !findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'pet-chat').length,
-  'and the window opens on activity, with the transcript not fetched yet',
-)
-const chatTab = petTabs.find((node) => textOf(node).trim() === '对话')
-const chatRequestsAtOpen = calls.filter((entry) => entry.body?.action === 'conversation/read').length
-chatTab?.props?.onClick()
-await panelTalk.settle()
-const chatRequestsAfterOpen = calls.filter((entry) => entry.body?.action === 'conversation/read').length
-check(chatRequestsAfterOpen > chatRequestsAtOpen, 'opening the conversation tab asks the host for the transcript')
-check(
-  findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'pet-chat').length === 1,
-  'and that tab is what draws it',
+  railTextOf(panelTalk).includes('2 个信号') && panelTalk.text().includes('are you awake?'),
+  `and the rail's activity sentence is on screen together with the messages (rail: ${JSON.stringify(railTextOf(panelTalk))})`,
 )
 check(panelTalk.text().includes('are you awake?'), 'the window shows what was said to den')
 check(panelTalk.text().includes('awake, and nothing is on fire'), 'and what den said back')
@@ -1016,12 +1051,53 @@ check(
 // session, a stored session, or the log on disk, and a window that silently fell back to the log was
 // read as "den lost the conversation" (measured 2026-10-15).
 check(panelTalk.text().includes('来自会话存储'), 'and names the store as where it read them')
-const activityTab = petTabs.find((node) => textOf(node).trim() === '活动')
-activityTab?.props?.onClick()
+// The old design's other direction — pressing `活动` folded the transcript away — is gone with the
+// tabs. What replaces it is the rail's own fold, and the fact worth pinning is that folding the
+// measurements does *not* take the conversation off screen: it is a line of chrome, not a screen.
+const detailsToggle = findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'pet-details-toggle')[0]
+check(Boolean(detailsToggle), 'the rail carries a fold for the measurements, under its own accessible name')
+check(
+  findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'pet-details').length === 0,
+  'and it starts folded, so the window opens on the conversation rather than on a wall of numbers',
+)
+detailsToggle?.props?.onClick()
+await panelTalk.settle()
+// Measured in a real browser at the shipped 286×216 (2026-10-16): as a flex row under the rail, the
+// four measurements took 113px and the transcript box got 0px — so "the transcript is still on screen"
+// was false while a check reading `display: flex` said it was true. The sheet hangs from the rail now,
+// and what is pinned is the thing that made the difference: it is positioned, not a row.
+const unfoldedSheet = findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'pet-details')[0]
+check(
+  unfoldedSheet?.props?.style?.position === 'absolute' && unfoldedSheet?.props?.style?.top === '100%',
+  'and the measurements hang under the rail as a sheet instead of taking a row away from the transcript',
+)
+check(
+  unfoldedSheet?.props?.style?.overflowY === 'auto' &&
+    Number(unfoldedSheet?.props?.style?.maxHeight) > 0 &&
+    findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'pet-chat')[0]?.props?.style?.display === 'flex',
+  'and the sheet is bounded and scrolls while the transcript keeps its own height behind it',
+)
+check(
+  railTextOf(panelTalk).includes('心跳运行中') && railTextOf(panelTalk).includes('上次心跳'),
+  `and what it reveals is the heartbeat reading the sentence above does not carry (saw ${JSON.stringify(railTextOf(panelTalk))})`,
+)
+// The count is written before its noun, the way the sentence above spells it. The folded rows said
+// `个信号 · 2` — a fragment, not a phrase — and no check could see it: it is grammar, not structure, and
+// it took reading the generated page (2026-10-16) to notice. Read off the sheet, not the rail: the
+// sentence legitimately contains `2 个信号 · 等你 1`, so the rail's own text cannot tell the two apart.
+check(
+  textOf(unfoldedSheet).includes('2 个信号') && !textOf(unfoldedSheet).includes('个信号 · '),
+  `and its counts read as phrases rather than fragments (saw ${JSON.stringify(textOf(unfoldedSheet))})`,
+)
+// The toggle is looked up again rather than reused: its handler closes over the state of the render it
+// was built in, so pressing the *old* node a second time would ask for the fold to be opened again —
+// the same value, no re-render, and a check that read that as "still open" would be measuring the
+// harness. Re-reading the control is what makes the second press a press on the window as it now is.
+findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'pet-details-toggle')[0]?.props?.onClick()
 await panelTalk.settle()
 check(
-  findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'pet-chat')[0]?.props?.style?.display === 'none',
-  'while returning to activity folds the transcript away without unmounting it',
+  findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'pet-details').length === 0,
+  'and folding it back leaves the window as it was found',
 )
 check(panelTalk.inputs().length === 1, 'there is one place to type')
 check(
@@ -1085,10 +1161,9 @@ const panelDead = mount(
   {},
 )
 await panelDead.settle()
-// The reason the window is empty is drawn by the transcript, which lives on the conversation tab.
-findAll(panelDead.tree, (node) => node.props?.['data-dsh-role'] === 'pet-tab')[1]?.props?.onClick()
-await panelDead.settle()
-check(panelDead.text().includes('上一回合没能完成'), 'an empty conversation says why it is empty')
+// The reason the window is empty is drawn by the transcript, which is now the window's body: the
+// host's own words are on screen from the open, with no tab pressed to bring them there.
+check(panelDead.text().includes('上一回合没能完成'), 'an empty conversation says why it is empty, on the open')
 check(
   panelDead.text().includes('has no value'),
   'and quotes the host rather than smoothing it into "something went wrong"',
@@ -1140,10 +1215,8 @@ const panelEcho = mount(
   {},
 )
 await panelEcho.settle()
-// The optimistic copy lives in the transcript, so the tab has to be open for the sentence to have
-// somewhere to be drawn — and for this check to be about what is on screen.
-findAll(panelEcho.tree, (node) => node.props?.['data-dsh-role'] === 'pet-tab')[1]?.props?.onClick()
-await panelEcho.settle()
+// The optimistic copy lives in the transcript, and the transcript is the window's body now: it is
+// mounted with the window, so the sentence has somewhere to be drawn without anything being pressed.
 await panelEcho.type(0, 'already logged')
 await panelEcho.press('发送')
 await panelEcho.settle()
@@ -1208,12 +1281,52 @@ check(!panelPillDeferredLabel.includes('心跳运行中'), 'and does not claim t
 
 /* --- the transcript scrolls in its own area, which is what "scrollable" means --- */
 
-// Both views live in the card at once — the inactive one is hidden rather than unmounted, so a tab
-// switch is not a re-fetch — which means "one scroll area in the tree" is no longer the question. The
-// question is whether the transcript has a bounded one of its own, and the bound is what is pinned.
+// The transcript has a bounded scroll area of its own, and the bound is what is pinned: "scrollable"
+// in a 216px card means it grows inside a limit rather than growing the card. The rail's own fold is
+// bounded the same way, but it is folded here — which is why exactly one such area is on screen, and
+// why a second one appearing means something was unfolded without being asked for.
 const transcriptScroll = findAll(panelTalk.tree, (n) => n.props?.style?.overflowY === 'auto' && Number(n.props?.style?.maxHeight) > 0)
 check(transcriptScroll.length === 1, `the transcript has exactly one scrolling area of its own (saw ${transcriptScroll.length})`)
 check(Number(transcriptScroll[0]?.props?.style?.maxHeight) > 0, 'and that area is bounded, so the window cannot grow with the transcript')
+// The 216px card is the constraint this whole layout answers to, and the transcript's own chrome is
+// where it used to lose: three provenance lines plus a "type below" hint were most of the view's
+// height once the card was that small, so the messages were what got clipped — the exact failure this
+// change exists to avoid. Pinned as the shape of the render rather than as pixels, which this harness
+// cannot measure: one chrome line, and a scroll box that is the flexible child with a low floor.
+const transcriptChrome = findAll(panelTalk.tree, (n) => n.props?.['data-dsh-role'] === 'pet-meta')
+check(
+  transcriptChrome.length === 1,
+  `the transcript's provenance, its count and its tail notice share one line (saw ${transcriptChrome.length} such line(s))`,
+)
+check(
+  String(transcriptScroll[0]?.props?.style?.flex || '').startsWith('1 1') &&
+    Number(transcriptScroll[0]?.props?.style?.minHeight) <= 40,
+  `and the box that holds the messages is the one that grows, with a floor a 216px card can pay (minHeight ${transcriptScroll[0]?.props?.style?.minHeight})`,
+)
+// Two more facts that decide whether the conversation is readable at all at 286×216, and that a check
+// asking "is the text in the tree" cannot see. Both were sized against browser measurements
+// (2026-10-16): a message row cost ~65px, the box is ~58px, so the speaker label was on screen and the
+// sentence under it was not — and with the box parked at `scrollTop: 0` the line in view was the
+// oldest of the tail, not the sentence the person had just sent.
+const messageRows = findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'pet-message')
+check(
+  messageRows.length === 3,
+  `the transcript draws the tail's two messages and the sentence sent above as rows (saw ${messageRows.length})`,
+)
+check(
+  messageRows.length > 0 && messageRows.every((node) => (Number.parseInt(String(node.props?.style?.margin), 10) || 0) <= 4),
+  `and each row is spaced for the card rather than for the page (${messageRows.map((node) => node.props?.style?.margin).join(', ')})`,
+)
+// The box is scrolled by an effect, so the assertion drives a real render with a stand-in node: the
+// harness has no layout, and a check that only read the effect's source would be measuring the file.
+const scrollBox = transcriptScroll[0]
+if (scrollBox?.props?.ref) scrollBox.props.ref.current = { scrollHeight: 812, scrollTop: 0 }
+panelTalk.render()
+await panelTalk.settle()
+check(
+  scrollBox?.props?.ref?.current?.scrollTop === 812,
+  `and the box follows the log, so the newest line is the one in view (scrollTop ${scrollBox?.props?.ref?.current?.scrollTop})`,
+)
 /* --- the window places and paints itself, because the layer gives it neither --- */
 
 const cardNodes = findAll(panelTalk.tree, (n) => n.props?.style?.position === 'absolute' && n.props?.style?.width === 286)
@@ -1295,9 +1408,13 @@ const panelOldHost = mount(
   {},
 )
 await panelOldHost.settle()
-// The verdict itself is the transcript's, so the tab has to be opened to read it off the screen.
-findAll(panelOldHost.tree, (node) => node.props?.['data-dsh-role'] === 'pet-tab')[1]?.props?.onClick()
-await panelOldHost.settle()
+// The verdict itself is the transcript's, and the transcript is the window's body: it is read off the
+// screen from the open, with no tab to press first. The rail above it has to survive that verdict —
+// an older host is still a host the state light can report on.
+check(
+  findAll(panelOldHost.tree, (node) => node.props?.['data-dsh-role'] === 'pet-rail').length === 1,
+  'and the activity rail is still drawn while the transcript reports an older host',
+)
 check(panelOldHost.text().includes('重启 DSH'), 'a window whose host half is older says what to do about it')
 check(!panelOldHost.text().includes('unknown action'), "and does not print the host's error text as if den were broken")
 // The send control is an arrow with an accessible name rather than a word, so it is found the way the
@@ -1357,6 +1474,19 @@ const placedTree = findAll(
 )
 check(placedTree.length >= 1, 'and the remembered place is applied, rather than only stored')
 
+// The other half of the same guard: a press that lands on a control *inside* the bar is not a drag.
+// The bar captures the pointer on pointerdown, which is how a press on the collapse button came to do
+// nothing at all, so the two cases have to be told apart rather than both being allowed through.
+// What makes them different is whether the pressed control is the element the handler is bound to.
+let measuredOnControl = 0
+const rivalButton = { closest: () => rivalButton }
+const rivalBar = {
+  getBoundingClientRect: () => { measuredOnControl += 1; return { left: 400, top: 300, width: 320, height: 240 } },
+  setPointerCapture: () => {},
+}
+handleOf().props.onPointerDown({ currentTarget: rivalBar, target: rivalButton, pointerId: 9, preventDefault: () => {} })
+check(measuredOnControl === 0, 'and a press that lands on a different control inside the bar never starts a drag')
+
 /* --- the shut pill can be moved without opening it ----------------------- */
 
 fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: true }))
@@ -1387,6 +1517,49 @@ check(
   findAll(dragPillWindow.tree, (node) => node.props?.style?.width === 286).length === 0,
   'and the window it would open stays shut behind it',
 )
+
+/* --- a press on the pill's own mark moves it, wherever it lands ------------ */
+
+// Reported by the user (2026-10-16), with the window shut: the pill could not be moved when the press
+// landed on den's mark or on the status dot pinned over it. Both are children of the pill's own
+// button, so `closest('button')` resolves to the button the drag handler is bound to — which the guard
+// must read as "this control", not as "a different one". A drag that only works on the bare background
+// of a 44px square is not a draggable control, and the case the report named is the case worth pinning:
+// the drag check above presses the pill with no target at all, which is the one press that never had
+// the problem.
+for (const pressedOn of ['den 的标记', '压在上面的状态点']) {
+  fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: true, x: 100, y: 120 }))
+  const markPillWindow = mount(bootWindow({ scripted: { status: healthyStatus() } }).component, {})
+  await markPillWindow.settle()
+  const markPill = markPillWindow.buttons().find((button) => button.props?.['aria-label']?.includes('打开 den 面板'))
+  const markPillTarget = {
+    getBoundingClientRect: () => ({ left: 100, top: 120, width: 44, height: 44 }),
+    setPointerCapture: () => {},
+  }
+  const childOfThePill = { closest: () => markPillTarget }
+  markPill?.props?.onPointerDown({
+    currentTarget: markPillTarget,
+    target: childOfThePill,
+    pointerId: 11,
+    clientX: 110,
+    clientY: 130,
+    stopPropagation: () => {},
+  })
+  markPill?.props?.onPointerMove({ clientX: 250, clientY: 230, movementX: 140, movementY: 100, preventDefault: () => {} })
+  markPill?.props?.onPointerUp({})
+  await markPillWindow.settle()
+  const movedByMark = JSON.parse(fakeStorage.getItem('dsh-den.mini') || '{}')
+  check(
+    movedByMark.x === 240 && movedByMark.y === 220,
+    `a press on ${pressedOn} still moves the pill (${movedByMark.x}, ${movedByMark.y})`,
+  )
+  markPill?.props?.onClick({ preventDefault: () => {} })
+  await markPillWindow.settle()
+  check(
+    findAll(markPillWindow.tree, (node) => node.props?.['aria-label']?.includes('打开 den 面板')).length === 1,
+    `and a drag that began on ${pressedOn} does not open the window either`,
+  )
+}
 
 fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: true }))
 const clickPillWindow = mount(bootWindow({ scripted: { status: healthyStatus() } }).component, {})
@@ -1472,6 +1645,75 @@ if (process.argv.includes('--demo')) {
   const demoMain = mount(component, {})
   await demoMain.settle()
 
+  /**
+   * The rail's fold, as a human would meet it.
+   *
+   * Mounted here rather than reusing `panelTalk`, because that handle was deliberately folded back to
+   * the state the window opens in — a preview section has to show the state its own caption names.
+   * The messages are demo copy on purpose: the page says so in its banner, and the numbers in the rail
+   * come from `healthyStatus()`, which is the same fixture every check above drives.
+   */
+  const demoDetails = mount(
+    bootWindow({
+      scripted: {
+        status: healthyStatus(),
+        'conversation/read': {
+          ok: true,
+          value: {
+            sessionId: 'sess-demo',
+            state: 'live',
+            readFrom: 'store',
+            total: 4,
+            truncated: true,
+            messages: [
+              { role: 'user', text: '磁盘快满了吗？', seq: 3, time: 1 },
+              { role: 'assistant', text: '还剩 12%，我先盯着，到 8% 再叫你。', seq: 4, time: 2 },
+            ],
+          },
+        },
+      },
+    }).component,
+    {},
+  )
+  await demoDetails.settle()
+  await demoDetails.click('详情')
+
+  /**
+   * The conversation at a size that can show it.
+   *
+   * The default footprint is 286×216 and it is honest about what that costs: the bar, the rail and the
+   * composer take 143px of it, so the transcript holds one message (measured in a browser, 2026-10-16).
+   * A preview section whose subject is "the conversation is the body" has to show more than one line of
+   * it, so this card is the same window after the human has pulled the corner — 286×340, through the
+   * same preference blob the resize writes. ① below is the untouched footprint, and every check above
+   * still measures the window at 216.
+   */
+  fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false, width: 286, height: 340, sizeVersion: 4 }))
+  const demoChat = mount(
+    bootWindow({
+      scripted: {
+        status: healthyStatus(),
+        'conversation/read': {
+          ok: true,
+          value: {
+            sessionId: 'sess-demo',
+            state: 'live',
+            readFrom: 'store',
+            total: 4,
+            truncated: true,
+            messages: [
+              { role: 'user', text: '磁盘快满了吗？', seq: 1, time: 1 },
+              { role: 'assistant', text: '还剩 12%，我先盯着，到 8% 再叫你。', seq: 2, time: 2 },
+            ],
+          },
+        },
+      },
+    }).component,
+    {},
+  )
+  await demoChat.settle()
+  fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false }))
+
   const page = demoPage({
     title: 'dsh-den 浮窗预览',
     generatedBy: '由 tools/check-client-interaction.mjs 生成',
@@ -1483,15 +1725,22 @@ if (process.argv.includes('--demo')) {
         // is the real case; it pairs with the `main, shell.overlay` injection check. (`grantPanel`
         // was named here and never existed: the reference threw a ReferenceError, so the harness
         // could not run at all and `docs/demo.html` could not be regenerated either.)
-        hint: '默认 300×210；按住顶部条移动，拖右下角调整大小；[–] 收成 den 图标',
+        hint: '默认 286×216；按住顶部条移动，拖右下角调整大小；[–] 收成 44×44 的 den 图标',
         tall: true,
-        tree: dock.tree,
+        // `dockWindow`, not `dock`: the descriptor carries `{component, options}` and no tree at all.
+        tree: dockWindow.tree,
       },
       {
-        label: '② 浮窗里的消息流：可滚动、可直接发话',
-        hint: '演示数据。一轮问答；发完立即重读，所以自己的话先出现，回复随后到',
+        label: '② 浮窗里的消息流：打开就是对话，不用切标签',
+        hint: '顶部那条细线就是活动（状态点 + 一句白话摘要 + [详情]），下面同时就是消息流。这张是拖大后的 286×340；默认 216 时这里只放得下一条消息，窗口本身会自动滚到最新一行',
         tall: true,
-        tree: panelTalk.tree,
+        tree: demoChat.tree,
+      },
+      {
+        label: '② 细线上的 [详情]：技术指标叠在细线下面，收起就回到对话',
+        hint: '默认折叠。展开后测量值在自己的滚动区里（心跳与上次心跳、有话想跟你说、回合数），它浮在消息流之上、不参与布局，所以 216px 的卡片不会因为展开而把消息挤没；收起后消息原位还在',
+        tall: true,
+        tree: demoDetails.tree,
       },
       {
         label: '② 一回合没成话：窗口把宿主的原因原话报出来',

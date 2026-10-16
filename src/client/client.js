@@ -97,7 +97,6 @@ window.__ModuleLoader__.load({
         sayEmpty: 'no conversation yet — say something to start one',
         sayFailed: 'the last turn did not finish: ',
         saySending: 'sending…',
-        petTypeBelow: 'type below to add to it',
         sayTail: 'only the latest messages are shown; the rest are still in the transcript',
         sayHostOld: 'the host has not loaded this half yet — restart DSH and this becomes the conversation',
         grantDockGranted: 'granted for this conversation',
@@ -125,10 +124,8 @@ window.__ModuleLoader__.load({
         tasksStuck: 'stuck',
         tasksWaiting: 'waiting on you',
         petActivity: 'Activity',
-        petConversation: 'Conversation',
         petSignals: 'signals',
         petNoSignals: 'no new signals',
-        petWatching: 'watching',
         petStateRunning: 'running',
         petStateWaiting: 'waiting for you',
         petStateQuiet: 'quiet',
@@ -215,7 +212,6 @@ window.__ModuleLoader__.load({
         sayEmpty: '还没有对话 —— 说一句就开始',
         sayFailed: '上一回合没能完成:',
         saySending: '发送中…',
-        petTypeBelow: '在下面输入框里接着说',
         sayTail: '只显示最近的消息，更早的都还在转录里',
         sayHostOld: '宿主还没加载会话这一半 —— 重启 DSH 后这里就是对话',
         noticesOwed: '你不在的时候：',
@@ -233,10 +229,8 @@ window.__ModuleLoader__.load({
         tasksStuck: '卡住',
         tasksWaiting: '等你',
         petActivity: '活动',
-        petConversation: '对话',
         petSignals: '个信号',
         petNoSignals: '没有新信号',
-        petWatching: '正在观察',
         petStateRunning: '运行中',
         petStateWaiting: '等待你',
         petStateQuiet: '安静',
@@ -1608,6 +1602,8 @@ window.__ModuleLoader__.load({
       var waiting = React.useState([])
       var waitingText = waiting[0]
       var setWaiting = waiting[1]
+      /** The transcript's own scroll box, so the newest line can be kept in view. */
+      var scrollRef = React.useRef(null)
 
       function load() {
         return act('conversation/read', { limit: 60 })
@@ -1688,9 +1684,14 @@ window.__ModuleLoader__.load({
           'div',
           {
             key: String(message.seq || index),
-            style: { margin: '6px 0', display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start' },
+            // Spacing sized for the card rather than for the page. Measured in a browser at 286×216
+            // (2026-10-16): a page-sized row costs ~65px once its speaker label and margins are paid,
+            // and the transcript box at that size is ~58px — so the label was on screen and the
+            // sentence under it was not. The row is 57px now, which is one whole message in view.
+            'data-dsh-role': 'pet-message',
+            style: { margin: '4px 0', display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start' },
           },
-          React.createElement('div', { style: { marginBottom: 3, padding: '0 4px', fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', color: mine ? 'var(--dsw-alias-label-secondary)' : 'var(--dsw-alias-state-success-primary)', textTransform: 'uppercase' } }, mine ? t('sayYou') : t('sayDen')),
+          React.createElement('div', { style: { marginBottom: 2, padding: '0 4px', fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', color: mine ? 'var(--dsw-alias-label-secondary)' : 'var(--dsw-alias-state-success-primary)', textTransform: 'uppercase' } }, mine ? t('sayYou') : t('sayDen')),
           React.createElement(
             'div',
             {
@@ -1701,7 +1702,7 @@ window.__ModuleLoader__.load({
                 whiteSpace: 'pre-wrap',
                 wordBreak: 'break-word',
                 maxWidth: '92%',
-                padding: '8px 10px',
+                padding: '6px 9px',
                 borderRadius: mine ? '12px 12px 4px 12px' : '12px 12px 12px 4px',
                 background: mine ? 'var(--dsw-alias-bg-layer-3)' : 'var(--dsw-alias-bg-layer-2)',
                 border: '1px solid var(--dsw-alias-border-l2)',
@@ -1715,12 +1716,26 @@ window.__ModuleLoader__.load({
       var waitingRows = waitingTexts.map(function (item, index) {
         return React.createElement(
           'div',
-          { key: 'waiting-' + index, style: { margin: '6px 0', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', opacity: 0.72 } },
-          React.createElement('div', { style: { marginBottom: 3, padding: '0 4px', fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--dsw-alias-label-secondary)', textTransform: 'uppercase' } }, t('sayYou') + ' · ' + t('saySending')),
-          React.createElement('div', { style: { fontSize: 13, lineHeight: 1.5, color: 'var(--dsw-alias-label-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxWidth: '92%', padding: '8px 10px', borderRadius: '12px 12px 4px 12px', background: 'var(--dsw-alias-bg-layer-3)', border: '1px solid var(--dsw-alias-border-l2)' } }, item && item.text),
+          { key: 'waiting-' + index, 'data-dsh-role': 'pet-message', style: { margin: '4px 0', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', opacity: 0.72 } },
+          React.createElement('div', { style: { marginBottom: 2, padding: '0 4px', fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--dsw-alias-label-secondary)', textTransform: 'uppercase' } }, t('sayYou') + ' · ' + t('saySending')),
+          React.createElement('div', { style: { fontSize: 13, lineHeight: 1.5, color: 'var(--dsw-alias-label-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxWidth: '92%', padding: '6px 9px', borderRadius: '12px 12px 4px 12px', background: 'var(--dsw-alias-bg-layer-3)', border: '1px solid var(--dsw-alias-border-l2)' } }, item && item.text),
         )
       })
       var allRows = rows.concat(waitingRows)
+
+      /**
+       * Keep the newest line in view.
+       *
+       * The box is short at the size the window ships with — about 58px once the bar, the rail and the
+       * composer have taken theirs — so a transcript parked at `scrollTop: 0` shows the oldest line of
+       * the tail and hides the sentence the person just sent. That sentence is the one thing a window
+       * that carries words has to show, so the box follows the log instead of the reader. The ref is
+       * null under the harness, which has no layout to scroll: the guard is on the node being real.
+       */
+      React.useEffect(function () {
+        var node = scrollRef.current
+        if (node && typeof node.scrollHeight === 'number') node.scrollTop = node.scrollHeight
+      })
 
       return React.createElement(
         'div',
@@ -1734,36 +1749,53 @@ window.__ModuleLoader__.load({
         // session, a persisted session and a log on disk, and they are not the same thing: a window
         // that silently fell back to the log was read as "den lost the conversation" (measured
         // 2026-10-15), so the path is stated rather than inferred by the reader.
-        data.readFrom
-          ? React.createElement(
-              'div',
-              { 'data-dsh-role': 'read-from', style: { fontSize: 10, color: 'var(--dsw-alias-label-tertiary)', margin: '2px 0' } },
-              t(
-                data.readFrom === 'store'
-                  ? 'petReadFromStore'
-                  : data.readFrom === 'log'
-                    ? 'petReadFromLog'
-                    : 'petReadFromNone',
-              ),
-            )
-          : null,
-        data.total
-          ? React.createElement(
-              'div',
-              { style: { fontSize: 10, color: 'var(--dsw-alias-label-tertiary)', margin: '2px 0' } },
-              String(messages.length) + '/' + String(data.total),
-            )
-          : null,
-        data.truncated
-          ? React.createElement(
-              'div',
-              { style: { fontSize: 10, color: 'var(--dsw-alias-label-tertiary)', margin: '2px 0' } },
-              t('petMoreOnDisk'),
-            )
-          : null,
+        // Where the transcript came from, how much of it is here, and whether it is a tail — three
+        // facts that used to cost three lines and now share one. In a 216px card the transcript is the
+        // body and these are footnotes: at three lines they were most of the visible height, which put
+        // the messages themselves out of the card entirely. Each keeps its own node, so nothing that
+        // read one of them had to learn a new shape.
         React.createElement(
           'div',
-          { style: { flex: '1 1 auto', minHeight: 56, maxHeight: 260, overflowY: 'auto', padding: '4px 2px', borderRadius: 10 } },
+          {
+            'data-dsh-role': 'pet-meta',
+            title: [
+              data.readFrom
+                ? t(data.readFrom === 'store' ? 'petReadFromStore' : data.readFrom === 'log' ? 'petReadFromLog' : 'petReadFromNone')
+                : '',
+              data.total ? String(messages.length) + '/' + String(data.total) : '',
+              data.truncated ? t('petMoreOnDisk') : '',
+            ].filter(Boolean).join(' · '),
+            style: { flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', fontSize: 9, color: 'var(--dsw-alias-label-tertiary)' },
+          },
+          data.readFrom
+            ? React.createElement(
+                'span',
+                { 'data-dsh-role': 'read-from', style: { flex: '0 0 auto' } },
+                t(
+                  data.readFrom === 'store'
+                    ? 'petReadFromStore'
+                    : data.readFrom === 'log'
+                      ? 'petReadFromLog'
+                      : 'petReadFromNone',
+                ),
+              )
+            : null,
+          data.total
+            ? React.createElement('span', { style: { flex: '0 0 auto' } }, String(messages.length) + '/' + String(data.total))
+            : null,
+          data.truncated
+            ? React.createElement(
+                'span',
+                { style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } },
+                t('petMoreOnDisk'),
+              )
+            : null,
+        ),
+        React.createElement(
+          'div',
+          // The bound is what makes this "scrollable" in a card this small; the floor is low on
+          // purpose, so the box gives height to the messages instead of pushing them out of the card.
+          { ref: scrollRef, style: { flex: '1 1 auto', minHeight: 36, maxHeight: 260, overflowY: 'auto', padding: '4px 2px', borderRadius: 10 } },
           allRows.length
             ? allRows
             : React.createElement('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', margin: '6px 0' } }, t('sayEmpty')),
@@ -1780,13 +1812,9 @@ window.__ModuleLoader__.load({
         view.phase === 'error' && view.error
           ? React.createElement('div', { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)', margin: '2px 0' } }, view.error)
           : null,
-        // No box of its own: the window's one box is directly below this view, and a second input
-        // inside a 286px card is two places to type and one place to be confused by.
-        React.createElement(
-          'div',
-          { style: { flex: '0 0 auto', marginTop: 4, fontSize: 10, color: 'var(--dsw-alias-label-tertiary)' } },
-          t('petTypeBelow'),
-        ),
+        // No box of its own, and no line telling the reader there is a box below: the window's one
+        // input sits directly under this view with its own placeholder, and a hint that points at
+        // something already on screen is a line a 216px card cannot spare.
       )
     }
 
@@ -1850,127 +1878,176 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * The small information layer that makes the floating den feel like a resident companion.
+     * The thin line of activity the window always shows, and the measurements folded under it.
      *
-     * It deliberately stays separate from the transcript: activity is a glanceable status rail,
-     * while the conversation tab is the place where a person reads what was said and says more.
-     * Neither tab carries a control that would act on the person's behalf — the window reads den's
-     * state and carries words, and every verb that changes anything stays on den's own page.
+     * The window used to put activity and conversation behind two tabs, and the cost was measured in
+     * a screenshot of the real thing (2026-10-16, the user): "好了已经 活动/对话 都放在一起 这样还得
+     * 切换才能看到对话内容多麻烦". The thing a person opens this window for is what was said, and it
+     * was one press away and invisible until they picked the right word. So the activity lost its own
+     * screen rather than its place: the state light, its three-state word and one plain sentence stay
+     * pinned under the title bar, and the numbers a person only sometimes wants are folded into
+     * `详情` — the same fold den's own page already uses.
+     *
+     * Neither the rail nor the fold carries a control that would act on the person's behalf: the
+     * window reads den's state and carries words, and every verb that changes anything stays on den's
+     * own page.
      */
-    function DenMiniInsights(props) {
+    function DenActivityRail(props) {
       var t = props.t
-      var d = props.status || {}
-      var kernel = d.kernel || {}
-      var notices = d.notices || {}
-      var tasks = d.tasks || {}
-      var mode = petModeOf(d)
+      var status = props.status || {}
+      var kernel = status.kernel || {}
+      var notices = status.notices || {}
+      var tasks = status.tasks || {}
+      var mode = props.mode
       var tone = mode === 'waiting' ? 'warn' : mode === 'quiet' ? 'error' : 'success'
       var pending = Number(notices.pending && notices.pending.length) || 0
-      var signalCount = pending + (Number(tasks.active) || 0)
-      var busy = Boolean(d.kernelDeferred) || (Number(tasks.active) || 0) > 0
-      var activity = [
-        {
-          label: d.kernelDeferred ? t('kernelWaiting') : kernel.running ? t('residentOn') : t('residentOff'),
-          detail: kernel.lastTickAt ? t('lastTick') + ' ' + fmtTime(kernel.lastTickAt, t) : t('residentDeferred'),
-        },
-      ]
-      if (signalCount > 0) {
-        activity.push({ label: t('owedShort') + ' ' + String(pending), detail: t('petSignals') + ' · ' + String(signalCount) })
-      } else {
-        activity.push({ label: t('petNoSignals'), detail: t('petActivity') })
-      }
-      if (Number(tasks.blocked) > 0 || Number(tasks.waiting) > 0) {
-        activity.push({
-          label: t('tasksShort') + ' ' + String(Number(tasks.active) || 0),
-          detail: (Number(tasks.blocked) > 0 ? t('tasksStuck') + ' ' + String(tasks.blocked) : '') +
-            (Number(tasks.waiting) > 0 ? (Number(tasks.blocked) > 0 ? ' · ' : '') + t('tasksWaiting') + ' ' + String(tasks.waiting) : ''),
-        })
-      }
+      var active = Number(tasks.active) || 0
+      var blocked = Number(tasks.blocked) || 0
+      var waiting = Number(tasks.waiting) || 0
+      var signalCount = pending + active
+      /** Folded by default: a healthy den says everything it has to say in the one line above. */
+      var folded = React.useState(false)
+      var detailsOpen = folded[0]
+      var setDetailsOpen = folded[1]
 
       /**
-       * The activity rail's own scroll area.
+       * The one sentence, at most two clauses long.
        *
-       * The tab strip is drawn by the window above this view, not here: the tabs are chrome of the
-       * window, and a view that drew its own would draw a second one every time it was reused.
+       * What is owed and what is parked on the person are the two things a glance at a 286px window
+       * can be acted on. The heartbeat's own verdict is already carried by the light and the word
+       * beside this text, and its timestamp is a number nobody reads at a glance — that one is one
+       * press away, under `详情`, with the rest of the measurements.
        */
-      var content = React.createElement(
-        'div',
+      var clauses = [signalCount > 0 ? String(signalCount) + ' ' + t('petSignals') : t('petNoSignals')]
+      if (waiting > 0) clauses.push(t('tasksWaiting') + ' ' + String(waiting))
+      else if (blocked > 0) clauses.push(t('tasksStuck') + ' ' + String(blocked))
+      else if (active > 0) clauses.push(t('tasksShort') + ' ' + String(active))
+      var sentence = clauses.join(' · ')
+
+      /** The measurements, in the order the page states them: heartbeat, what is owed, the to-do list. */
+      var rows = [
         {
-          'data-dsh-role': 'pet-content',
-          style: {
-            flex: '1 1 auto',
-            minHeight: 0,
-            overflowY: 'auto',
-            padding: '6px 12px 8px',
-            background: 'var(--dsw-alias-bg-layer-1)',
-          },
+          label: status.kernelDeferred ? t('kernelWaiting') : kernel.running ? t('residentOn') : t('residentOff'),
+          detail: kernel.lastTickAt ? t('lastTick') + ' ' + fmtTime(kernel.lastTickAt, t) : t('residentDeferred'),
         },
-        activity.map(function (item, index) {
-          return React.createElement(
-            'div',
-            {
-              key: 'pet-activity-' + index,
-              style: {
-                display: 'grid',
-                gridTemplateColumns: '10px minmax(0, 1fr) auto',
-                gap: 8,
-                alignItems: 'start',
-                padding: '5px 0',
-              },
-            },
-            React.createElement('span', {
-              'aria-hidden': true,
-              style: {
-                width: 7,
-                height: 7,
-                marginTop: 4,
-                borderRadius: 999,
-                border: '2px solid ' + (index === 0 ? TONE_TOKEN[tone] : 'var(--dsw-alias-border-l2)'),
-                background: 'var(--dsw-alias-bg-layer-2)',
-              },
-            }),
-            React.createElement(
-              'span',
-              { style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 10, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' } },
-              item.label,
-            ),
-            React.createElement(
-              'span',
-              { style: { maxWidth: '45%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 9, color: 'var(--dsw-alias-label-tertiary)' } },
-              item.detail,
-            ),
-          )
-        }),
-      )
+        {
+          label: t('owedShort') + ' ' + String(pending),
+          // Count before noun, the way the sentence above spells it: the folded rows are read by a human
+          // too, and `个信号 · 2` was what this said until the preview page was looked at (2026-10-16).
+          detail: String(signalCount) + ' ' + t('petSignals'),
+        },
+      ]
+      if (blocked > 0 || waiting > 0) {
+        rows.push({
+          label: t('tasksShort') + ' ' + String(active),
+          detail: (blocked > 0 ? t('tasksStuck') + ' ' + String(blocked) : '') +
+            (waiting > 0 ? (blocked > 0 ? ' · ' : '') + t('tasksWaiting') + ' ' + String(waiting) : ''),
+        })
+      }
+      // A host half that has not been reloaded sends no budget at all, and that absence is the version
+      // signal worth naming: it is the same reason the box below cannot hold a conversation.
+      rows.push({
+        label: t('budgetShort'),
+        detail: Number.isFinite(Number(status.dailyTurnBudget))
+          ? Number(status.dailyTurnBudget) > 0
+            ? String(Number(status.ledger && status.ledger.turns) || 0) + '/' + String(status.dailyTurnBudget)
+            : t('budgetOff')
+          : t('hostOlder'),
+      })
 
       return React.createElement(
         'div',
         {
-          'data-dsh-role': 'pet-activity',
-          style: {
-            flex: '1 1 auto',
-            minHeight: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            background: 'var(--dsw-alias-bg-layer-1)',
-          },
+          'data-dsh-role': 'pet-rail',
+          'aria-label': t('petActivity'),
+          // `position: relative` so the fold below can hang from this line: it is drawn *over* the
+          // transcript rather than given a row of its own. Measured in a browser at the shipped
+          // 286×216 (2026-10-16): as a flex row the four measurements took 113px, which left the
+          // transcript box 0px tall — the messages left the card the moment the fold was opened, and
+          // an assertion that only read `display: flex` would have called that "on screen".
+          style: { position: 'relative', flex: '0 0 auto', background: 'var(--dsw-alias-bg-layer-1)', borderBottom: '1px solid var(--dsw-alias-border-l2)' },
         },
         React.createElement(
           'div',
           {
             'data-dsh-role': 'pet-summary',
-            style: { flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', borderBottom: '1px solid var(--dsw-alias-border-l2)' },
+            // The whole sentence, for the case the 286px line has to ellipsize it.
+            title: petModeLabel(mode, t) + ' · ' + sentence,
+            style: { display: 'flex', alignItems: 'center', gap: 7, minHeight: 26, padding: '4px 10px' },
           },
-          React.createElement('span', { style: { fontSize: 10, color: 'var(--dsw-alias-label-secondary)' } }, t('petWatching')),
+          React.createElement(StatusDot, { mode: mode }),
           React.createElement(
             'span',
-            { style: { fontSize: 10, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' } },
-            signalCount > 0 && busy ? t('petSignals') + ' ' + String(signalCount) : t('petNoSignals'),
+            { style: { flex: '0 0 auto', fontSize: 10, fontWeight: 650, color: 'var(--dsw-alias-label-primary)' } },
+            petModeLabel(mode, t),
           ),
-          React.createElement('span', { style: { flex: 1 } }),
-          React.createElement(StatusBadge, { tone: tone, label: petModeLabel(mode, t) }),
+          React.createElement(
+            'span',
+            { style: { flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 10, color: 'var(--dsw-alias-label-tertiary)' } },
+            sentence,
+          ),
+          React.createElement(
+            'button',
+            {
+              type: 'button',
+              'data-dsh-role': 'pet-details-toggle',
+              'aria-label': t('details'),
+              'aria-expanded': detailsOpen,
+              title: t('details'),
+              onClick: function () { setDetailsOpen(!detailsOpen) },
+              style: {
+                flex: '0 0 auto',
+                padding: '2px 6px',
+                border: '1px solid var(--dsw-alias-border-l2)',
+                borderRadius: 999,
+                background: 'transparent',
+                color: 'var(--dsw-alias-label-tertiary)',
+                cursor: 'pointer',
+                font: 'inherit',
+                fontSize: 9,
+              },
+            },
+            detailsOpen ? t('scheduleClose') : t('details'),
+          ),
         ),
-        content,
+        detailsOpen
+          ? React.createElement(
+              'div',
+              {
+                'data-dsh-role': 'pet-details',
+                // Hung from the rail (`top: '100%'`) and bounded: an unfolded measurement sheet covers
+                // the transcript for as long as it is open instead of taking height from it. The bound
+                // is 68px — the four rows — so the sheet stops above the composer rather than over it.
+                style: {
+                  position: 'absolute',
+                  top: '100%',
+                  left: 0,
+                  right: 0,
+                  zIndex: 20,
+                  maxHeight: 68,
+                  overflowY: 'auto',
+                  padding: '4px 10px 6px',
+                  background: 'var(--dsw-alias-bg-layer-2)',
+                  border: '1px solid var(--dsw-alias-border-l2)',
+                  borderTop: 0,
+                  borderRadius: '0 0 12px 12px',
+                  boxShadow: '0 10px 20px rgba(0,0,0,.22)',
+                },
+              },
+              rows.map(function (row, index) {
+                return React.createElement(
+                  'div',
+                  {
+                    key: 'pet-detail-' + index,
+                    style: { display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0' },
+                  },
+                  React.createElement('span', { style: { flex: '0 0 auto', width: 7, height: 7, borderRadius: 999, border: '2px solid ' + (index === 0 ? TONE_TOKEN[tone] : 'var(--dsw-alias-border-l2)') } }),
+                  React.createElement('span', { style: { minWidth: 0, flex: '1 1 auto', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 10, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' } }, row.label),
+                  React.createElement('span', { style: { maxWidth: '48%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 9, color: 'var(--dsw-alias-label-tertiary)' } }, row.detail),
+                )
+              }),
+            )
+          : null,
       )
     }
 
@@ -1990,7 +2067,8 @@ window.__ModuleLoader__.load({
      */
 
     /**
-     * The one line of chrome under the tabs: a box to say something, and three things to say quickly.
+     * The window's one line of chrome at the foot: a box to say something, and three things to say
+     * quickly.
      *
      * The shortcuts fill the box and put the cursor in it. They deliberately do not send: a shortcut
      * that fired a turn on click would be the window acting for the person, and the shorter path here
@@ -2152,37 +2230,6 @@ window.__ModuleLoader__.load({
             var isDragging = dragState[0]
             var setDragging = dragState[1]
 
-            /** One tab of the window's own strip: a word, underlined while it is the open view. */
-            function petTabButton(key, label) {
-              var active = miniTab === key
-              return React.createElement(
-                'button',
-                {
-                  key: key,
-                  type: 'button',
-                  'data-dsh-role': 'pet-tab',
-                  'data-tab': key,
-                  'aria-pressed': active,
-                  onClick: function () { setMiniTab(key) },
-                  style: {
-                    position: 'relative',
-                    minHeight: 24,
-                    padding: '6px 0 6px',
-                    border: 0,
-                    borderRadius: 0,
-                    background: 'transparent',
-                    boxShadow: active ? 'inset 0 -2px 0 0 var(--dsw-alias-state-success-primary)' : 'none',
-                    color: active ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-tertiary)',
-                    cursor: 'pointer',
-                    font: 'inherit',
-                    fontSize: 11,
-                    fontWeight: active ? 600 : 400,
-                  },
-                },
-                label,
-              )
-            }
-
             function clampPlace(x, y, width, height) {
               var wide = typeof window !== 'undefined' && window.innerWidth ? window.innerWidth : 1200
               var tall = typeof window !== 'undefined' && window.innerHeight ? window.innerHeight : 800
@@ -2310,19 +2357,13 @@ window.__ModuleLoader__.load({
               window.__probe = (window.__probe || [])
               window.__probe.push('render status=' + (status ? 'S' : 'null'))
             }
-            var miniTabState = React.useState('activity')
-            var miniTab = miniTabState[0]
-            var setMiniTab = miniTabState[1]
-            /** Once the conversation has been opened, it stays mounted so re-opening it is not a re-read. */
-            var chatEverMounted = React.useRef(false)
-            if (miniTab === 'chat') chatEverMounted.current = true
             /**
              * What is typed in the window's one box, and where the cursor goes.
              *
              * The draft lives here rather than inside the transcript so a shortcut can fill it without
              * sending anything: the composer writes the sentence, the person presses send. It is also
-             * why the box's own visibility is decided here rather than by whether the chat tab is open:
-             * looking at the activity view must not take the way to speak off screen.
+             * why the box is drawn by the window rather than by the transcript: there is exactly one
+             * place to type in a 286px card, whatever is above it.
              */
             var draftState = React.useState('')
             var typed = draftState[0]
@@ -2405,11 +2446,13 @@ window.__ModuleLoader__.load({
               /*
                * The pet, as drawn.
                *
-               * One window, one status light, two views and one box to speak into. The title bar is
-               * the grab area and carries den's mark, the state and the collapse control; the tabs are
-               * words with a rule under the active one; the box at the bottom fills and sends, and the
-               * three shortcuts beside it only fill — nothing in this window acts on the person's
-               * behalf, which is why there is no allow/deny control anywhere in it.
+               * One window, one body: the title bar is the grab area and carries den's mark and the
+               * collapse control, one thin rail under it carries the state light and a sentence of
+               * activity, the transcript fills everything between, and the box at the foot fills and
+               * sends. There is no tab strip, because there is nothing left to switch between — the
+               * conversation is the body and the activity is the line above it, both on screen at
+               * once. Nothing in this window acts on the person's behalf, which is why there is no
+               * allow/deny control anywhere in it.
                */
               var header = React.createElement(
                 'header',
@@ -2462,12 +2505,9 @@ window.__ModuleLoader__.load({
                   React.createElement('strong', { style: { fontSize: 12, fontWeight: 650, lineHeight: 1.2, color: 'var(--dsw-alias-label-primary)' } }, t('nav')),
                   React.createElement('span', { style: { marginTop: 1, fontSize: 10, lineHeight: 1.2, color: 'var(--dsw-alias-label-tertiary)' } }, t('floatingLabel')),
                 ),
-                React.createElement(
-                  'span',
-                  { 'data-dsh-role': 'pet-status', style: { flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: 'var(--dsw-alias-label-secondary)' } },
-                  React.createElement(StatusDot, { mode: petMode }),
-                  React.createElement('span', null, petModeText),
-                ),
+                // No second status light here. The rail directly below carries the dot and the same
+                // three-state word, and two lights for one verdict in a 286px window is a wasted row
+                // that reads as two different answers the moment they are a render apart.
                 React.createElement(
                   'button',
                   {
@@ -2503,41 +2543,31 @@ window.__ModuleLoader__.load({
                 ),
               )
 
-              var isActivity = miniTab === 'activity'
-              // `.current`, not the ref object itself: a ref object is always truthy, so reading the
-              // object made this condition permanently true and the transcript fetched on every open,
-              // while the activity view was the one on screen. The flag is what makes the tab the
-              // trigger — the first time it is opened — and keeps the transcript mounted after that.
-              var chatMounted = miniTab === 'chat' || chatEverMounted.current
-              var activityView = React.createElement(
+              // The transcript is the window's body, not a view behind a tab, so it is mounted with
+              // the window: that mount is what asks the host for the transcript, and it is why opening
+              // the window is enough to read what was said. Nothing gates it, and nothing hides it —
+              // a body that was `display: none` until a tab was pressed is exactly the press the user
+              // named as the cost.
+              var chatView = React.createElement(
                 'div',
-                { style: { flex: '1 1 auto', minHeight: 0, display: isActivity ? 'flex' : 'none', flexDirection: 'column' } },
-                React.createElement(DenMiniInsights, { t: t, status: status }),
+                {
+                  'data-dsh-role': 'pet-chat',
+                  style: { flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' },
+                },
+                React.createElement(DenConversation, {
+                  t: t,
+                  act: act,
+                  sent: sent,
+                  // The transcript knows whether this host can hold a conversation at all; the box
+                  // below is disabled on that verdict rather than on a guess made up here.
+                  onPhase: function (phase) {
+                    setSend(function (previous) {
+                      if (previous.phase === phase) return previous
+                      return { busy: previous.busy, phase: phase }
+                    })
+                  },
+                }),
               )
-              var chatView = chatMounted
-                ? React.createElement(
-                    'div',
-                    {
-                      'data-dsh-role': 'pet-chat',
-                      style: { flex: '1 1 auto', minHeight: 0, display: isActivity ? 'none' : 'flex', flexDirection: 'column' },
-                    },
-                    // Mounted when the tab is opened, which is what asks the host for the transcript,
-                    // and kept mounted after that so switching back and forth is not a re-read.
-                    React.createElement(DenConversation, {
-                      t: t,
-                      act: act,
-                      sent: sent,
-                      // The transcript knows whether this host can hold a conversation at all; the box
-                      // below is disabled on that verdict rather than on a guess made up here.
-                      onPhase: function (phase) {
-                        setSend(function (previous) {
-                          if (previous.phase === phase) return previous
-                          return { busy: previous.busy, phase: phase }
-                        })
-                      },
-                    }),
-                  )
-                : null
 
               return React.createElement(
                 'div',
@@ -2575,23 +2605,14 @@ window.__ModuleLoader__.load({
                   ),
                 },
                 header,
-                // The tab strip is chrome of its own, one row under the bar: the tabs are words and
-                // the active one is marked by a rule, so they read as views of one window rather than
-                // as three buttons that each open something.
-                React.createElement(
-                  'nav',
-                  {
-                    'data-dsh-role': 'pet-tabs',
-                    role: 'tablist',
-                    style: { flex: '0 0 auto', display: 'flex', gap: 14, padding: '0 12px', borderBottom: '1px solid var(--dsw-alias-border-l2)', background: 'var(--dsw-alias-bg-layer-1)' },
-                  },
-                  petTabButton('activity', t('petActivity')),
-                  petTabButton('chat', t('petConversation')),
-                ),
+                // One thin rail, always drawn, between the bar and the body: the state light, the same
+                // verdict in words, and a sentence of activity — with the measurements folded under
+                // it. It replaced a two-word tab strip, and it is *not* a view: the transcript below it
+                // is on screen at the same time, which was the whole point of the change.
+                React.createElement(DenActivityRail, { t: t, status: status, mode: petMode }),
                 React.createElement(
                   'div',
                   { 'data-dsh-role': 'pet-content', style: { flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' } },
-                  activityView,
                   chatView,
                 ),
                 React.createElement(DenComposer, {
