@@ -1,5 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createTask, pickTaskWork } from '../src/tasks.js'
 
 const NOW = 1_800_000_000_000
@@ -46,4 +49,21 @@ test('a task whose own conversation is gone reports into the standing one instea
   assert.equal(pickTaskWork([t], NOW).kind, 'blocked')
   assert.equal(pickTaskWork([t], NOW, { fallbackSessionId: '   ' }).kind, 'blocked')
   assert.match(pickTaskWork([t], NOW).reason, /conversation/)
+})
+
+test('the standing conversation is read from the pointer beside the task file, and any failure means empty', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-den-tasks-'))
+  try {
+    const pointer = join(dir, 'conversation.json')
+    const tasksPath = join(dir, 'tasks.json')
+    const t = task({ sessionId: '', steps: [{ title: '跑测试', mode: 'auto' }] })
+    writeFileSync(pointer, JSON.stringify({ sessionId: 'session-standing' }))
+    assert.equal(pickTaskWork([t], NOW, { tasksPath }).task.sessionId, 'session-standing')
+    // A half-written pointer and a missing one are both "no conversation", never a crash.
+    writeFileSync(pointer, '{ half')
+    assert.equal(pickTaskWork([t], NOW, { tasksPath }).kind, 'blocked')
+    assert.equal(pickTaskWork([t], NOW, { tasksPath: join(dir, 'nope', 'tasks.json') }).kind, 'blocked')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

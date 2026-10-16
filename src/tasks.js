@@ -210,7 +210,14 @@ export function pickTaskWork(tasks = [], now = Date.now(), options = {}) {
  * The standing conversation den reports into, read from the pointer file that sits beside the task
  * file. Non-throwing on purpose: a missing or half-written pointer must not take the heartbeat down
  * with it, and "no conversation recorded" has to stay a reportable state rather than a crash.
+ *
+ * The import sits here rather than at the top because this module had none at all — and that is
+ * exactly how the first version of this helper shipped broken: `readFileSync` was undefined, the
+ * `catch` below swallowed the ReferenceError, and the fallback silently stayed empty while its unit
+ * test passed (that test passed `fallbackSessionId` in by hand, so the file path was never covered).
  */
+import { readFileSync } from 'node:fs'
+
 function standingSessionIdFor(tasksPath) {
   if (!tasksPath) return ''
   try {
