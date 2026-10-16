@@ -1045,9 +1045,9 @@ check(scrollArea.length === 1, 'the transcript has exactly one scrolling area of
 check(Number(scrollArea[0]?.props?.style?.maxHeight) > 0, 'and that area is bounded, so the window cannot grow with the transcript')
 /* --- the window places and paints itself, because the layer gives it neither --- */
 
-const cardNodes = findAll(panelTalk.tree, (n) => n.props?.style?.position === 'absolute' && n.props?.style?.width === 300)
+const cardNodes = findAll(panelTalk.tree, (n) => n.props?.style?.position === 'absolute' && n.props?.style?.width === 260)
 check(cardNodes.length === 1, 'the open window places and sizes itself instead of becoming a strip across the top')
-check(cardNodes[0]?.props?.style?.right === 24 && cardNodes[0]?.props?.style?.top === 56 && cardNodes[0]?.props?.style?.bottom === 'auto', 'and starts below the page header instead of colliding with it')
+check(cardNodes[0]?.props?.style?.right === 24 && cardNodes[0]?.props?.style?.top === 72 && cardNodes[0]?.props?.style?.bottom === 'auto', 'and starts below the page header instead of colliding with it')
 check(String(cardNodes[0]?.props?.style?.background || '').includes('--dsw-alias-bg-overlay'), 'and paints a surface rather than reading as page furniture')
 
 /* --- the collapse control actually collapses, through a real press ---------- */
@@ -1065,21 +1065,21 @@ check(collapseStopped === 1, 'so pressing it is not read as the start of a drag'
 collapseButton?.props?.onClick()
 await panelTalk.settle()
 check(
-  findAll(panelTalk.tree, (n) => n.props?.style?.width === 300).length === 0,
+  findAll(panelTalk.tree, (n) => n.props?.style?.width === 260).length === 0,
   'and pressing it puts the window away instead of doing nothing',
 )
 const reopened = findAll(panelTalk.tree, (n) => n.props?.['aria-label']?.includes('打开 den 面板'))[0]
 check(Boolean(reopened), 'leaving the shut pill in its place')
 reopened?.props?.onClick()
 await panelTalk.settle()
-check(findAll(panelTalk.tree, (n) => n.props?.style?.width === 300).length === 1, 'and the pill brings the window back')
+check(findAll(panelTalk.tree, (n) => n.props?.style?.width === 260).length === 1, 'and the pill brings the window back')
 check(cardNodes[0]?.props?.style?.zIndex === 60, 'and sits above the page it floats over')
-check(cardNodes[0]?.props?.style?.height === 210, 'and starts with a smaller desktop-pet footprint')
+check(cardNodes[0]?.props?.style?.height === 180, 'and starts with a smaller desktop-pet footprint')
 check(cardNodes[0]?.props?.style?.resize === 'both', 'and exposes a native two-axis resize affordance')
-check(cardNodes[0]?.props?.style?.minWidth === 220 && cardNodes[0]?.props?.style?.minHeight === 160, 'and keeps the pet usable at its smallest size')
+check(cardNodes[0]?.props?.style?.minWidth === 200 && cardNodes[0]?.props?.style?.minHeight === 140, 'and keeps the pet usable at its smallest size')
 check(cardNodes[0]?.props?.['aria-label'] === '常驻会话', 'and gives the floating pet an accessible identity')
 
-fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false, width: 280, height: 190, sizeVersion: 2 }))
+fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false, width: 280, height: 190, sizeVersion: 3 }))
 const rememberedSizeWindow = mount(bootWindow({ scripted: { status: healthyStatus() } }).component, {})
 const rememberedSizeCard = findAll(rememberedSizeWindow.tree, (node) => node.props?.style?.position === 'absolute' && node.props?.style?.resize === 'both')[0]
 check(rememberedSizeCard?.props?.style?.width === 280 && rememberedSizeCard?.props?.style?.height === 190, 'and reopens at the dimensions the person chose')
@@ -1124,7 +1124,7 @@ const panelPillNoBudgetLabel = String(panelPillNoBudgetButton?.props?.['aria-lab
 check(panelPillNoBudgetLabel.includes('宿主待重启'), 'a host that sends no budget is named as older, not left unexplained')
 check(!panelPillNoBudgetLabel.includes('自治已关'), 'a host that reports no budget is not described as proactivity being off')
 check(!panelPillNoBudgetLabel.includes('回合'), 'and no budget number is invented for it')
-const pillPlaced = findAll(panelPillNoBudget.tree, (n) => n.props?.style?.position === 'absolute' && n.props?.style?.top === 56)
+const pillPlaced = findAll(panelPillNoBudget.tree, (n) => n.props?.style?.position === 'absolute' && n.props?.style?.top === 72)
 check(pillPlaced.length >= 1, 'and the shut pill places itself too, rather than sitting in the page flow')
 
 /* --- the floating window can be moved, and remembers where ----------------- */
@@ -1157,6 +1157,34 @@ const placedTree = findAll(
   (node) => node.props?.style?.left === 520 && node.props?.style?.top === 260 && node.props?.style?.right === 'auto',
 )
 check(placedTree.length >= 1, 'and the remembered place is applied, rather than only stored')
+
+/* --- the shut pill can be moved without opening it ----------------------- */
+
+fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: true }))
+const dragPillWindow = mount(bootWindow({ scripted: { status: healthyStatus() } }).component, {})
+await dragPillWindow.settle()
+const dragPill = dragPillWindow.buttons().find((button) => button.props?.['aria-label']?.includes('打开 den 面板'))
+const pillTarget = {
+  getBoundingClientRect: () => ({ left: 100, top: 120, width: 36, height: 36 }),
+  setPointerCapture: () => {},
+}
+dragPill?.props?.onPointerDown({ currentTarget: pillTarget, pointerId: 8, clientX: 110, clientY: 130, stopPropagation: () => {} })
+dragPill?.props?.onPointerMove({ clientX: 210, clientY: 190, movementX: 100, movementY: 60, preventDefault: () => {} })
+dragPill?.props?.onPointerUp({})
+await dragPillWindow.settle()
+const keptPillPreference = JSON.parse(fakeStorage.getItem('dsh-den.mini') || '{}')
+check(keptPillPreference.x === 200 && keptPillPreference.y === 180, `the shut pill moves with the pointer (${keptPillPreference.x}, ${keptPillPreference.y})`)
+dragPill?.props?.onClick({ preventDefault: () => {} })
+await dragPillWindow.settle()
+check(findAll(dragPillWindow.tree, (node) => node.props?.style?.width === 36).length === 1, 'and a drag does not accidentally open the pill')
+
+fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: true }))
+const clickPillWindow = mount(bootWindow({ scripted: { status: healthyStatus() } }).component, {})
+await clickPillWindow.settle()
+const clickPill = clickPillWindow.buttons().find((button) => button.props?.['aria-label']?.includes('打开 den 面板'))
+clickPill?.props?.onClick({})
+await clickPillWindow.settle()
+check(findAll(clickPillWindow.tree, (node) => node.props?.style?.width === 260).length === 1, 'and a short click still opens the den window')
 
 /* --- a remembered place that no longer fits is pulled back into view -------- */
 

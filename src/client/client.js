@@ -120,6 +120,7 @@ window.__ModuleLoader__.load({
         openPanel: 'Open den panel',
         floatingLabel: 'standing chat',
         resizeHint: 'Drag the corner to resize',
+        dragHint: 'Hold the top bar to move',
         tasksShort: 'in progress',
         tasksStuck: 'stuck',
         tasksWaiting: 'waiting on you',
@@ -210,6 +211,7 @@ window.__ModuleLoader__.load({
         openPanel: '打开 den 面板',
         floatingLabel: '常驻会话',
         resizeHint: '拖动右下角调整大小',
+        dragHint: '按住顶部条拖动',
         tasksShort: '进行中',
         tasksStuck: '卡住',
         tasksWaiting: '等你',
@@ -485,13 +487,13 @@ window.__ModuleLoader__.load({
 
 /** How often the shut pill refreshes itself: slower than the open panel, never stopped. */
     var MINI_POLL_MS = 2000
-    var MINI_SIZE_VERSION = 2
-    var MINI_DEFAULT_WIDTH = 300
-    var MINI_DEFAULT_HEIGHT = 210
-    var MINI_MIN_WIDTH = 220
-    var MINI_MIN_HEIGHT = 160
-    var MINI_MARGIN = 16
-    var MINI_TOP_SAFE = 56
+    var MINI_SIZE_VERSION = 3
+    var MINI_DEFAULT_WIDTH = 260
+    var MINI_DEFAULT_HEIGHT = 180
+    var MINI_MIN_WIDTH = 200
+    var MINI_MIN_HEIGHT = 140
+    var MINI_MARGIN = 14
+    var MINI_TOP_SAFE = 72
 
     /**
      * Where the floating window remembers that it was shut.
@@ -1771,6 +1773,7 @@ window.__ModuleLoader__.load({
             var setSize = sizeState[1]
             var cardRef = React.useRef(null)
             var dragRef = React.useRef(null)
+            var suppressClickRef = React.useRef(false)
             var dragState = React.useState(false)
             var isDragging = dragState[0]
             var setDragging = dragState[1]
@@ -1793,12 +1796,13 @@ window.__ModuleLoader__.load({
               return { position: 'absolute', left: current.x, top: current.y, right: 'auto', bottom: 'auto', zIndex: 60 }
             }
 
-            function onDragStart(event) {
+            function onDragStart(event, mode) {
               if (!event || !event.currentTarget) return
+              mode = mode || 'window'
               // A control inside the bar must never begin a drag: the capture below retargets the pointer to
               // the bar, which is how a click on the collapse button came to do nothing at all.
               var startedOn = event.target
-              if (startedOn && typeof startedOn.closest === 'function' && startedOn.closest('button,a,input,textarea,select')) return
+              if (mode !== 'pill' && startedOn && typeof startedOn.closest === 'function' && startedOn.closest('button,a,input,textarea,select')) return
               var rect = typeof event.currentTarget.getBoundingClientRect === 'function'
                 ? event.currentTarget.getBoundingClientRect()
                 : { left: 0, top: MINI_TOP_SAFE, width: open ? size.width : 36, height: open ? size.height : 36 }
@@ -1815,9 +1819,14 @@ window.__ModuleLoader__.load({
                 lastPlace: origin,
                 width: rect.width,
                 height: rect.height,
+                mode: mode,
+                moved: false,
               }
+              suppressClickRef.current = false
               setDragging(true)
-              if (event.preventDefault) event.preventDefault()
+              // The open window should start moving immediately. The shut pill keeps the native
+              // click until the pointer has actually travelled, so a short press still opens it.
+              if (mode !== 'pill' && event.preventDefault) event.preventDefault()
               if (event.stopPropagation) event.stopPropagation()
               if (event.currentTarget.setPointerCapture && event.pointerId !== undefined) {
                 try { event.currentTarget.setPointerCapture(event.pointerId) } catch (e) { void e }
@@ -1836,6 +1845,13 @@ window.__ModuleLoader__.load({
               } else {
                 next = clampPlace(drag.lastPlace.x + (Number(event.movementX) || 0), drag.lastPlace.y + (Number(event.movementY) || 0), drag.width, drag.height)
               }
+              if (drag.mode === 'pill' && !drag.moved && drag.startX !== null && drag.startY !== null) {
+                drag.moved = Math.abs(pointerX - drag.startX) > 5 || Math.abs(pointerY - drag.startY) > 5
+                if (drag.moved) {
+                  suppressClickRef.current = true
+                  if (event.preventDefault) event.preventDefault()
+                }
+              }
               drag.lastPlace = next
               setPlace(next)
             }
@@ -1845,6 +1861,7 @@ window.__ModuleLoader__.load({
               if (!drag) return
               dragRef.current = null
               setDragging(false)
+              if (drag.mode === 'pill' && drag.moved) suppressClickRef.current = true
               if (drag.lastPlace) {
                 setPlace(drag.lastPlace)
                 setMiniPref('x', drag.lastPlace.x)
@@ -1927,8 +1944,10 @@ window.__ModuleLoader__.load({
                       background: 'var(--dsw-alias-bg-overlay)',
                       color: 'var(--dsw-alias-label-primary)',
                       border: '1px solid var(--dsw-alias-border-l1)',
-                      borderRadius: 14,
-                      boxShadow: '0 18px 44px rgba(0,0,0,.24), 0 2px 6px rgba(0,0,0,.10)',
+                      borderRadius: 12,
+                      boxShadow: isDragging ? '0 14px 30px rgba(0,0,0,.28), 0 3px 8px rgba(0,0,0,.12)' : '0 12px 28px rgba(0,0,0,.22), 0 2px 6px rgba(0,0,0,.10)',
+                      transform: isDragging ? 'scale(.985)' : 'none',
+                      transition: 'box-shadow 160ms ease, transform 160ms ease',
                     },
                     placedStyle(place),
                   ),
@@ -1939,6 +1958,7 @@ window.__ModuleLoader__.load({
                   'div',
                   {
                     'data-dsh-role': 'drag-handle',
+                    'aria-label': t('dragHint'),
                     onPointerDown: onDragStart,
                     onPointerMove: onDragMove,
                     onPointerUp: onDragEnd,
@@ -1962,6 +1982,7 @@ window.__ModuleLoader__.load({
                     React.createElement('span', { 'aria-hidden': true, style: { color: 'var(--dsw-alias-state-success-primary)', fontSize: 14 } }, '◈'),
                     React.createElement('span', { style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--dsw-alias-label-secondary)' } }, t('floatingLabel')),
                   ),
+                  React.createElement('span', { 'aria-hidden': true, title: t('dragHint'), style: { color: 'var(--dsw-alias-label-tertiary)', fontSize: 13, lineHeight: 1, letterSpacing: '-0.18em', opacity: 0.8, userSelect: 'none' } }, '⠿'),
                   React.createElement(
                     'button',
                     {
@@ -2034,7 +2055,19 @@ window.__ModuleLoader__.load({
               'button',
               {
                 type: 'button',
-                onClick: function () { setOpen(true); setMiniPref('collapsed', false) },
+                onPointerDown: function (event) { onDragStart(event, 'pill') },
+                onPointerMove: onDragMove,
+                onPointerUp: onDragEnd,
+                onPointerCancel: onDragEnd,
+                onClick: function (event) {
+                  if (suppressClickRef.current) {
+                    suppressClickRef.current = false
+                    if (event && event.preventDefault) event.preventDefault()
+                    return
+                  }
+                  setOpen(true)
+                  setMiniPref('collapsed', false)
+                },
                 'aria-label': statusLabel,
                 title: statusLabel,
                 style: {
@@ -2044,13 +2077,16 @@ window.__ModuleLoader__.load({
                   borderRadius: 999,
                   background: 'var(--dsw-alias-bg-layer-2)',
                   color: 'var(--dsw-alias-label-primary)',
-                  cursor: 'pointer',
+                  cursor: isDragging ? 'grabbing' : 'grab',
                   width: 36,
                   height: 36,
                   display: 'grid',
                   placeItems: 'center',
                   padding: 0,
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
+                  boxShadow: isDragging ? '0 8px 18px rgba(0,0,0,.24)' : '0 2px 8px rgba(0,0,0,0.12)',
+                  transform: isDragging ? 'scale(.94)' : 'none',
+                  transition: 'box-shadow 140ms ease, transform 140ms ease',
+                  touchAction: 'none',
                   WebkitAppRegion: 'no-drag',
                 },
               },
