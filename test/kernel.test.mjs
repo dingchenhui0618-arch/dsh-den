@@ -35,6 +35,8 @@ const {
   evaluateGates,
   inQuietHours,
   interpretWakeResult,
+  TASK_STEP_INSTRUCTION,
+  WAKE_INSTRUCTION,
   readLedger,
   recordSpoke,
 } = await import('../src/kernel.js')
@@ -351,6 +353,19 @@ test('a real message is spoken and bounded', () => {
   const short = interpretWakeResult('CI is red on main since 14:02.')
   assert.equal(short.speak, true)
   assert.match(short.message, /CI is red/)
+})
+
+test('the wake instruction carries the read-only limit and asks for no permission', () => {
+  // The user settled this boundary on 2026-10-16: den stands in for them with the same reach, but its own
+  // reach is read-only — so it must not ask for approval, because there is nothing for anyone to approve.
+  // The instruction is the only place the heartbeat's own turns learn that, so it is pinned, not left to drift.
+  // Both constants are already joined text, not arrays.
+  const text = WAKE_INSTRUCTION
+  assert.match(text, /read-only/)
+  assert.match(text, /do not ask them for permission/)
+  assert.doesNotMatch(text, /gated separately/, 'the old line told den to expect a gate that is switched off')
+  assert.match(text, /drafts, patches, plans/, 'what it may produce is the substitute for acting')
+  assert.match(TASK_STEP_INSTRUCTION, /read-only/, 'a task step is den acting too, so the limit applies there as well')
 })
 
 // ------------------------------------------------------------------ kernel

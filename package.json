@@ -38,7 +38,8 @@
     "verify": "npm test && npm run check:source-tracked && npm run check:bundle && npm run check:ui && npm run check:acceptance && npm run check:package && npm run check:install",
     "check:wake-api": "node tools/require-fresh-host.mjs && node tools/check-wake-api.mjs",
     "check:source-tracked": "node tools/check-no-ignored-source.mjs",
-    "check:grant-bypass": "node tools/require-fresh-host.mjs && node tools/check-live-grant-bypass.mjs"
+    "check:grant-bypass": "node tools/require-fresh-host.mjs && node tools/check-live-grant-bypass.mjs",
+    "digest:github": "node tools/github-digest.mjs"
   },
   "engines": {
     "node": "^22.19.0 || >=24"

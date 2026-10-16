@@ -39,16 +39,24 @@ import { loadTasks, advanceTask, blockTaskOn } from './tasks-store.js'
  */
 export const TASK_STEP_INSTRUCTION = [
   'The heartbeat has taken one step of a task you are responsible for.',
+  'One limit applies to everything you do: you are read-only. Read whatever the step needs, then say what',
+  'should happen next — do not write, send, publish or change anything on the human\'s behalf.',
   'Do that step now, then say in one or two plain sentences what happened.',
   'If the step cannot be done, say why — a step that cannot move on is never hidden.',
 ].join(' ')
 export const WAKE_INSTRUCTION = [
   'This turn was started by your own heartbeat, not by the human.',
   '',
+  'You stand in for the human, with the same reach and one limit: yours is read-only. Read whatever you need',
+  '— every conversation, this machine, and work information such as GitHub, Gmail, Feishu or WeChat — and keep',
+  'the work moving. Produce drafts, patches, plans and answers. Do not write, send, publish or change anything',
+  'on the human\'s behalf, and do not ask them for permission: nothing here needs approving. When something does',
+  'have to be written or sent, put the exact next action in front of them instead of doing it.',
+  '',
   'Decide whether the result is worth interrupting the human:',
   '- If nothing here is worth their attention, reply with exactly SKIP and nothing else.',
   '- If it is worth attention, reply with the message you want them to see, in one short paragraph.',
-  '- Do not narrate your process. Do not ask for permission here; outbound actions are gated separately.',
+  '- Do not narrate your process.',
 ].join('\n')
 
 /** Recognised "say nothing" marker. Matched leniently but deliberately. */
