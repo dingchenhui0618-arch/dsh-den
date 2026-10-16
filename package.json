@@ -1,7 +1,7 @@
 {
   "name": "dsh-den",
   "version": "0.1.0",
-  "description": "A 7x24 resident personal assistant for DeepSeek Harness: human-bound standing autonomy, self-wake across restarts, expiry-aware notices that stay silent unless they matter, and an outbound approval gate the assistant cannot talk its way past.",
+  "description": "A 7x24 resident personal assistant for DeepSeek Harness: human-bound standing autonomy, self-wake across restarts, expiry-aware notices that stay silent unless they matter, and a read-only reach over every session, this machine and the person's work channels — it reads everything, drafts everything, and writes nothing.",
   "type": "module",
   "main": "src/index.js",
   "exports": {
