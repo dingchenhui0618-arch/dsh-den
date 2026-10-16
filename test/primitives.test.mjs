@@ -18,7 +18,7 @@ process.env.DSH_HOME = sandbox
 const { denHome, digest, readJsonChecked, reapStaleTempFiles, writeJsonAtomic, publishIfAbsent, STALE_TEMP_MS } =
   await import('../src/atom.js')
 const { currentGrant, hasAutonomy, isDirectHumanDriver, recordGrant } = await import('../src/grant.js')
-const { NOTICE_TTL_MS, ackNotice, isExpired, noticeId, pendingNotices, queueNotice, sweepExpiredNotices } =
+const { NOTICE_TTL_MS, ackNotice, isExpired, noticeId, noticeOwner, pendingNotices, queueNotice, sweepExpiredNotices } =
   await import('../src/notices.js')
 
 test.after(() => rmSync(sandbox, { recursive: true, force: true }))
@@ -48,6 +48,36 @@ test('a notice a human has read stops being pending, and only a human can stop i
   assert.equal(ackNotice('session-ack', 'no-such-notice').ok, false)
   assert.equal(ackNotice('', notice.id).ok, false)
   assert.equal(pendingNotices('session-other').deliverable.length, 0)
+})
+
+test('an acknowledgement with no id is refused by name, and a missing conversation says which one', () => {
+  const notice = queueNotice('session-ack', 'a second thing worth reading', 'notice')
+  // The id is the one thing that cannot be defaulted: with no record to point at, a silent success
+  // would read as "marked read" while nothing was. Strictness here is the point, so it is pinned.
+  const noId = ackNotice('session-ack', '')
+  assert.equal(noId.ok, false)
+  assert.match(noId.error, /id/)
+  assert.equal(
+    existsSync(join(sandbox, 'den', 'notices', `${notice.id}.json`)),
+    true,
+    'a refused acknowledgement must leave the record in place',
+  )
+  // A missing conversation is a different fact, and it is reported as itself instead of as "and an
+  // id" — one sentence for two problems is what sent the panel's reader looking in the wrong place.
+  const noSession = ackNotice('', notice.id)
+  assert.equal(noSession.ok, false)
+  assert.doesNotMatch(noSession.error, /and an id/)
+  assert.match(noSession.error, /conversation/)
+
+  // Which conversation a notice is filed under is answered by the record and by nothing else — the
+  // console has no conversation of its own and needs this answer to file a receipt at all. No such
+  // notice, an unreadable record and no id are all `''`: not a guess, and not a throw.
+  assert.equal(noticeOwner(notice.id), 'session-ack')
+  assert.equal(noticeOwner('no-such-notice'), '')
+  assert.equal(noticeOwner(''), '')
+  // A damaged record names no conversation, and reading one is never allowed to throw.
+  writeFileSync(join(sandbox, 'den', 'notices', 'broken-record.json'), '{ half')
+  assert.equal(noticeOwner('broken-record'), '')
 })
 
 test('state root is self-contained under the configured DSH home', () => {

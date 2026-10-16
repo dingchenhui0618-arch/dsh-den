@@ -207,9 +207,19 @@ export function pickTaskWork(tasks = [], now = Date.now(), options = {}) {
   return { kind: 'idle' }
 }
 /**
- * The standing conversation den reports into, read from the pointer file that sits beside the task
- * file. Non-throwing on purpose: a missing or half-written pointer must not take the heartbeat down
- * with it, and "no conversation recorded" has to stay a reportable state rather than a crash.
+ * The standing conversation den reports into, read from the pointer file that sits beside whichever
+ * state file the caller names. Non-throwing on purpose: a missing or half-written pointer must not
+ * take the heartbeat down with it, and "no conversation recorded" has to stay a reportable state
+ * rather than a crash.
+ *
+ * Exported because a second caller needs the same answer, and two copies of a read are two places
+ * that get to disagree: the panel's "read it" button is den's own local bookkeeping (see
+ * `panel-api.js`'s `notices/ack`), so it must not fail merely because the surface that drew the
+ * button sits outside every conversation and has none to name. There is one implementation.
+ *
+ * The path is *derived*, not assumed: pass den's task file and the pointer beside it is read; pass
+ * the pointer itself and the derivation is a no-op, which is what lets a caller that already holds a
+ * conversation path hand it straight in.
  *
  * The import sits here rather than at the top because this module had none at all — and that is
  * exactly how the first version of this helper shipped broken: `readFileSync` was undefined, the
@@ -218,10 +228,10 @@ export function pickTaskWork(tasks = [], now = Date.now(), options = {}) {
  */
 import { readFileSync } from 'node:fs'
 
-function standingSessionIdFor(tasksPath) {
-  if (!tasksPath) return ''
+export function standingSessionIdFor(statePath) {
+  if (!statePath) return ''
   try {
-    const pointerPath = String(tasksPath).replace(/[^\\/]+$/, '') + 'conversation.json'
+    const pointerPath = String(statePath).replace(/[^\\/]+$/, '') + 'conversation.json'
     return String(JSON.parse(readFileSync(pointerPath, 'utf8'))?.sessionId ?? '').trim()
   } catch {
     return ''

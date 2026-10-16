@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createTask, pickTaskWork } from '../src/tasks.js'
+import { createTask, pickTaskWork, standingSessionIdFor } from '../src/tasks.js'
 
 const NOW = 1_800_000_000_000
 const task = (over = {}) =>
@@ -63,6 +63,31 @@ test('the standing conversation is read from the pointer beside the task file, a
     writeFileSync(pointer, '{ half')
     assert.equal(pickTaskWork([t], NOW, { tasksPath }).kind, 'blocked')
     assert.equal(pickTaskWork([t], NOW, { tasksPath: join(dir, 'nope', 'tasks.json') }).kind, 'blocked')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('the standing-conversation reader is shared, takes a pointer directly, and never throws', () => {
+  // `panel-api.js`'s `notices/ack` imports this same function, so the heartbeat and the panel cannot
+  // end up with two readings of "which conversation is den's standing one" — the second copy of a
+  // read is exactly how the two get to disagree. Naming the pointer itself is what a caller that
+  // already holds a conversation path relies on: the derivation from a state file is a no-op on it.
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-den-standing-'))
+  try {
+    const pointer = join(dir, 'conversation.json')
+    writeFileSync(pointer, JSON.stringify({ sessionId: 'session-standing' }))
+    assert.equal(standingSessionIdFor(pointer), 'session-standing', 'a conversation path may be handed in as-is')
+    assert.equal(standingSessionIdFor(join(dir, 'tasks.json')), 'session-standing', 'or its neighbour')
+    // Absent, unreadable, half-written and not-given are all "no conversation", and none of them throws:
+    // a missing pointer must stay a reportable state rather than taking the caller down with it.
+    assert.equal(standingSessionIdFor(''), '')
+    assert.equal(standingSessionIdFor(undefined), '')
+    assert.equal(standingSessionIdFor(join(dir, 'nope', 'tasks.json')), '')
+    writeFileSync(pointer, '{ half')
+    assert.equal(standingSessionIdFor(pointer), '')
+    writeFileSync(pointer, JSON.stringify({ sessionId: '   ' }))
+    assert.equal(standingSessionIdFor(pointer), '', 'whitespace is not a conversation')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

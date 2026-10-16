@@ -18,7 +18,7 @@
  *    module instance, so a cached import would keep writing to the first sandbox.
  */
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -260,6 +260,116 @@ test('reading a notice through the panel is what takes it out of the pending cou
   service.enqueueNotice('session-2', 'something else happened')
   const wrong = await viaRoute(route, 'notices/ack', { sessionId: 'session-1', id: 'not-a-real-id' })
   assert.equal(wrong.result.ok, false)
+})
+
+/**
+ * Put den's standing conversation pointer on disk for this sandbox.
+ *
+ * This is the file `panel-api`'s fallback reads: `conversation.json`, den's task file's neighbour.
+ * It is written rather than assumed because every sandbox is a fresh home, and a test that is about
+ * the *standing* conversation must not pass merely because the fallback happened to be empty.
+ */
+function writeStandingPointer(home, sessionId) {
+  mkdirSync(join(home, 'den'), { recursive: true })
+  writeFileSync(join(home, 'den', 'conversation.json'), JSON.stringify({ sessionId, createdAt: 1 }))
+}
+
+test('reading a notice works with no conversation at all, filed under den’s standing one', async () => {
+  // The user's report (the red line on the main panel, `acknowledging a notice needs a conversation`).
+  // The main view and the floating window sit outside every conversation, so they have no session to
+  // send — and the action refused on that fact even though the write it guards is entirely local: one
+  // field in den's own notices file, nothing sent, no model involved. A read receipt still has to name
+  // the conversation the notice was *filed under*, and when the surface asking has none den's standing
+  // conversation is the one that means "den itself".
+  const { route, service, home } = await live()
+  writeStandingPointer(home, 'session-standing')
+  service.enqueueNotice('session-standing', 'the build went green while you were out')
+
+  const before = await viaRoute(route, 'status')
+  const pending = before.result.value.notices.pending
+  assert.equal(pending.length, 1)
+
+  // No `sessionId` in the body: that is the whole point of this test. Everything else is the shape
+  // the browser really sends.
+  const acked = await request(route, { body: JSON.stringify({ action: 'notices/ack', id: pending[0].id }) })
+  assert.equal(acked.body.ok, true, JSON.stringify(acked.body))
+  assert.equal(acked.body.value.alreadyDelivered, false)
+
+  const after = await viaRoute(route, 'status')
+  assert.equal(after.result.value.notices.deliverable, 0, 'the count a human watches reaches zero')
+  assert.equal(after.result.value.notices.delivered, 1)
+  assert.deepEqual(after.result.value.notices.pending, [])
+
+  // It was filed against the standing conversation, so the record names which conversation said so.
+  const event = service.recentEvents.filter((entry) => entry.type === 'notice-acknowledged').pop()
+  assert.equal(event.sessionId, 'session-standing')
+})
+
+test('with no standing conversation the button says what to do, and the refused click leaves no half state', async () => {
+  const { route, service, home, modules } = await live()
+  // A fresh machine: no standing conversation has ever been created. Asserted rather than assumed,
+  // because this test is only about that case.
+  assert.equal(existsSync(join(home, 'den', 'conversation.json')), false, 'the sandbox must start with no pointer')
+  service.enqueueNotice('session-somewhere', 'owed, and not addressable from here')
+
+  const pending = (await viaRoute(route, 'status')).result.value.notices.pending
+  assert.equal(pending.length, 1)
+  const noticePath = join(home, 'den', 'notices', `${pending[0].id}.json`)
+  const before = readFileSync(noticePath, 'utf8')
+
+  const outcome = await modules.invokeAction(service, 'notices/ack', { id: pending[0].id }, {})
+  assert.equal(outcome.ok, false)
+  // Not the old internal assertion, and not a shrug: it names what is missing and the next step.
+  assert.doesNotMatch(outcome.error, /needs a conversation/)
+  assert.match(outcome.error, /standing conversation/)
+  assert.match(outcome.error, /say something/)
+
+  // No half state. A refused acknowledgement writes nothing at all, so the record still says exactly
+  // what it said before the click: not acked, and not recorded as delivered either. The panel reads
+  // its counts off disk, so it cannot report a delivery that never happened.
+  assert.equal(readFileSync(noticePath, 'utf8'), before, 'the refused click must not touch the record')
+  const after = await viaRoute(route, 'status')
+  assert.equal(after.result.value.notices.delivered, 0)
+  assert.equal(after.result.value.notices.deliverable, 1)
+  assert.deepEqual(after.result.value.notices.pending.map((notice) => notice.id), [pending[0].id])
+})
+
+test('the console files a notice under the conversation the record names, and says which', async () => {
+  // The measured shape of den's own home (2026-10-16): the one pending notice is filed under the
+  // conversation that scheduled the check, which is *not* the standing conversation.
+  // `status.notices.pending` is den's whole list, not one conversation's, so that notice really is the
+  // card the console draws — and the standing fallback alone would answer `no such notice` to the very
+  // click the fallback exists for. The record names its own conversation; that is what gets used.
+  const { route, service, home } = await live()
+  writeStandingPointer(home, 'session-standing')
+  service.enqueueNotice('session-elsewhere', 'belongs to the conversation that scheduled the check')
+
+  const pending = (await viaRoute(route, 'status')).result.value.notices.pending
+  assert.equal(pending.length, 1)
+  const acked = await request(route, { body: JSON.stringify({ action: 'notices/ack', id: pending[0].id }) })
+  assert.equal(acked.body.ok, true, JSON.stringify(acked.body))
+
+  const after = await viaRoute(route, 'status')
+  assert.equal(after.result.value.notices.deliverable, 0)
+  assert.deepEqual(after.result.value.notices.pending, [])
+  const event = service.recentEvents.filter((entry) => entry.type === 'notice-acknowledged').pop()
+  assert.equal(event.sessionId, 'session-elsewhere', 'the receipt names the conversation the record names')
+})
+
+test('a conversation that names itself still cannot acknowledge another conversation’s notice', async () => {
+  // The fallback is only ever reached when *no* conversation claimed the click. A conversation that
+  // sends its own id goes through the store's ownership check exactly as before, which is what stops
+  // one conversation silencing another conversation's notice.
+  const { route, service, home, modules } = await live()
+  writeStandingPointer(home, 'session-standing')
+  service.enqueueNotice('session-elsewhere', 'not this conversation’s to acknowledge')
+
+  const pending = (await viaRoute(route, 'status')).result.value.notices.pending
+  assert.equal(pending.length, 1)
+  const outcome = await modules.invokeAction(service, 'notices/ack', { id: pending[0].id }, { sessionId: 'session-1' })
+  assert.equal(outcome.ok, false, 'naming a conversation does not unlock another conversation’s notice')
+  assert.match(outcome.error, /no such notice/)
+  assert.equal((await viaRoute(route, 'status')).result.value.notices.delivered, 0)
 })
 
 test('a schedule with no conversation is refused, and the route does not guess one', async () => {

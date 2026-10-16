@@ -13,6 +13,12 @@ import { randomBytes } from 'node:crypto'
 import { denPath } from './atom.js'
 import { ensureConversation, promptConversation, readStandingConversation, sayInConversation } from './conversation.js'
 import { serviceOf } from './grant.js'
+// `noticeOwner` is how the console learns which conversation a notice on screen is filed under; the
+// record itself is the only authority on that, so the question is asked here rather than re-derived.
+import { noticeOwner } from './notices.js'
+// The same reader `pickTaskWork` uses for its own fallback: one implementation, so the heartbeat and
+// the panel cannot come to different conclusions about which conversation is den's standing one.
+import { standingSessionIdFor } from './tasks.js'
 import { summarizeFromDisk, TASKS_FILE } from './tasks-store.js'
 
 export const PANEL_ACTIONS = [
@@ -339,13 +345,62 @@ export async function invokeAction(service, action, payload = {}, { sessionId, n
     }
 
     case 'notices/ack': {
-      // "Acknowledged" means the human says they read it. Without a conversation there is nothing
-      // to acknowledge *for*, and guessing one would mark another conversation's notice as read.
-      if (!liveSessionId) return { ok: false, error: 'acknowledging a notice needs a conversation' }
+      // "Acknowledged" means the human says they read it — and it is den's own local bookkeeping: one
+      // field written into den's own notices file, nothing sent anywhere, no host model called.
+      // Demanding a conversation for that is what turned the panel's button red (measured by the user
+      // on the main panel: `acknowledging a notice needs a conversation`, on a click whose entire
+      // effect is local).
+      //
+      // A conversation is still needed to *address* the record, so when the surface asking has none —
+      // the main panel and the floating window live outside every conversation — one is resolved,
+      // never guessed:
+      //
+      //  1. den's standing conversation, read from the pointer beside den's task file by the shared
+      //     reader `pickTaskWork` already uses (non-throwing; `''` when there is nothing to read);
+      //  2. when that conversation does not own this notice, the conversation the notice itself is
+      //     filed under, taken from the record.
+      //
+      // Step 2 is not a nicety. `status.notices.pending` is den's *whole* notice list rather than one
+      // conversation's — that is what the console renders — so the card on screen can belong to the
+      // conversation that scheduled the check. Measured in den's own home (2026-10-16): the one pending
+      // notice was filed under a conversation that is *not* the standing one, so step 1 alone would
+      // have answered `no such notice` to the very click this case exists to serve.
+      //
+      // A conversation that *names itself* is untouched by any of this: it goes through the store's
+      // own ownership check and is refused when the notice is not its own. That check is the safety
+      // property — one conversation must not silence another conversation's notice — and the fallback
+      // below is only ever reached when no conversation claimed the click.
       const noticeId = String(input.id ?? '')
-      const acknowledged = service.ackNotice(liveSessionId, noticeId)
+      if (liveSessionId) {
+        const own = service.ackNotice(liveSessionId, noticeId)
+        if (!own.ok) return { ok: false, error: own.error }
+        service.noteEvent({ type: 'notice-acknowledged', noticeId, sessionId: liveSessionId })
+        return { ok: true, value: own }
+      }
+      const standing = standingSessionIdFor(standingPath || denPath(TASKS_FILE))
+      if (!standing) {
+        // No standing conversation means there is no den for this receipt to be filed against yet. The
+        // refusal says what to do about that instead of restating an internal precondition.
+        return {
+          ok: false,
+          error: 'no standing conversation yet: say something to den first, and then this notice can be marked read',
+        }
+      }
+      const candidates = [...new Set([standing, noticeOwner(noticeId)].filter(Boolean))]
+      let acknowledged = { ok: false, error: 'no such notice' }
+      let sessionIdForNotice = standing
+      for (const candidate of candidates) {
+        // A refusal here writes nothing (see `notices.js`), so trying the next candidate cannot leave
+        // a half-applied receipt behind.
+        const attempt = service.ackNotice(candidate, noticeId)
+        acknowledged = attempt
+        if (attempt.ok) {
+          sessionIdForNotice = candidate
+          break
+        }
+      }
       if (!acknowledged.ok) return { ok: false, error: acknowledged.error }
-      service.noteEvent({ type: 'notice-acknowledged', noticeId, sessionId: liveSessionId })
+      service.noteEvent({ type: 'notice-acknowledged', noticeId, sessionId: sessionIdForNotice })
       return { ok: true, value: acknowledged }
     }
 

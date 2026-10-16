@@ -111,7 +111,17 @@ function readExisting(path) {
  * @returns {{ok: boolean, alreadyDelivered?: boolean, error?: string}}
  */
 export function ackNotice(sessionId, id, now = Date.now()) {
-  if (!sessionId || !id) return { ok: false, error: 'acknowledging a notice needs a conversation and an id' }
+  // Two different things can be missing and they are not the same problem, so they do not share a
+  // sentence — a message that names both sends the reader looking in the wrong place. The id stays
+  // strictly required: an acknowledgement with no record to point at would be a receipt for nothing,
+  // and quietly succeeding would let a caller believe it marked something read.
+  //
+  // A missing conversation is a *caller* problem rather than a human's: this record is filed under
+  // the conversation it was queued for, and the caller is expected to resolve one before asking. The
+  // one human-facing caller does exactly that — `panel-api.js`'s `notices/ack` falls back to den's
+  // standing conversation when the surface that drew the button has none of its own.
+  if (!id) return { ok: false, error: 'acknowledging a notice needs the id of the notice' }
+  if (!sessionId) return { ok: false, error: 'acknowledging a notice needs the conversation it was filed under' }
   const path = denPath('notices', `${id}.json`)
   let notice
   try {
@@ -123,6 +133,28 @@ export function ackNotice(sessionId, id, now = Date.now()) {
   if (notice.deliveredAt) return { ok: true, alreadyDelivered: true }
   writeJsonAtomic(path, { ...notice, deliveredAt: now })
   return { ok: true, alreadyDelivered: false }
+}
+
+/**
+ * Which conversation a notice is filed under, or `''` when there is no such notice.
+ *
+ * The record itself is the only authority on this — not the file name, not the caller's guess — and a
+ * caller that has no conversation of its own needs the answer before it can file a read receipt: the
+ * panel's console shows den's whole notice list (`status.notices.pending` is not scoped per
+ * conversation), so the notice on screen may belong to the conversation that scheduled the check
+ * rather than to den's standing one.
+ *
+ * Non-throwing and tolerant of damage, like every other reader here: an absent, unreadable or
+ * half-written record is `''`, which its caller reads as "this id names nothing".
+ */
+export function noticeOwner(id) {
+  if (!id) return ''
+  try {
+    const notice = readJson(denPath('notices', `${id}.json`))
+    return isValidNotice(notice) ? String(notice.sessionId ?? '').trim() : ''
+  } catch {
+    return ''
+  }
 }
 
 /** Ideas never expire; observation notices do. */
