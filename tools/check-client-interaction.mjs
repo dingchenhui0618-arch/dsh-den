@@ -1320,11 +1320,17 @@ check(
   unfoldedSheet?.props?.style?.position === 'absolute' && unfoldedSheet?.props?.style?.top === '100%',
   'and the measurements hang under the rail as a sheet instead of taking a row away from the transcript',
 )
+// The bound is read as "bounded by something", not as the pixel count it used to be. It was `68` — the
+// four measurement rows to the pixel — and it had to change the moment the originals moved in under the
+// fold: a host's sentence wraps to a number of lines nobody controls, and a sheet cut to four rows would
+// have scrolled the sentence the reader opened the fold for out of sight. It is a share of the card now,
+// which still cannot reach the composer at any size the window is dragged to.
+const sheetBound = unfoldedSheet?.props?.style?.maxHeight
 check(
   unfoldedSheet?.props?.style?.overflowY === 'auto' &&
-    Number(unfoldedSheet?.props?.style?.maxHeight) > 0 &&
+    (Number(sheetBound) > 0 || (typeof sheetBound === 'string' && /^\d+(\.\d+)?%$/.test(sheetBound))) &&
     findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'pet-chat')[0]?.props?.style?.display === 'flex',
-  'and the sheet is bounded and scrolls while the transcript keeps its own height behind it',
+  `and the sheet is bounded and scrolls while the transcript keeps its own height behind it (bound: ${JSON.stringify(sheetBound)})`,
 )
 check(
   railTextOf(panelTalk).includes('心跳运行中') && railTextOf(panelTalk).includes('上次心跳'),
@@ -1418,11 +1424,14 @@ check(panelTalk.text().includes('are you awake?'), 'and the conversation is stil
 check(leafText(panelTalk.tree).includes('look at the CI failures'), 'what was just sent is shown at once, before the host has logged it')
 check(panelTalk.inputs()[0] && panelTalk.inputs()[0].props.value === '', 'and the box is cleared, so it cannot look unsent')
 
-/* --- a dead turn explains itself, in the host's own words --------------- */
+/* --- a dead turn explains itself in Chinese, original under [详情] -------- */
 
 // Three turns of this conversation ended in 'prompt variable "{{model}}" has no value', and every one
 // of them wrote no message, so the window was empty and silent. The host's reason travels with the read
-// result now: a person looking at an empty window can see which half is broken.
+// result now — and it is *the* sentence the user was stopped by ("I hope people with no coding
+// background can do this too"), so it is the last place in the plugin where an English sentence was
+// still printed at a person. What is pinned here is the new fact: the face carries a Chinese sentence
+// and a next step, and `has no value for this assembly` is only readable once the fold is open.
 const panelDead = mount(
   bootWindow({
     scripted: {
@@ -1443,15 +1452,115 @@ const panelDead = mount(
   {},
 )
 await panelDead.settle()
-// The reason the window is empty is drawn by the transcript, which is now the window's body: the
-// host's own words are on screen from the open, with no tab pressed to bring them there.
-check(panelDead.text().includes('上一回合没能完成'), 'an empty conversation says why it is empty, on the open')
+check(panelDead.text().includes('上一回合没跑成'), 'an empty conversation says why it is empty, on the open')
 check(
-  panelDead.text().includes('has no value'),
-  'and quotes the host rather than smoothing it into "something went wrong"',
+  panelDead.text().includes('模板里的变量没取到值') && panelDead.text().includes('重启一下 DSH'),
+  'and says it in Chinese, with the next step the host\'s own sentence never named',
 )
+check(
+  panelDead.text().includes('上一回合没跑成 —— 模板里的变量没取到值,重启一下 DSH 就能再试'),
+  'which is one sentence a person reads straight through, not a fragment glued to the host\'s words',
+)
+check(
+  !panelDead.text().includes('has no value for this assembly'),
+  'the host\'s sentence that stopped the user is not printed at the person any more',
+)
+// The whole window face, not one node: `EN_SENTENCE` is four consecutive English words, which is what
+// an untranslated interface sentence looks like. This is the assertion the old version of this section
+// contradicted by demanding the quote.
+check(!EN_SENTENCE.test(panelDead.text()), `and no whole English sentence is on the window face (judged by ${EN_SENTENCE})`)
+check(
+  findAll(panelDead.tree, (node) => node.props?.['data-dsh-role'] === 'pet-turn-error').length === 1,
+  'the Chinese sentence has a seat of its own above the transcript',
+)
+check(
+  findAll(panelDead.tree, (node) => node.props?.['data-dsh-role'] === 'raw-error').length === 0,
+  'and the original is not in the tree at all while the fold is shut',
+)
+const deadToggle = findAll(panelDead.tree, (node) => node.props?.['data-dsh-role'] === 'pet-details-toggle')[0]
+check(Boolean(deadToggle), 'the window offers its one fold, the same one the measurements live under')
+deadToggle?.props?.onClick()
+await panelDead.settle()
+const deadSheet = findAll(panelDead.tree, (node) => node.props?.['data-dsh-role'] === 'pet-details')[0]
+check(Boolean(deadSheet), 'and pressing it opens the sheet')
+const deadRaw = findAll(panelDead.tree, (node) => node.props?.['data-dsh-role'] === 'raw-error')[0]
+check(
+  textOf(deadRaw).includes('prompt variable "{{model}}" has no value for this assembly'),
+  `and the host's own sentence is kept there, in full (saw ${JSON.stringify(textOf(deadRaw))})`,
+)
+check(
+  textOf(deadSheet).includes('原文'),
+  'labelled as the original words, so a person can hand it to somebody who reads it',
+)
+check(
+  !TURN_FRACTION.test(textOf(deadSheet)) && !ISO_STAMP.test(textOf(deadSheet)),
+  'while the fold still carries no score and no timestamp beyond the readings it already had',
+)
+
+/* --- a reason nobody recognises still lands in Chinese -------------------- */
+
+// The other end of the same path: a host that reports a turn failure in words this plugin has never
+// seen — a future version's message, a decode error, a stack line. There is no rule to match it, and
+// the fallback is the whole point: a Chinese sentence that says what happened, never a translation
+// that fails open and leaves the host's English standing in for it.
+const UNKNOWN_REASON = 'modbus handshake refused by the far end of the wire'
+const panelUnknown = mount(
+  bootWindow({
+    scripted: {
+      status: healthyStatus(),
+      'conversation/read': {
+        ok: true,
+        value: {
+          sessionId: 'sess-unknown',
+          state: 'live',
+          total: 0,
+          truncated: false,
+          messages: [],
+          lastError: UNKNOWN_REASON,
+        },
+      },
+    },
+  }).component,
+  {},
+)
+await panelUnknown.settle()
+check(
+  panelUnknown.text().includes('上一回合没跑成,我记下来了'),
+  'a reason the table cannot read falls back to one Chinese sentence rather than to nothing',
+)
+check(!panelUnknown.text().includes(UNKNOWN_REASON), 'and the unrecognised sentence is not printed at the person')
+check(
+  !EN_SENTENCE.test(panelUnknown.text()),
+  `no whole English sentence reaches the window face for an unrecognised reason either (judged by ${EN_SENTENCE})`,
+)
+const unknownToggle = findAll(panelUnknown.tree, (node) => node.props?.['data-dsh-role'] === 'pet-details-toggle')[0]
+unknownToggle?.props?.onClick()
+await panelUnknown.settle()
+const unknownRaw = findAll(panelUnknown.tree, (node) => node.props?.['data-dsh-role'] === 'raw-error')[0]
+check(
+  textOf(unknownRaw).includes(UNKNOWN_REASON),
+  `while the unrecognised original is kept under [详情] like every other one (saw ${JSON.stringify(textOf(unknownRaw))})`,
+)
+check(
+  !panelUnknown.text().includes('模板里的变量没取到值'),
+  'and the unknown reason is not answered with the sentence that belongs to the prompt-assembly one',
+)
+check(
+  !panelUnknown.text().includes('没成功,我记下来了'),
+  'nor with the generic interface-failure line, which would say nothing about a turn',
+)
+check(panelUnknown.inputs().length === 1, 'and the window still has its one place to type, whatever the last turn reported')
+
 // The same line must not appear when the last turn was fine.
-check(!panelTalk.text().includes('上一回合没能完成'), 'a conversation that answered carries no failure line')
+check(!panelTalk.text().includes('上一回合没跑成'), 'a conversation that answered carries no failure line')
+check(
+  findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'pet-turn-error').length === 0,
+  'and no seat for one either, so nothing is drawn empty on a healthy window',
+)
+check(
+  findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'raw-error').length === 0,
+  'nor any original to fold away, on a window where nothing failed',
+)
 
 /* --- a line the log already carries is not drawn twice --- */
 
@@ -2120,13 +2229,16 @@ if (process.argv.includes('--demo')) {
       },
       {
         label: '② 细线上的 [详情]：技术指标叠在细线下面，收起就回到对话',
-        hint: '默认折叠。展开后测量值在自己的滚动区里（心跳与上次心跳、有话想跟你说、回合数），它浮在消息流之上、不参与布局，所以卡片不会因为展开而把消息挤没；收起后消息原位还在',
+        // 这一栏说它画的是什么：引擎不动演示数据，所以这一张卡没有失败可展开 —— 展开后是那句白话
+        // 用的四条读数（谁在常驻、心跳、有话想跟你说、回合数）。浮窗失败时多出来的那一块是
+        // 「原文: …」，由断言盯着（见上面两节），不靠这一页展示。
+        hint: '默认折叠。展开后测量值在自己的滚动区里（常驻状态、心跳运行中与上次心跳、有话想跟你说、回合数），它浮在消息流之上、不参与布局，所以卡片不会因为展开而把消息挤没；收起后消息原位还在。这一张是健康状态，所以没有「原文」那一条 —— 窗口失败时它才出现，就在这四行下面',
         tall: true,
         tree: demoDetails.tree,
       },
       {
-        label: '② 一回合没成话：窗口把宿主的原因原话报出来',
-        hint: '空窗口不再沉默 —— 上一回合的失败原文显示在输入框上方（这里演示 {{model}} 无值那次）。这一条是宿主的原话，不是接口报错，所以没被翻译',
+        label: '② 一回合没跑成：窗口说中文，宿主原话收在 [详情] 里',
+        hint: '空窗口不再沉默 —— 上一回合失败时，消息区下面是一句中文 + 下一步（这里演示 {{model}} 无值那次：「上一回合没跑成 —— 模板里的变量没取到值，重启一下 DSH 就能再试」，不再是英文原话）。宿主的原话（英文那句）折在细线的 [详情] 里，点开就能读，用来转给看得懂的人；这一张画的是默认折叠的样子，所以那行英文没有落在这一页上',
         tall: true,
         tree: panelDead.tree,
       },

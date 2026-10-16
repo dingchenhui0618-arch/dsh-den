@@ -79,6 +79,8 @@ window.__ModuleLoader__.load({
         errFiveMinutes: 'the shortest interval is 5 minutes — make the number bigger',
         errScheduleForm: 'a self-check needs a name and a thing to check — fill in both',
         errNothingToSay: 'there is nothing written yet — write one sentence first',
+        errTurnPrompt: 'the last turn did not get anywhere — a template variable had no value. Restart DSH and it works again',
+        errTurnUnknown: 'the last turn did not get anywhere — I wrote it down',
         measurements: 'measurements',
         refreshing: 'refreshing…',
         refresh: 'Refresh',
@@ -127,7 +129,6 @@ window.__ModuleLoader__.load({
         sayPlaceholder: 'say something to den…',
         saySend: 'Send',
         sayEmpty: 'no conversation yet — say something to start one',
-        sayFailed: 'the last turn did not finish: ',
         saySending: 'sending…',
         sayTail: 'only the latest messages are shown; the rest are still in the transcript',
         sayHostOld: 'the host has not loaded this half yet — restart DSH and this becomes the conversation',
@@ -224,6 +225,8 @@ window.__ModuleLoader__.load({
         errFiveMinutes: '间隔最短 5 分钟 —— 把分钟数改大一点',
         errScheduleForm: '自检要有名字和「检查什么」两栏 —— 都填上',
         errNothingToSay: '还没写字 —— 先写一句再发',
+        errTurnPrompt: '上一回合没跑成 —— 模板里的变量没取到值,重启一下 DSH 就能再试',
+        errTurnUnknown: '上一回合没跑成,我记下来了',
         measurements: '技术指标',
         refreshing: '刷新中…',
         refresh: '刷新',
@@ -272,7 +275,6 @@ window.__ModuleLoader__.load({
         sayPlaceholder: '直接跟 den 说一句…',
         saySend: '发送',
         sayEmpty: '还没有对话 —— 说一句就开始',
-        sayFailed: '上一回合没能完成:',
         saySending: '发送中…',
         sayTail: '只显示最近的消息，更早的都还在转录里',
         sayHostOld: '宿主还没加载会话这一半 —— 重启 DSH 后这里就是对话',
@@ -461,6 +463,12 @@ window.__ModuleLoader__.load({
      *
      * Keys, not translations: a `say` function so a sentence can carry a number out of the message
      * (the HTTP status) rather than being a lookup with a placeholder nobody fills.
+     *
+     * One table, every source: an interface refusal, a status the host failed to answer, and the
+     * host's reason for the last turn that died (`data.lastError`) all arrive here. That last one is
+     * the sentence that stopped the user — `prompt variable "{{model}}" has no value for this
+     * assembly` — and it used to be printed on the floating window verbatim, in English, as the only
+     * untranslated sentence left in the plugin.
      */
     var ERROR_SAY = [
       {
@@ -502,14 +510,33 @@ window.__ModuleLoader__.load({
         match: /nothing to say/i,
         say: function (t) { return t('errNothingToSay') },
       },
+      /* The host's own reason for a turn that never started, in the words it actually uses:
+       * `prompt variable "{{model}}" has no value for this assembly`. This is the sentence that
+       * stopped the user cold, and it reached the window through `data.lastError` — the host half's
+       * account of the previous turn, which no `match` above knows. Last on purpose: a rule that
+       * recognises more than the others belongs at the end, where it cannot steal a message one of
+       * them is better placed to explain. */
+      {
+        match: /prompt variable|has no value for this assembly/i,
+        say: function (t) { return t('errTurnPrompt') },
+      },
     ]
 
-    function explainError(raw, t) {
+    /**
+     * One error, one Chinese sentence that names the next step.
+     *
+     * `fallbackKey` is which "I do not know this one" sentence to use when no rule matches — one
+     * translation key, never a guess: the caller is the only one that knows what failed. A refused
+     * click falls back to `没成功,我记下来了`; the host's reason for a turn that died falls back to
+     * `上一回合没跑成,我记下来了`, which says the same thing in the words the window is already
+     * using. Both are Chinese, and in both cases the host's own sentence is kept rather than dropped.
+     */
+    function explainError(raw, t, fallbackKey) {
       var message = String(raw === null || raw === undefined ? '' : raw)
       for (var i = 0; i < ERROR_SAY.length; i += 1) {
         if (ERROR_SAY[i].match.test(message)) return ERROR_SAY[i].say(t, message)
       }
-      return t('errorUnknown')
+      return t(fallbackKey || 'errorUnknown')
     }
 
     /* The one-click copy control for a minted token.
@@ -1891,6 +1918,18 @@ window.__ModuleLoader__.load({
       var setWaiting = waiting[1]
       /** The transcript's own scroll box, so the newest line can be kept in view. */
       var scrollRef = React.useRef(null)
+      /**
+       * The host's own words for the last turn that died, on their way to the rail's `[详情]`.
+       *
+       * Read out of the transcript rather than fetched by the window: `data.lastError` arrives with
+       * the conversation, and the window already reports other verdicts up the same path (`onPhase`).
+       * The words themselves are not what the person reads any more — `explainError` answers that
+       * with a Chinese sentence and a next step — so they travel straight past the body and stop
+       * under the fold, which is where the `raw-error` seat of the full page keeps them too.
+       */
+      var rawTurn = React.useState('')
+      var rawTurnError = rawTurn[0]
+      var setRawTurnError = rawTurn[1]
 
       function load() {
         return act('conversation/read', { limit: 60 })
@@ -1959,6 +1998,20 @@ window.__ModuleLoader__.load({
       React.useEffect(function () {
         if (typeof props.onPhase === 'function') props.onPhase(view.phase)
       }, [view.phase])
+
+      /**
+       * Hand the last turn's own reason up, so the window's `[详情]` can keep it.
+       *
+       * Reported on every render rather than only when there is something to report: a turn that
+       * succeeds after one that died has to clear the fold, and a slot left holding a stale sentence
+       * would be the window telling the person about a failure that is over. The host's reason is
+       * passed through exactly as it arrived, because it is the same string the diagnostic tool
+       * prints — nothing is smoothed on the way.
+       */
+      var lastTurnError = (view.data && typeof view.data === 'object' ? view.data.lastError : '') || ''
+      React.useEffect(function () {
+        if (typeof props.onTurnError === 'function') props.onTurnError(String(lastTurnError))
+      }, [lastTurnError])
 
       var data = (view.data && typeof view.data === 'object' ? view.data : {}) || {}
       var messages = Array.isArray(data.messages) ? data.messages : []
@@ -2092,13 +2145,18 @@ window.__ModuleLoader__.load({
             ? allRows
             : React.createElement('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', margin: '6px 0' } }, t('sayEmpty')),
         ),
-        // Said in the host's own words rather than smoothed into "something went wrong": the person can
-        // read the reason, and it is the same reason the diagnostic tool prints.
+        // One Chinese sentence with a next step, and never the host's English: this line used to read
+        // `the last turn did not finish: prompt variable "{{model}}" has no value for this assembly`,
+        // which is the sentence the user was stopped by ("I want people with no coding background to
+        // be able to do this too"). `explainError` answers it the same way it answers every interface
+        // failure — and the one that nobody recognises is still a whole Chinese sentence that says
+        // what happened, rather than a translation that failed open — while the original goes up to
+        // the rail's `[详情]` through `onTurnError`.
         data.lastError
           ? React.createElement(
               'div',
-              { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)', margin: '2px 0', wordBreak: 'break-word' } },
-              t('sayFailed') + data.lastError,
+              { 'data-dsh-role': 'pet-turn-error', style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)', margin: '2px 0', wordBreak: 'break-word' } },
+              explainError(lastTurnError, t, 'errTurnUnknown'),
             )
           : null,
         view.phase === 'error' && view.error
@@ -2250,12 +2308,15 @@ window.__ModuleLoader__.load({
             : t('budgetOff')
           : t('hostOlder'),
       })
-      // The host's own words for the last interface failure, kept where the rest of the measurements
-      // are rather than printed on the line above it. The line says the same thing in Chinese
-      // (`explainError`, in the transcript), and this is what it was translated from.
-      if (props.rawError) {
-        rows.push({ label: t('errorRaw'), detail: String(props.rawError) })
-      }
+      // Every original the window is holding, in one block under the fold — the same `raw-error` seat
+      // the full page keeps its originals in, and for the same reason: a person who cannot read the
+      // English still needs a way to hand it to someone who can. Two sources, one block: this window
+      // failing to read the conversation, and a turn of the conversation failing to run
+      // (`data.lastError`, the host's reason the user hit as `prompt variable "{{model}}" has no value
+      // for this assembly`). Either reaches the face as Chinese; neither reaches it as-is.
+      var rawOriginals = [props.rawError, props.rawTurnError].filter(function (text) {
+        return String(text === null || text === undefined ? '' : text).length > 0
+      })
 
       return React.createElement(
         'div',
@@ -2319,16 +2380,18 @@ window.__ModuleLoader__.load({
                 'data-dsh-role': 'pet-details',
                 // Hung from the rail (`top: '100%'`) and bounded: an unfolded measurement sheet covers
                 // the transcript for as long as it is open instead of taking height from it. The bound
-                // is 68px — the four rows — so the sheet stops above the composer rather than over it.
-                // A fifth row appears when there is a raw interface error to keep (`rawError`), and it
-                // scrolls inside this bound rather than growing the sheet over the composer.
+                // is a share of the card rather than a pixel count, so the sheet still cannot reach the
+                // composer at any size the person drags the window to. It was 68px — exactly the four
+                // measurements — until the originals moved in here: a host's own sentence wraps to some
+                // number of lines nobody controls, and a sheet cut to four rows would have shown none of
+                // it. The sheet scrolls instead.
                 style: {
                   position: 'absolute',
                   top: '100%',
                   left: 0,
                   right: 0,
                   zIndex: 20,
-                  maxHeight: 68,
+                  maxHeight: '60%',
                   overflowY: 'auto',
                   padding: '4px 10px 6px',
                   background: 'var(--dsw-alias-bg-layer-2)',
@@ -2350,6 +2413,19 @@ window.__ModuleLoader__.load({
                   React.createElement('span', { style: { maxWidth: '48%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 9, color: 'var(--dsw-alias-label-tertiary)' } }, row.detail),
                 )
               }),
+              // The originals, at the foot of the fold and in a block of their own rather than as
+              // measurement rows: a row ellipsizes its detail to 48% of a 286px card, and a host's
+              // sentence cut to six words is not a sentence the reader can act on. This one wraps.
+              rawOriginals.length
+                ? React.createElement(
+                    'div',
+                    {
+                      'data-dsh-role': 'raw-error',
+                      style: { marginTop: 6, paddingTop: 4, borderTop: '1px solid var(--dsw-alias-border-l2)', fontSize: 9, lineHeight: 1.5, color: 'var(--dsw-alias-label-tertiary)', wordBreak: 'break-word' },
+                    },
+                    t('errorRaw') + ': ' + rawOriginals.join(' | '),
+                  )
+                : null,
             )
           : null,
       )
@@ -2701,6 +2777,16 @@ window.__ModuleLoader__.load({
             var rawErrorState = React.useState(null)
             var rawError = rawErrorState[0]
             var setRawError = rawErrorState[1]
+            /**
+             * The host's own words for the last turn that did not finish.
+             *
+             * A second fold slot rather than the one above, because they are two different failures:
+             * that one is this window failing to *read*, this one is a turn of the conversation
+             * failing to run. Both end up under the same `[详情]`, and neither reaches the face.
+             */
+            var rawTurnState = React.useState('')
+            var rawTurnError = rawTurnState[0]
+            var setRawTurnError = rawTurnState[1]
 
             function say() {
               var body = String(typed || '').trim()
@@ -2889,6 +2975,10 @@ window.__ModuleLoader__.load({
                   // says the same thing in Chinese (`explainError`) and does not print the raw text
                   // where a person is reading a conversation.
                   onError: setRawError,
+                  // And the host's own words for a turn that did not finish, which arrive with the
+                  // conversation itself (`data.lastError`) and take the same route: a Chinese sentence
+                  // on the face, the original one press away.
+                  onTurnError: setRawTurnError,
                 }),
               )
 
@@ -2932,7 +3022,7 @@ window.__ModuleLoader__.load({
                 // verdict in words, and a sentence of activity — with the measurements folded under
                 // it. It replaced a two-word tab strip, and it is *not* a view: the transcript below it
                 // is on screen at the same time, which was the whole point of the change.
-                React.createElement(DenActivityRail, { t: t, status: status, mode: petMode, rawError: rawError }),
+                React.createElement(DenActivityRail, { t: t, status: status, mode: petMode, rawError: rawError, rawTurnError: rawTurnError }),
                 React.createElement(
                   'div',
                   { 'data-dsh-role': 'pet-content', style: { flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' } },
