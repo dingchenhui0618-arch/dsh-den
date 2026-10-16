@@ -184,17 +184,19 @@ class FakeResizeObserver {
   disconnect() { this.target = null }
 }
 
+const sandboxWindow = {
+  __ModuleLoader__: { load: (spec) => { loaded = spec } },
+  // The panel looks for this hook, so an offline harness can observe the
+  // action state that no DOM would otherwise expose.
+  __dshDenDebug: (event) => sinkLog.push(event),
+  __dshDenDebugMode: Boolean(process.env.PROBE_SLOTS),
+  localStorage: fakeStorage,
+  ResizeObserver: FakeResizeObserver,
+}
 {
   const sandbox = {
     navigator: fakeNavigator,
-    window: {
-      __ModuleLoader__: { load: (spec) => { loaded = spec } },
-      // The panel looks for this hook, so an offline harness can observe the
-      // action state that no DOM would otherwise expose.
-      __dshDenDebug: (event) => sinkLog.push(event),
-      localStorage: fakeStorage,
-      ResizeObserver: FakeResizeObserver,
-    },
+    window: sandboxWindow,
     // The bundle reaches the host with the browser's own `fetch`, exactly like the
     // other client plugins. It is a global, not a `window` property, so it belongs
     // on the sandbox itself. Supplied here rather than having the bundle carry a
@@ -357,6 +359,23 @@ function mount(registered, props) {
       if (!button) {
         throw new Error(
           `no button labelled ${JSON.stringify(label)}; present: ${findAll(tree, (n) => n.type === 'button').map((b) => textOf(b).trim()).join(' | ') || '(none)'}`,
+        )
+      }
+      button.props.onClick?.()
+      await settle()
+    },
+    /**
+     * Press a button that has no text of its own, found by its accessible name.
+     *
+     * The window's send control is an arrow glyph with `aria-label="发送"`, which is the right shape
+     * for a 286px card and invisible to `click(label)`. A screen reader finds it by that label, and so
+     * does this.
+     */
+    async press(label) {
+      const button = findAll(tree, (n) => n.type === 'button' && n.props?.['aria-label'] === label)[0]
+      if (!button) {
+        throw new Error(
+          `no button with the accessible name ${JSON.stringify(label)}; present: ${findAll(tree, (n) => n.type === 'button').map((b) => b.props?.['aria-label'] || textOf(b).trim()).join(' | ') || '(none)'}`,
         )
       }
       button.props.onClick?.()
@@ -538,28 +557,25 @@ check(
 const directToolsText = await mainPanelWith(null, { gate: { mounted: false, recent: [] } })
 check(directToolsText.includes('工具直通'), 'an explicitly disabled approval gate is explained as direct tool access, not as a red failure')
 
-/* --- the per-conversation controls sit where a conversation arrives --------- */
+/* --- the floating window sits in the one seat the shell gives it -------- */
 
-const dock = bootWindow({
-  scripted: { status: healthyStatus({ autonomy: 'session-active', autonomyKnown: true }), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } },
-})
+const dock = bootWindow({ scripted: { status: healthyStatus(), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } } })
 check(
   dock.options.name === 'shell.overlay',
-  'the grant control registers into the session-scoped composer dock',
+  'the window registers into the shell overlay, outside every conversation frame',
 )
 // The catalog's own rule: "a fresh id is added beside the shipped entries, while reusing a shipped id
 // puts you in THAT cell and replaces it." Reusing one of these would silently delete a shell control.
-const SHIPPED_DOCK_IDS = ['todo', 'goal', 'queue']
 check(
-  !SHIPPED_DOCK_IDS.includes(dock.options.id),
-  `the grant dock uses its own id so it adds a cell instead of replacing one (got ${dock.options.id})`,
+  dock.options.id === 'den-mini',
+  `the window uses its own id so it adds a cell instead of replacing one (got ${dock.options.id})`,
 )
-
-const grantPanel = mount(dock.component, { sessionId: 'session-active' })
-await grantPanel.settle()
-const grantText = grantPanel.text()
-check(grantText.includes('本会话已授予'), 'a granted conversation says so in the dock, in one line')
-check(grantText.includes('已授予'), 'and reports the conversation it was told about as granted')
+check(
+  dock.options.id !== sidebarEntryId(),
+  'and does not reuse the sidebar\u2019s id, which would put the panel and the window in one cell',
+)
+const dockWindow = mount(dock.component, {})
+await dockWindow.settle()
 const dockStatus = calls.find((entry) => (entry.body?.action ?? 'status') === 'status')
 check(
   dockStatus?.body?.sessionId == null,
@@ -569,87 +585,121 @@ check(
 check(text.includes('在对话里说'), 'an empty schedule list is called out, and names the cheaper path: saying it')
 check(text.includes('消息框里说一句'), 'and creating one is described as something said, not a form to go and find')
 
-/* --- clicking Grant mints a token and does NOT claim authority ------------- */
+/* --- the window carries no way to act on the person's behalf --------------- */
 
-const revokeCalls = () => calls.filter((entry) => entry.body?.action === 'autonomy/request')
-check(revokeCalls().length === 0, 'no autonomy action is sent before a click')
+// The window reads den's state and carries the person's words, and that is all it does. The grant
+// control it used to carry is gone with the permission tab: a shape that offered to grant standing
+// authority from the always-on surface was the one control the window should never have had.
+//
+// These are pinned as counts, not as "a label is missing". A checklist of forbidden strings passes the
+// moment somebody rewrites the copy, while a count of controls that are not collapse/expand/tabs/
+// shortcuts/composer fails the moment one is added back under any name at all.
+const WINDOW_CONTROL_LABELS = ['收起', '−', '活动', '对话', '查看活动', '解释状态', '运行自检', '发送', '↗']
+const foreignWindowControls = (handle) =>
+  handle
+    .buttons()
+    .map((button) => textOf(button).trim())
+    .filter((label) => !WINDOW_CONTROL_LABELS.includes(label))
 
-// Granted, the dock is one line and nothing else: the buttons are gone, not merely quiet.
-const grantedDockText = grantPanel.text()
-check(
-  grantedDockText.includes('常驻自治') && grantedDockText.includes('已授予'),
-  'a granted conversation shows the composer dock as one line',
-)
-check(
-  !grantedDockText.includes('撤销'),
-  'and carries no revoke control, because revoking belongs where it cannot sit in the way',
-)
-
-// The grant button has to be exercised in a conversation that has not been granted: there,
-// and only there, the buttons are the work still to do.
-const freshDock = bootWindow({
-  scripted: {
-    status: healthyStatus(),
-    'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } },
-    // The click below must be answered here. A request left hanging belongs to the next scenario,
-    // because the scripted replies are whoever booted last - which is how a check two screens
-    // further down lost its own data and read as a defect in this change.
-    'autonomy/request': { ok: true, value: { token: 'tok-fresh-1', autonomy: true, expiresAt: Date.now() + 600000, ttlMs: 600000 } },
-  },
-})
-const freshPanel = mount(freshDock.component, { sessionId: 'session-active' })
-await freshPanel.settle()
-check(freshPanel.text().includes('授予') && freshPanel.text().includes('撤销'), 'an ungranted conversation renders both autonomy controls')
-await freshPanel.click('授予')
-
-const grantCall = calls.find((entry) => entry.body?.action === 'autonomy/request')
-check(Boolean(grantCall), 'clicking Grant sends an autonomy/request')
-check(grantCall?.body?.autonomy === true, 'the grant request asks for autonomy: true')
-check(grantCall?.body?.sessionId == null, 'minting names no conversation: the token is what the human carries to one')
-check(
-  calls.every((entry) => entry.body?.action !== 'autonomy/confirm'),
-  'clicking Grant never confirms authority on its own — a token must come back first',
-)
-
-/* --- the token is shown to the human -------------------------------------- */
-
-scriptReplies({
-  'autonomy/request': { ok: true, value: { token: 'tok-abc123', autonomy: true, expiresAt: Date.now() + 600000, ttlMs: 600000 } },
-})
-const panel2 = mount(
-  bootWindow({ scripted: { status: healthyStatus(), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } } }).component,
-  { sessionId: 'session-active' },
-)
-await panel2.settle()
-await panel2.click('授予')
-if (process.env.DEN_DEBUG) {
-  // The sink deliberately reports reply *shape*, not contents, so this shows which
-  // actions completed rather than what they returned.
-  console.log('PANEL2 sink:', JSON.stringify(sinkLog))
-}
-check(panel2.text().includes('tok-abc123'), 'the minted token is displayed for the human to carry to the conversation')
-
-/* --- a preset is one click, and asks for nothing -------------------------------------------------- */
-
-// DESIGN §2.39 acceptance 1. The old empty state pointed at a form that wanted a title, a prompt and
-// a number of seconds; "one tap" is the claim, so the check is that the panel offers it *and* that no
-// input is on screen waiting to be filled — a preset that still needs typing is the form again.
-const presetPanel = mount(
+const noHandsWindow = mount(
   bootWindow({
-    scripted: {
-      // Granted, this dock is one line by design, so the empty-schedule state below it is not on
-      // screen at all. The preset is for a person who is still setting things up, which is the
-      // ungranted conversation - so that is the state this check has to look at.
-      status: healthyStatus(),
-      'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } },
-    },
+    scripted: { status: healthyStatus(), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } },
   }).component,
   { sessionId: 'session-active' },
 )
-await presetPanel.settle()
-check(!presetPanel.text().includes('每天看一眼 CI 失败'), 'without a conversation there is no form, so no preset to fill it')
-check(!presetPanel.buttons().some((button) => textOf(button).trim() === '新建'), 'and no control that would open one')
-check(presetPanel.inputs().length === 1, 'and its only input is the message box, not a form')
+await noHandsWindow.settle()
+check(
+  foreignWindowControls(noHandsWindow).length === 0,
+  `the floating window offers nothing but its own views and one box to type in (saw ${JSON.stringify(foreignWindowControls(noHandsWindow))})`,
+)
+check(
+  !noHandsWindow.text().includes('授予') && !noHandsWindow.text().includes('撤销'),
+  'and carries no grant or revoke control, so nothing in it can change den\'s authority',
+)
+check(
+  !noHandsWindow.text().includes('工具受保护') && !noHandsWindow.text().includes('工具直通'),
+  'and says nothing about the approval gate, armed or direct: this window cannot answer a gate question',
+)
+check(
+  !calls.some((entry) => entry.body?.action === 'autonomy/request' || entry.body?.action === 'autonomy/confirm'),
+  'and opening it asks for no authority at all',
+)
+check(
+  noHandsWindow.inputs().length === 1,
+  `and its one input is the message box, not a form (saw ${noHandsWindow.inputs().length})`,
+)
+
+/* --- the window's three states, and no fourth ------------------------------ */
+
+/**
+ * The state dot the window drew for one scripted status.
+ *
+ * `data-state` is the contract: it is read from the settled tree, so a check cannot pass on a label
+ * that happens to be on screen from an unrelated row — and it cannot pass on the first render either,
+ * which has no snapshot yet and honestly reports `quiet` until one arrives.
+ */
+async function windowMode(status) {
+  const handle = mount(bootWindow({ scripted: { status: { ok: true, value: status } } }).component, {})
+  await handle.settle()
+  const dot = findAll(handle.tree, (node) => node.props?.['data-dsh-role'] === 'status-dot')[0]
+  if (process.env.PROBE_SLOTS) {
+    console.log('  renders:', JSON.stringify(sandboxWindow.__probe || []))
+    console.log('  modes:', JSON.stringify(sandboxWindow.__probeModes || []))
+  }
+  return { handle, state: dot?.props?.['data-state'], color: String(dot?.props?.style?.background || '') }
+}
+
+// `healthyStatus()` is den's healthy week: it carries a step parked on the person
+// (`tasks.waiting: 1`), which is exactly what the amber state is for — the pill's own state check
+// further down pins that reading. So a check about "nothing owed" has to say so in its fixture:
+// the claim is about the state a live heartbeat with an empty to-do list gets, and a fixture that
+// borrows `healthyStatus()` whole would be asserting the claim against the opposite input.
+const NOTHING_OWED = { notices: { total: 0, deliverable: 0, expired: 0, pending: [] }, tasks: { active: 0, blocked: 0, waiting: 0, total: 0 }, triggers: { total: 0, invalid: 0, due: 0 }, kernelDeferred: null }
+
+const idleDot = await windowMode({ ...healthyStatus().value, ...NOTHING_OWED })
+check(idleDot.state === 'running', `a live heartbeat with nothing owed is running (saw ${idleDot.state})`)
+check(
+  idleDot.handle.text().includes('心跳运行中'),
+  'and the activity view still says in words what the green light means',
+)
+// The notice is put in `notices.pending`, which is the field the host fills with the text of what is
+// owed (`src/index.js`), and the to-do list is emptied so the amber light can only come from the
+// notice: a fixture that also parked a step on the person would light up either way and prove neither.
+const waitingDot = await windowMode({
+  ...healthyStatus().value,
+  ...NOTHING_OWED,
+  notices: { total: 1, deliverable: 1, expired: 0, pending: [{ id: 'notice-1', text: '磁盘快满了', createdAt: 1 }] },
+})
+check(waitingDot.state === 'waiting', `an unread notice for the person is waiting, not running (saw ${waitingDot.state})`)
+const dueDot = await windowMode({ ...healthyStatus().value, ...NOTHING_OWED, triggers: { total: 1, invalid: 0, due: 1 } })
+check(dueDot.state === 'waiting', `a self-check that came due is waiting too (saw ${dueDot.state})`)
+const offDot = await windowMode({ ...healthyStatus().value, kernel: { running: false, lastTickAt: 1, lastError: null } })
+check(offDot.state === 'quiet', `a stopped heartbeat is quiet rather than a fault to chase (saw ${offDot.state})`)
+const spentDot = await windowMode({ ...healthyStatus().value, dailyTurnBudget: 0 })
+check(spentDot.state === 'quiet', `a zero daily budget is quiet, because den may start nothing today (saw ${spentDot.state})`)
+
+// The mode the old design called `approval` no longer exists in any input: a busy gate is not a
+// fourth state, because the light would ask for a decision this window cannot take. The rest of the
+// snapshot is emptied so the expected `running` is a claim about the gate alone — with work also
+// parked on the person the light would be amber whatever the gate did, and the check would pass
+// without ever having exercised the thing it is named after.
+const busyGateDot = await windowMode({
+  ...healthyStatus().value,
+  ...NOTHING_OWED,
+  gate: { mounted: true, recent: [{ at: Date.now(), decision: 'ask', tool: 'web_fetch' }] },
+})
+check(
+  busyGateDot.state === 'running',
+  `a pending approval is not a state this window reports (saw ${busyGateDot.state})`,
+)
+check(
+  foreignWindowControls(busyGateDot.handle).length === 0,
+  `and a busy gate adds no control for answering it (saw ${JSON.stringify(foreignWindowControls(busyGateDot.handle))})`,
+)
+check(
+  !findAll(busyGateDot.handle.tree, (node) => node.props?.['data-dsh-role'] === 'permission-card').length,
+  'and renders no approval card, whatever the gate is doing',
+)
 
 /* --- the resident is visible without opening anything -------------------------------------------- */
 
@@ -662,6 +712,19 @@ function registersSlot(name) {
   const probe = makeCtx()
   exportsValue.apply(probe)
   return probe.slots.entries.some((entry) => entry.options && entry.options.name === name)
+}
+/**
+ * den's own sidebar entry id, probed without clearing `calls`.
+ *
+ * The window and the page must not share an id: reusing the sidebar's key would put the floating
+ * window in the sidebar's cell. Read from a probe context with its own `apply`, because `boot()`
+ * resets the scripted replies the checks further down still read.
+ */
+function sidebarEntryId() {
+  const probe = makeCtx()
+  exportsValue.apply(probe)
+  const entry = probe.slots.entries.find((item) => item.options?.name === 'sidebar.panellist')
+  return entry?.options?.id
 }
 check(registersSlot('sidebar.panellist'), 'den is discoverable from the sidebar panel list')
 check(!registersSlot('sidebar.toggle.badge'), 'and puts no dot in the sidebar toggle either')
@@ -680,8 +743,8 @@ await shutPanel.settle()
 const shutButton = shutPanel.buttons().find((button) => button.props?.['aria-label']?.includes('打开 den 面板'))
 const shutLabel = String(shutButton?.props?.['aria-label'] || '')
 check(
-  shutLabel.includes('\u5e38\u9a7b\u4e2d'),
-  'the shut floating window keeps whether the resident is running in its accessible label',
+  shutLabel.includes('\u8fd0\u884c\u4e2d'),
+  'the shut floating window keeps the state it can see in its accessible label',
 )
 check(
   shutLabel.includes('\u6709\u8bdd\u60f3\u8ddf\u4f60\u8bf4'),
@@ -702,35 +765,38 @@ check(
   'and opening it again shows the panel rather than the pill',
 )
 
-// --- the static preview page --------------------------------------------------------------------
+// --- the window says what it can and cannot do ----------------------------------------------------
 //
-// How the panel *looks* is decided by a human, not by an assertion, so the harness can emit the very
-// trees it just rendered as a standalone page. It is generated here, from the same components the
-// checks drive, because a hand-written preview drifts: the checks keep passing while the file on disk
-// quietly shows the previous design.
-check(panel2.text().includes('一次性'), 'the panel explains the token is single-use')
+// This block used to drive the grant strip and its copy control — a token the window handed to the
+// person so they could carry it to a conversation. The strip is gone with the permission tab, and
+// with it the whole class of checks that watched a window hand out authority. What replaces them
+// watches the two directions the window still has: typing into it, and being told the host is older.
 
-/* --- carrying the token is one click, and a copy that did not happen says so --- */
-
-// The token is long, single-use and wrapped across lines, and a copy missing one character is
-// refused downstream as "the message does not quote the token" — a message that names no
-// character and leaves the human with nothing to fix. So the strip offers a copy control, and
-// both directions of it are checked here: this harness has no clipboard (as a hardened browser
-// may not), and a label that claims a copy the browser refused would be worse than no button.
-const copyLabel = () => {
-  const button = panel2.buttons().find((candidate) => /复制令牌|已复制|复制失败/.test(textOf(candidate)))
-  return { button, label: button ? textOf(button).trim() : '' }
-}
-check(Boolean(copyLabel().button), 'the token strip offers a copy control')
-await panel2.click(copyLabel().label)
-check(panel2.text().includes('复制失败'), 'with no clipboard available the panel reports the failure instead of claiming a copy')
-
-const copied = []
-fakeNavigator.clipboard = { writeText: (text) => { copied.push(text); return Promise.resolve() } }
-await panel2.click(copyLabel().label)
-check(copied.includes('tok-abc123'), 'and with a clipboard it puts the exact token on it')
-check(panel2.text().includes('已复制'), 'and then says the copy happened')
-fakeNavigator.clipboard = undefined
+const panelPrompt = mount(
+  bootWindow({
+    scripted: {
+      status: healthyStatus(),
+      'conversation/read': { ok: true, value: { sessionId: 'sess-prompt', state: 'live', total: 0, truncated: false, messages: [] } },
+      'conversation/say': { ok: true, value: { messageId: 'den-say-2', sessionId: 'sess-prompt', state: 'live' } },
+    },
+  }).component,
+  {},
+)
+await panelPrompt.settle()
+check(
+  (panelPrompt.inputs()[0]?.props?.placeholder || '').includes('问 den 一句'),
+  'the message box names itself as the way to talk to den',
+)
+await panelPrompt.type(0, '帮我看一眼 CI')
+check(
+  (findAll(panelPrompt.tree, (node) => node.props?.['data-dsh-role'] === 'pet-input')[0]?.props?.value || '') === '帮我看一眼 CI',
+  'and keeps what was typed in it',
+)
+await panelPrompt.press('发送')
+check(
+  calls.some((entry) => entry.body?.action === 'conversation/say' && entry.body?.text === '帮我看一眼 CI'),
+  'and Send posts exactly that sentence to the standing conversation',
+)
 
 /* --- creating a self-check sends the right payload ------------------------ */
 
@@ -745,10 +811,22 @@ await panel3.settle()
 // the other way first — the whole form, three labelled inputs and a button, once rendered
 // permanently above the message box and took most of a screen.
 check(panel3.inputs().length === 1, `the window has exactly one input, the message box; saw ${panel3.inputs().length}`)
-check(panel3.buttons().some((button) => textOf(button).trim() === '发送'), 'and one way to send what is typed')
+// The send control is an arrow with an accessible name rather than a word, so it is found the way a
+// person using a screen reader would find it.
+const sendButton = (handle) => handle.buttons().find((button) => button.props?.['aria-label'] === '发送')
+check(Boolean(sendButton(panel3)), 'and one way to send what is typed')
 check(!panel3.text().includes('新建自检'), 'and no submit button')
 check(!panel3.buttons().some((button) => textOf(button).trim() === '新建'), 'and nothing that would open a form')
+// The empty state is on the conversation tab, so the tab has to be opened for it to be a claim about
+// anything: the window starts on activity, and a check that read the empty state without opening the
+// tab would be reading a view that is not on screen.
+findAll(panel3.tree, (node) => node.props?.['data-dsh-role'] === 'pet-tab')[1]?.props?.onClick()
+await panel3.settle()
 check(panel3.text().includes('还没有对话'), 'an empty conversation says how to start one')
+check(
+  findAll(panel3.tree, (node) => node.props?.['data-dsh-role'] === 'pet-chat')[0]?.props?.style?.display === 'flex',
+  'and opening that tab is what puts the transcript on screen',
+)
 
 check(
   !calls.some((entry) => entry.body?.action === 'schedules/create'),
@@ -852,21 +930,25 @@ const holdingPanel = mount(
 await holdingPanel.settle()
 check(!holdingPanel.text().includes('待命'), 'while the host that holds residency is not labelled standby')
 
-/* --- no session means no grant button, on either seat ---------------------- */
+/* --- no session is no impediment, because there is nothing to grant --------- */
 
-// The status page offers none at all: it is mounted in `main`, which the shell documents as giving
-// no Session binding to any key but the reserved `conversation` — asserted at the top of this file.
-// The dock's own seat always carries a session, so the case below cannot arise through the shell; it
-// pins the guard directly, with a prop the shell would not send.
+// The window used to carry a grant control whose `revoke` half was disabled without a conversation.
+// Both halves are gone: an assistant that reads everything, drafts, and never writes needs no
+// authority button on the surface that is always on screen — and the disabled state that used to be
+// pinned here cannot arise at all any more. What is pinned instead is that the window renders, and
+// asks for nothing, even when the host says nothing about autonomy and no session is handed over.
 const panel8 = mount(
   boot({ scripted: { status: healthyStatus({ autonomyKnown: false }), 'schedules/list': { ok: true, value: { schedules: [], invalidCount: 0 } } } }, 'shell.overlay'),
   { sessionId: null },
 )
 await panel8.settle()
-const grantButton = panel8.buttons().find((button) => textOf(button).trim() === '授予')
-check(grantButton?.props?.disabled !== true, 'grant needs no conversation, so it is not disabled')
-const revokeButton8 = panel8.buttons().find((button) => textOf(button).trim() === '撤销')
-check(revokeButton8?.props?.disabled === true, 'but revoke does, so it is disabled rather than silently doing nothing')
+check(panel8.buttons().length > 0, 'the floating window renders with no session handed to it at all')
+check(
+  foreignWindowControls(panel8).length === 0,
+  `and asks for nothing, offering no grant, approve or deny control (saw ${JSON.stringify(foreignWindowControls(panel8))})`,
+)
+
+/* --- the window is the conversation: what was said, and a way to say more --- */
 
 /* --- the window is the conversation: what was said, and a way to say more --- */
 
@@ -879,6 +961,10 @@ const panelTalk = mount(
         value: {
           sessionId: 'sess-standing',
           state: 'stored',
+          // The host names the path it read (`src/conversation.js`): store, log, or none. Without it
+          // here the window was shown a reply the real host never sends, and reported — correctly —
+          // that it had not been told where the transcript came from.
+          readFrom: 'store',
           total: 12,
           truncated: true,
           messages: [
@@ -893,24 +979,79 @@ const panelTalk = mount(
   {},
 )
 await panelTalk.settle()
+// The window opens on activity, and the transcript lives on the conversation tab, so the tab has to
+// be opened before a claim about what the transcript shows is a claim about what is on screen. What
+// is being pinned below is the order itself: the read is asked for *because* the tab was opened.
+const petTabs = findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'pet-tab')
+check(petTabs.length === 2, 'the pet exposes activity and conversation views without adding another window')
+check(
+  petTabs.map((node) => textOf(node).trim()).join('|') === '活动|对话',
+  `and those two views are activity and conversation (saw ${petTabs.map((node) => textOf(node).trim()).join('|')})`,
+)
+check(
+  !findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'permission-card').length,
+  'and there is no permission card anywhere in it',
+)
+check(
+  !findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'pet-chat').length,
+  'and the window opens on activity, with the transcript not fetched yet',
+)
+const chatTab = petTabs.find((node) => textOf(node).trim() === '对话')
+const chatRequestsAtOpen = calls.filter((entry) => entry.body?.action === 'conversation/read').length
+chatTab?.props?.onClick()
+await panelTalk.settle()
+const chatRequestsAfterOpen = calls.filter((entry) => entry.body?.action === 'conversation/read').length
+check(chatRequestsAfterOpen > chatRequestsAtOpen, 'opening the conversation tab asks the host for the transcript')
+check(
+  findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'pet-chat').length === 1,
+  'and that tab is what draws it',
+)
 check(panelTalk.text().includes('are you awake?'), 'the window shows what was said to den')
 check(panelTalk.text().includes('awake, and nothing is on fire'), 'and what den said back')
-check(panelTalk.text().includes('只显示最近的消息'), 'and says so when it is showing only a tail of the transcript')
-check(panelTalk.text().includes('工具受保护'), 'the open pet carries the real approval state beside the conversation')
-const petTabs = findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'pet-tab')
-check(petTabs.length === 2, 'the pet exposes activity and permission views without adding another window')
-const permissionTab = petTabs.find((node) => textOf(node).trim() === '权限')
-permissionTab?.props?.onClick()
-await panelTalk.settle()
-check(findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'permission-card').length === 1, 'the permission view renders a real gate card')
-check(panelTalk.text().includes('危险或远程动作会停在这里等你确认'), 'the armed gate card explains when den will stop for confirmation')
+check(
+  panelTalk.text().includes('更早的消息仍在磁盘转录里'),
+  'and says so when it is showing only a tail of the transcript',
+)
+// Where the transcript came from is stated rather than inferred: the host answers from a live
+// session, a stored session, or the log on disk, and a window that silently fell back to the log was
+// read as "den lost the conversation" (measured 2026-10-15).
+check(panelTalk.text().includes('来自会话存储'), 'and names the store as where it read them')
 const activityTab = petTabs.find((node) => textOf(node).trim() === '活动')
 activityTab?.props?.onClick()
 await panelTalk.settle()
-check(!findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'permission-card').length, 'returning to activity folds the permission card away')
+check(
+  findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'pet-chat')[0]?.props?.style?.display === 'none',
+  'while returning to activity folds the transcript away without unmounting it',
+)
 check(panelTalk.inputs().length === 1, 'there is one place to type')
+check(
+  (panelTalk.inputs()[0]?.props?.placeholder || '').includes('问 den 一句'),
+  'and it says it is the box you talk to den with',
+)
+// Three shortcuts, and only three. They fill the box; they do not send. A shortcut that fired a turn
+// by itself would be the window acting for the person, which is exactly what this surface must not do.
+const shortcuts = findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'pet-shortcut')
+check(shortcuts.length === 3, `the box carries three quick things to say (saw ${shortcuts.length})`)
+check(
+  shortcuts.map((node) => textOf(node).trim()).join('|') === '查看活动|解释状态|运行自检',
+  `and they are the three named in the design (saw ${shortcuts.map((node) => textOf(node).trim()).join('|')})`,
+)
+const saysBeforeShortcut = calls.filter((entry) => entry.body?.action === 'conversation/say').length
+const focused = []
+;(panelTalk.inputs()[0]?.props?.ref || {}).current = { focus: () => focused.push('input') }
+findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'pet-shortcut')[0]?.props?.onClick()
+await panelTalk.settle()
+check(
+  calls.filter((entry) => entry.body?.action === 'conversation/say').length === saysBeforeShortcut,
+  'a shortcut sends nothing: it only puts the words in the box',
+)
+check(
+  (findAll(panelTalk.tree, (node) => node.props?.['data-dsh-role'] === 'pet-input')[0]?.props?.value || '') === '查看活动',
+  'and the words it puts there are the shortcut\u2019s own',
+)
+check(focused.length === 1, 'and the cursor is put in the box so the sentence can be finished or rewritten')
 await panelTalk.type(0, 'look at the CI failures')
-await panelTalk.click('发送')
+await panelTalk.press('发送')
 const saidCall = calls.find((entry) => entry.body?.action === 'conversation/say')
 check(saidCall?.body?.text === 'look at the CI failures', 'sending posts exactly what was typed')
 check(panelTalk.text().includes('are you awake?'), 'and the conversation is still on screen afterwards')
@@ -943,6 +1084,9 @@ const panelDead = mount(
   }).component,
   {},
 )
+await panelDead.settle()
+// The reason the window is empty is drawn by the transcript, which lives on the conversation tab.
+findAll(panelDead.tree, (node) => node.props?.['data-dsh-role'] === 'pet-tab')[1]?.props?.onClick()
 await panelDead.settle()
 check(panelDead.text().includes('上一回合没能完成'), 'an empty conversation says why it is empty')
 check(
@@ -996,8 +1140,12 @@ const panelEcho = mount(
   {},
 )
 await panelEcho.settle()
+// The optimistic copy lives in the transcript, so the tab has to be open for the sentence to have
+// somewhere to be drawn — and for this check to be about what is on screen.
+findAll(panelEcho.tree, (node) => node.props?.['data-dsh-role'] === 'pet-tab')[1]?.props?.onClick()
+await panelEcho.settle()
 await panelEcho.type(0, 'already logged')
-await panelEcho.click('发送')
+await panelEcho.press('发送')
 await panelEcho.settle()
 const echoCount = leafText(panelEcho.tree).filter((text) => text === 'already logged').length
 check(echoCount === 1, 'a line the log already carries is not shown twice when it is sent again (drawn ' + String(echoCount) + ' times)')
@@ -1024,12 +1172,20 @@ const panelPill = mount(
 await panelPill.settle()
 const panelPillButton = panelPill.buttons().find((button) => button.props?.['aria-label']?.includes('打开 den 面板'))
 const panelPillLabel = String(panelPillButton?.props?.['aria-label'] || '')
-check(panelPillLabel.includes('心跳运行中'), 'the shut pill keeps the real kernel state in its accessible label')
-check(!panelPillLabel.includes('已停'), 'and does not also report it as stopped')
+check(panelPillLabel.includes('运行中'), 'the shut pill keeps the real state in its accessible label')
 check(!panelPillLabel.includes('宿主待重启'), 'a host that sends the budget is not called older')
+check(!panelPillLabel.includes('工具受保护') && !panelPillLabel.includes('工具直通'), 'and says nothing about the approval gate')
 check(panelPillLabel.includes('回合 2/24'), "and keeps today's self-initiated budget in the accessible label")
-check(panelPillButton?.props?.style?.width === 36 && panelPillButton?.props?.style?.height === 36, 'and reduces the shut control to a small desktop-pet button')
-check(panelPillButton?.children?.length === 1, 'and shows only den\'s mark and status dot visibly')
+check(
+  panelPillButton?.props?.style?.width === 44 && panelPillButton?.props?.style?.height === 44,
+  'and reduces the shut control to the 44px rounded square the design asks for',
+)
+check(panelPillButton?.props?.style?.borderRadius === 15, 'with the corner radius that goes with that square')
+check(panelPillButton?.children?.length === 1, 'and shows only den\'s mark, with the state dot in its corner')
+// The state dot has to survive the collapse: the shut pill is the surface a person actually sees, so
+// a light that only exists while the window is open is a light that is never on when it matters.
+const pillDot = findAll(panelPill.tree, (node) => node.props?.['data-dsh-role'] === 'status-dot')[0]
+check(pillDot?.props?.['data-state'] === 'waiting', `and carries the same state the open window would (saw ${pillDot?.props?.['data-state']})`)
 
 const panelPillDeferred = mount(
   bootWindow({
@@ -1052,15 +1208,18 @@ check(!panelPillDeferredLabel.includes('心跳运行中'), 'and does not claim t
 
 /* --- the transcript scrolls in its own area, which is what "scrollable" means --- */
 
-const scrollArea = findAll(panelTalk.tree, (n) => n.props?.style?.overflowY === 'auto')
-check(scrollArea.length === 1, 'the transcript has exactly one scrolling area of its own')
-check(Number(scrollArea[0]?.props?.style?.maxHeight) > 0, 'and that area is bounded, so the window cannot grow with the transcript')
+// Both views live in the card at once — the inactive one is hidden rather than unmounted, so a tab
+// switch is not a re-fetch — which means "one scroll area in the tree" is no longer the question. The
+// question is whether the transcript has a bounded one of its own, and the bound is what is pinned.
+const transcriptScroll = findAll(panelTalk.tree, (n) => n.props?.style?.overflowY === 'auto' && Number(n.props?.style?.maxHeight) > 0)
+check(transcriptScroll.length === 1, `the transcript has exactly one scrolling area of its own (saw ${transcriptScroll.length})`)
+check(Number(transcriptScroll[0]?.props?.style?.maxHeight) > 0, 'and that area is bounded, so the window cannot grow with the transcript')
 /* --- the window places and paints itself, because the layer gives it neither --- */
 
-const cardNodes = findAll(panelTalk.tree, (n) => n.props?.style?.position === 'absolute' && n.props?.style?.width === 260)
+const cardNodes = findAll(panelTalk.tree, (n) => n.props?.style?.position === 'absolute' && n.props?.style?.width === 286)
 check(cardNodes.length === 1, 'the open window places and sizes itself instead of becoming a strip across the top')
 check(cardNodes[0]?.props?.style?.right === 24 && cardNodes[0]?.props?.style?.top === 72 && cardNodes[0]?.props?.style?.bottom === 'auto', 'and starts below the page header instead of colliding with it')
-check(String(cardNodes[0]?.props?.style?.background || '').includes('--dsw-alias-bg-overlay'), 'and paints a surface rather than reading as page furniture')
+check(String(cardNodes[0]?.props?.style?.background || '').includes('--dsw-alias-bg-layer-1'), 'and paints a surface rather than reading as page furniture')
 
 /* --- the collapse control actually collapses, through a real press ---------- */
 
@@ -1077,32 +1236,39 @@ check(collapseStopped === 1, 'so pressing it is not read as the start of a drag'
 collapseButton?.props?.onClick()
 await panelTalk.settle()
 check(
-  findAll(panelTalk.tree, (n) => n.props?.style?.width === 260).length === 0,
+  findAll(panelTalk.tree, (n) => n.props?.style?.width === 286).length === 0,
   'and pressing it puts the window away instead of doing nothing',
 )
 const reopened = findAll(panelTalk.tree, (n) => n.props?.['aria-label']?.includes('打开 den 面板'))[0]
 check(Boolean(reopened), 'leaving the shut pill in its place')
+// The press above was a real one, so the pill it leaves behind is judged as rendered: 44×44, rounded,
+// and no longer a circle, which is the shape the design asks for.
+check(
+  reopened?.props?.style?.width === 44 && reopened?.props?.style?.height === 44,
+  `and that pill is the 44×44 square the design asks for (saw ${reopened?.props?.style?.width}×${reopened?.props?.style?.height})`,
+)
 reopened?.props?.onClick()
 await panelTalk.settle()
-check(findAll(panelTalk.tree, (n) => n.props?.style?.width === 260).length === 1, 'and the pill brings the window back')
+check(findAll(panelTalk.tree, (n) => n.props?.style?.width === 286).length === 1, 'and the pill brings the window back')
 check(cardNodes[0]?.props?.style?.zIndex === 60, 'and sits above the page it floats over')
-check(cardNodes[0]?.props?.style?.height === 180, 'and starts with a smaller desktop-pet footprint')
+check(cardNodes[0]?.props?.style?.height === 216, 'and starts with the desktop-pet footprint the design specifies')
 check(cardNodes[0]?.props?.style?.resize === 'both', 'and exposes a native two-axis resize affordance')
-check(cardNodes[0]?.props?.style?.minWidth === 200 && cardNodes[0]?.props?.style?.minHeight === 140, 'and keeps the pet usable at its smallest size')
+check(cardNodes[0]?.props?.style?.minWidth === 240 && cardNodes[0]?.props?.style?.minHeight === 170, 'and keeps the pet usable at its smallest size')
+check(cardNodes[0]?.props?.style?.borderRadius === 18, 'and is rounded like the design, not like a page card')
 check(cardNodes[0]?.props?.['aria-label'] === '常驻会话', 'and gives the floating pet an accessible identity')
 
-fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false, width: 280, height: 190, sizeVersion: 3 }))
+fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false, width: 280, height: 190, sizeVersion: 4 }))
 const rememberedSizeWindow = mount(bootWindow({ scripted: { status: healthyStatus() } }).component, {})
 const rememberedSizeCard = findAll(rememberedSizeWindow.tree, (node) => node.props?.style?.position === 'absolute' && node.props?.style?.resize === 'both')[0]
 check(rememberedSizeCard?.props?.style?.width === 280 && rememberedSizeCard?.props?.style?.height === 190, 'and reopens at the dimensions the person chose')
-fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false, width: 280, height: 190, sizeVersion: 2 }))
+fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false, width: 280, height: 190, sizeVersion: 3 }))
 const legacyCustomWindow = mount(bootWindow({ scripted: { status: healthyStatus() } }).component, {})
 const legacyCustomCard = findAll(legacyCustomWindow.tree, (node) => node.props?.style?.position === 'absolute' && node.props?.style?.resize === 'both')[0]
 check(legacyCustomCard?.props?.style?.width === 280 && legacyCustomCard?.props?.style?.height === 190, 'and keeps a custom size from the previous preference version')
-fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false, width: 300, height: 210, sizeVersion: 2 }))
+fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false, width: 260, height: 180, sizeVersion: 3 }))
 const legacyDefaultWindow = mount(bootWindow({ scripted: { status: healthyStatus() } }).component, {})
 const legacyDefaultCard = findAll(legacyDefaultWindow.tree, (node) => node.props?.style?.position === 'absolute' && node.props?.style?.resize === 'both')[0]
-check(legacyDefaultCard?.props?.style?.width === 260 && legacyDefaultCard?.props?.style?.height === 180, 'and migrates the old built-in size to the new compact default')
+check(legacyDefaultCard?.props?.style?.width === 286 && legacyDefaultCard?.props?.style?.height === 216, 'and migrates the old built-in size to the redrawn default')
 const resizeTarget = { getBoundingClientRect: () => ({ width: 412, height: 318 }) }
 if (rememberedSizeCard?.props?.ref) rememberedSizeCard.props.ref.current = resizeTarget
 await rememberedSizeWindow.settle()
@@ -1129,9 +1295,22 @@ const panelOldHost = mount(
   {},
 )
 await panelOldHost.settle()
+// The verdict itself is the transcript's, so the tab has to be opened to read it off the screen.
+findAll(panelOldHost.tree, (node) => node.props?.['data-dsh-role'] === 'pet-tab')[1]?.props?.onClick()
+await panelOldHost.settle()
 check(panelOldHost.text().includes('重启 DSH'), 'a window whose host half is older says what to do about it')
 check(!panelOldHost.text().includes('unknown action'), "and does not print the host's error text as if den were broken")
-const oldHostSend = panelOldHost.buttons().find((button) => textOf(button).trim() === '发送')
+// The send control is an arrow with an accessible name rather than a word, so it is found the way the
+// earlier check found it and the way a screen reader would: by that name. Looking for a button whose
+// *text* is 发送 found nothing at all, so `disabled` was read off `undefined` and the check passed
+// without ever touching the control.
+//
+// A sentence is typed first on purpose. With the box empty the control is disabled for that reason
+// alone, so "cannot be pressed" would say nothing about the older host; with words in the box the only
+// thing that can still be holding it shut is the phase the transcript reported.
+await panelOldHost.type(0, '这一句不该发出去')
+const oldHostSend = panelOldHost.buttons().find((button) => button.props?.['aria-label'] === '发送')
+check(Boolean(oldHostSend), 'the window still shows its one send control')
 check(oldHostSend?.props?.disabled === true, 'and the send button it still shows cannot be pressed')
 
 fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: true }))
@@ -1153,7 +1332,7 @@ check(pillPlaced.length >= 1, 'and the shut pill places itself too, rather than 
 fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: false }))
 const dragWindow = mount(bootWindow({ scripted: { status: healthyStatus() } }).component, {})
 await dragWindow.settle()
-const dragHandles = findAll(dragWindow.tree, (node) => node.props?.['data-dsh-role'] === 'drag-handle')
+const dragHandles = findAll(dragWindow.tree, (node) => node.props?.['data-dsh-role'] === 'pet-header')
 check(dragHandles.length === 1, `the window offers exactly one drag handle; saw ${dragHandles.length}`)
 
 let measured = 0
@@ -1185,7 +1364,7 @@ const dragPillWindow = mount(bootWindow({ scripted: { status: healthyStatus() } 
 await dragPillWindow.settle()
 const dragPill = dragPillWindow.buttons().find((button) => button.props?.['aria-label']?.includes('打开 den 面板'))
 const pillTarget = {
-  getBoundingClientRect: () => ({ left: 100, top: 120, width: 36, height: 36 }),
+  getBoundingClientRect: () => ({ left: 100, top: 120, width: 44, height: 44 }),
   setPointerCapture: () => {},
 }
 dragPill?.props?.onPointerDown({ currentTarget: pillTarget, pointerId: 8, clientX: 110, clientY: 130, stopPropagation: () => {} })
@@ -1196,7 +1375,18 @@ const keptPillPreference = JSON.parse(fakeStorage.getItem('dsh-den.mini') || '{}
 check(keptPillPreference.x === 200 && keptPillPreference.y === 180, `the shut pill moves with the pointer (${keptPillPreference.x}, ${keptPillPreference.y})`)
 dragPill?.props?.onClick({ preventDefault: () => {} })
 await dragPillWindow.settle()
-check(findAll(dragPillWindow.tree, (node) => node.props?.style?.width === 36).length === 1, 'and a drag does not accidentally open the pill')
+// The pill stays a pill: one shut control, still carrying its accessible name, with no open card
+// behind it. Counting nodes with `width === 44` looked like the same question and was not — the
+// pill's own mark span is a 44px box too, so the count was two for a pill that had correctly
+// refused to open, and the check was red on a control that did the right thing.
+check(
+  findAll(dragPillWindow.tree, (node) => node.props?.['aria-label']?.includes('打开 den 面板')).length === 1,
+  'and a drag does not accidentally open the pill',
+)
+check(
+  findAll(dragPillWindow.tree, (node) => node.props?.style?.width === 286).length === 0,
+  'and the window it would open stays shut behind it',
+)
 
 fakeStorage.setItem('dsh-den.mini', JSON.stringify({ collapsed: true }))
 const clickPillWindow = mount(bootWindow({ scripted: { status: healthyStatus() } }).component, {})
@@ -1204,7 +1394,7 @@ await clickPillWindow.settle()
 const clickPill = clickPillWindow.buttons().find((button) => button.props?.['aria-label']?.includes('打开 den 面板'))
 clickPill?.props?.onClick({})
 await clickPillWindow.settle()
-check(findAll(clickPillWindow.tree, (node) => node.props?.style?.width === 260).length === 1, 'and a short click still opens the den window')
+check(findAll(clickPillWindow.tree, (node) => node.props?.style?.width === 286).length === 1, 'and a short click still opens the den window')
 
 /* --- a remembered place that no longer fits is pulled back into view -------- */
 
@@ -1218,7 +1408,7 @@ const offscreenPill = findAll(
   offscreenWindow.tree,
   (node) =>
     node.props?.style?.position === 'absolute' &&
-    node.props?.style?.width === 36 &&
+    node.props?.style?.width === 44 &&
     Number.isFinite(Number(node.props?.style?.left)),
 )[0]
 check(Boolean(offscreenPill), 'a shut pill with an off-screen remembered place is still rendered')
@@ -1289,11 +1479,13 @@ if (process.argv.includes('--demo')) {
       {
         label: '① 浮窗卡片：全屏唯一的 den 落点（shell.overlay）',
         // `dock` here is the `shell.overlay` entry — the descriptor, not the retired input dock its
-        // old label named. `grantPanel` is that component mounted with the session the shell hands
-        // over, which is the real case; it pairs with the `main, shell.overlay` injection check.
+        // old label named. It is that component mounted with the session the shell hands over, which
+        // is the real case; it pairs with the `main, shell.overlay` injection check. (`grantPanel`
+        // was named here and never existed: the reference threw a ReferenceError, so the harness
+        // could not run at all and `docs/demo.html` could not be regenerated either.)
         hint: '默认 300×210；按住顶部条移动，拖右下角调整大小；[–] 收成 den 图标',
         tall: true,
-        tree: grantPanel.tree,
+        tree: dock.tree,
       },
       {
         label: '② 浮窗里的消息流：可滚动、可直接发话',

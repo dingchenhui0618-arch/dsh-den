@@ -198,7 +198,6 @@
     .pet.collapsed .pet-title, .pet.collapsed .pet-status, .pet.collapsed .pet-action { display: none; }
     .pet.collapsed .pet-header::after { content: ""; position: absolute; top: 5px; right: 5px; width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 2px #203128; }
     .pet.collapsed[data-mode="waiting"] .pet-header::after { background: var(--amber); box-shadow: 0 0 0 2px #2c2618; }
-    .pet.collapsed[data-mode="approval"] .pet-header::after { background: var(--red); box-shadow: 0 0 0 2px #2d1c1c; }
     .pet.collapsed[data-mode="quiet"] .pet-header::after { background: var(--dim); box-shadow: 0 0 0 2px #22272a; }
     .pet-body { display: flex; flex-direction: column; height: calc(100% - 42px); min-height: 0; }
     .pet.collapsed .pet-body { display: none; }
@@ -296,7 +295,6 @@
             <div class="mode-controls" role="group" aria-label="切换 den 状态">
               <button class="mode-button active" data-mode="running" type="button"><span class="status-dot running"></span>运行中<small>quiet</small></button>
               <button class="mode-button" data-mode="waiting" type="button"><span class="status-dot waiting"></span>等待你<small>soft prompt</small></button>
-              <button class="mode-button" data-mode="approval" type="button"><span class="status-dot approval"></span>需要确认<small>interrupt</small></button>
               <button class="mode-button" data-mode="quiet" type="button"><span class="status-dot"></span>安静<small>sleep</small></button>
             </div>
             <div class="caption">拖动 den 的顶部栏移动；拖动右下角调整尺寸；收起后只留下图标和状态点。</div>
@@ -315,7 +313,6 @@
             <nav class="pet-tabs" aria-label="den 面板视图">
               <button class="pet-tab active" type="button" data-tab="activity">活动</button>
               <button class="pet-tab" type="button" data-tab="chat">对话</button>
-              <button class="pet-tab" type="button" data-tab="permissions">权限</button>
             </nav>
             <div class="pet-content" id="petContent">
               <div data-view="activity">
@@ -348,7 +345,7 @@
       const handle = document.getElementById('petDragHandle');
       const toast = document.getElementById('toast');
       const storageKey = 'dsh-den-reactbits-preview';
-      const labels = { running: '运行中', waiting: '等待你', approval: '需要确认', quiet: '安静' };
+      const labels = { running: '运行中', waiting: '等待你', quiet: '安静' };
       let state = { mode: 'running', collapsed: false, x: null, y: null, width: 286, height: 216 };
       let drag = null;
       let suppressClick = false;
@@ -387,7 +384,7 @@
           if (state.height) pet.style.height = state.height + 'px';
         }
         document.querySelectorAll('[data-status-dot]').forEach((dot) => {
-          dot.classList.remove('running', 'waiting', 'approval');
+          dot.classList.remove('running', 'waiting');
           if (state.mode !== 'quiet') dot.classList.add(state.mode);
         });
         document.querySelectorAll('[data-status-text]').forEach((el) => el.textContent = labels[state.mode]);
@@ -398,7 +395,7 @@
         });
         document.querySelectorAll('[data-mode]').forEach((button) => button.classList.toggle('active', button.dataset.mode === state.mode));
         const summary = document.querySelector('[data-summary-value]');
-        if (summary) summary.textContent = state.mode === 'approval' ? '1 个决定' : state.mode === 'quiet' ? '没有新信号' : state.mode === 'waiting' ? '1 个提示' : '3 个信号';
+        if (summary) summary.textContent = state.mode === 'quiet' ? '没有新信号' : state.mode === 'waiting' ? '1 个提示' : '3 个信号';
         if (state.mode === 'approval') {
           document.querySelector('[data-view="permissions"]').hidden = false;
           document.querySelector('[data-view="activity"]').hidden = true;

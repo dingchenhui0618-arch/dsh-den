@@ -97,7 +97,7 @@ window.__ModuleLoader__.load({
         sayEmpty: 'no conversation yet — say something to start one',
         sayFailed: 'the last turn did not finish: ',
         saySending: 'sending…',
-        saySending: 'sending…',
+        petTypeBelow: 'type below to add to it',
         sayTail: 'only the latest messages are shown; the rest are still in the transcript',
         sayHostOld: 'the host has not loaded this half yet — restart DSH and this becomes the conversation',
         grantDockGranted: 'granted for this conversation',
@@ -125,11 +125,22 @@ window.__ModuleLoader__.load({
         tasksStuck: 'stuck',
         tasksWaiting: 'waiting on you',
         petActivity: 'Activity',
-        petPermission: 'Permission',
+        petConversation: 'Conversation',
         petSignals: 'signals',
         petNoSignals: 'no new signals',
-        petPermissionArmed: 'Tools guarded · risky or remote actions stop here for your confirmation.',
-        petPermissionDirect: 'Tools pass through · the approval gate is off for this profile.',
+        petWatching: 'watching',
+        petStateRunning: 'running',
+        petStateWaiting: 'waiting for you',
+        petStateQuiet: 'quiet',
+        petModeUnknown: 'no snapshot yet',
+        petComposerPlaceholder: 'ask den something…',
+        petShortcutActivity: 'what happened',
+        petShortcutStatus: 'explain status',
+        petShortcutSelfCheck: 'run self-check',
+        petReadFromStore: 'from the session store',
+        petReadFromLog: 'read back from the log on disk',
+        petReadFromNone: 'the host handed back no transcript',
+        petMoreOnDisk: 'older messages are still in the transcript on disk',
         details: 'details',
         scheduleNone: 'none — say "check CI every 30 minutes" in the conversation and the den will add it',
         scheduleNew: 'New',
@@ -204,7 +215,7 @@ window.__ModuleLoader__.load({
         sayEmpty: '还没有对话 —— 说一句就开始',
         sayFailed: '上一回合没能完成:',
         saySending: '发送中…',
-        saySending: '发送中…',
+        petTypeBelow: '在下面输入框里接着说',
         sayTail: '只显示最近的消息，更早的都还在转录里',
         sayHostOld: '宿主还没加载会话这一半 —— 重启 DSH 后这里就是对话',
         noticesOwed: '你不在的时候：',
@@ -222,11 +233,22 @@ window.__ModuleLoader__.load({
         tasksStuck: '卡住',
         tasksWaiting: '等你',
         petActivity: '活动',
-        petPermission: '权限',
+        petConversation: '对话',
         petSignals: '个信号',
         petNoSignals: '没有新信号',
-        petPermissionArmed: '工具受保护 · 危险或远程动作会停在这里等你确认。',
-        petPermissionDirect: '工具直通 · 当前 profile 已关闭审批闸门。',
+        petWatching: '正在观察',
+        petStateRunning: '运行中',
+        petStateWaiting: '等待你',
+        petStateQuiet: '安静',
+        petModeUnknown: '还没有状态快照',
+        petComposerPlaceholder: '问 den 一句…',
+        petShortcutActivity: '查看活动',
+        petShortcutStatus: '解释状态',
+        petShortcutSelfCheck: '运行自检',
+        petReadFromStore: '来自会话存储',
+        petReadFromLog: '从磁盘日志回读',
+        petReadFromNone: '宿主没有交回转录',
+        petMoreOnDisk: '更早的消息仍在磁盘转录里',
         details: '详情',
         grantDockGranted: '本会话已授予',
         grantDockNotGranted: '本会话未授予',
@@ -499,11 +521,25 @@ window.__ModuleLoader__.load({
 
 /** How often the shut pill refreshes itself: slower than the open panel, never stopped. */
     var MINI_POLL_MS = 2000
-    var MINI_SIZE_VERSION = 3
-    var MINI_DEFAULT_WIDTH = 260
-    var MINI_DEFAULT_HEIGHT = 180
-    var MINI_MIN_WIDTH = 200
-    var MINI_MIN_HEIGHT = 140
+    /**
+     * The preference shape, bumped whenever the window's own size changes.
+     *
+     * Version 3's 260×180 was the built-in default until the pet was redrawn at 286×216. A stored
+     * size is the human's decision and outlives a redesign, so the reset is keyed on the *old default*
+     * rather than on the version number alone: a footprint somebody dragged to by hand is kept, and
+     * only the window nobody ever resized follows the new design.
+     */
+    var MINI_SIZE_VERSION = 4
+    var MINI_DEFAULT_WIDTH = 286
+    var MINI_DEFAULT_HEIGHT = 216
+    var MINI_LEGACY_DEFAULT_WIDTH = 260
+    var MINI_LEGACY_DEFAULT_HEIGHT = 180
+    var MINI_LEGACY_SIZE_VERSION = 3
+    var MINI_MIN_WIDTH = 240
+    var MINI_MIN_HEIGHT = 170
+    /** The shut control: a rounded square, so the status dot can still show in the corner. */
+    var MINI_PILL_SIZE = 44
+    var MINI_PILL_RADIUS = 15
     var MINI_MARGIN = 14
     var MINI_TOP_SAFE = 72
 
@@ -1562,12 +1598,6 @@ window.__ModuleLoader__.load({
       var state = React.useState({ phase: 'loading', data: null, error: null })
       var view = state[0]
       var setView = state[1]
-      var draft = React.useState('')
-      var typed = draft[0]
-      var setTyped = draft[1]
-      var sending = React.useState(false)
-      var busy = sending[0]
-      var setBusy = sending[1]
       /**
        * What was sent but is not in the transcript yet.
        *
@@ -1584,15 +1614,6 @@ window.__ModuleLoader__.load({
           .then(function (res) {
             var value = res && res.value !== undefined ? res.value : res
             if (value && typeof value === 'object') setView({ phase: 'ready', data: value, error: null })
-            // The log is the authority: once it carries the sentence, the optimistic copy goes.
-            if (value && Array.isArray(value.messages)) {
-              var logged = value.messages
-                .filter(function (m) { return m && m.role === 'user' })
-                .map(function (m) { return String(m.text || '').trim() })
-              setWaiting(function (prev) {
-                return prev.filter(function (text) { return logged.indexOf(text) < 0 })
-              })
-            }
           })
           .catch(function (error) {
             var message = String((error && error.message) || error)
@@ -1617,33 +1638,50 @@ window.__ModuleLoader__.load({
         }
       }, [])
 
-      function submit() {
-        var body = String(typed || '').trim()
-        if (!body || busy) return
-        setBusy(true)
-        act('conversation/say', { text: body })
-          .then(function () {
-            setTyped('')
-            // Shown at once, because the read below may legitimately predate the log entry.
-            setWaiting(function (prev) {
-              return prev.indexOf(body) >= 0 ? prev : prev.concat([body])
-            })
-            return load()
-          })
-          .catch(function (error) {
-            setView({ phase: 'error', data: view.data, error: String((error && error.message) || error) })
-          })
-          .then(function () { setBusy(false) })
-      }
+      /**
+       * The box lives at the window's foot, not here.
+       *
+       * This component used to carry one of its own, which put two inputs in a 286px window — the
+       * one the transcript owned and the one the pet owns. The transcript keeps what was typed and
+       * drops it the moment the log carries it, so the sentence is never drawn twice.
+       */
+      React.useEffect(function () {
+        var incoming = props.sent
+        if (!incoming || !incoming.at) return
+        setWaiting(function (previous) {
+          return previous.some(function (item) { return item.text === incoming.text }) ? previous : previous.concat([{ text: incoming.text, at: incoming.at }])
+        })
+      }, [props.sent])
+
+      // The log is the authority: once it carries the sentence, the optimistic copy goes. Done in an
+      // effect rather than inside `load` so it survives whatever order the render and the reply land in.
+      React.useEffect(function () {
+        var data = (view.data && typeof view.data === 'object' ? view.data : {}) || {}
+        if (!Array.isArray(data.messages)) return
+        var logged = data.messages
+          .filter(function (message) { return message && message.role === 'user' })
+          .map(function (message) { return String(message.text || '').trim() })
+        setWaiting(function (previous) {
+          var kept = previous.filter(function (item) { return logged.indexOf(String(item.text || '').trim()) < 0 })
+          return kept.length === previous.length ? previous : kept
+        })
+      }, [view.data])
+
+      /** Tell the window what this read found, so its box can be enabled or disabled on the truth. */
+      React.useEffect(function () {
+        if (typeof props.onPhase === 'function') props.onPhase(view.phase)
+      }, [view.phase])
 
       var data = (view.data && typeof view.data === 'object' ? view.data : {}) || {}
       var messages = Array.isArray(data.messages) ? data.messages : []
       var loggedTexts = messages
         .filter(function (message) { return message && message.role === 'user' })
         .map(function (message) { return String(message.text || '').trim() })
-      // Belt and braces with the state above: a text the transcript already carries is never drawn
-      // from here as well, whatever the timing of the read happens to be.
-      var waitingTexts = waitingText.filter(function (text) { return loggedTexts.indexOf(text) < 0 })
+      // Belt and braces with the effect above: a sentence the transcript already carries is never
+      // drawn from here as well, whatever order the read and the render happen to land in.
+      var waitingTexts = waitingText.filter(function (item) {
+        return loggedTexts.indexOf(String(item && item.text ? item.text : '').trim()) < 0
+      })
       var rows = messages.map(function (message, index) {
         var mine = message.role === 'user'
         return React.createElement(
@@ -1674,12 +1712,12 @@ window.__ModuleLoader__.load({
         )
       })
 
-      var waitingRows = waitingTexts.map(function (text, index) {
+      var waitingRows = waitingTexts.map(function (item, index) {
         return React.createElement(
           'div',
           { key: 'waiting-' + index, style: { margin: '6px 0', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', opacity: 0.72 } },
           React.createElement('div', { style: { marginBottom: 3, padding: '0 4px', fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--dsw-alias-label-secondary)', textTransform: 'uppercase' } }, t('sayYou') + ' · ' + t('saySending')),
-          React.createElement('div', { style: { fontSize: 13, lineHeight: 1.5, color: 'var(--dsw-alias-label-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxWidth: '92%', padding: '8px 10px', borderRadius: '12px 12px 4px 12px', background: 'var(--dsw-alias-bg-layer-3)', border: '1px solid var(--dsw-alias-border-l2)' } }, text),
+          React.createElement('div', { style: { fontSize: 13, lineHeight: 1.5, color: 'var(--dsw-alias-label-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxWidth: '92%', padding: '8px 10px', borderRadius: '12px 12px 4px 12px', background: 'var(--dsw-alias-bg-layer-3)', border: '1px solid var(--dsw-alias-border-l2)' } }, item && item.text),
         )
       })
       var allRows = rows.concat(waitingRows)
@@ -1692,8 +1730,36 @@ window.__ModuleLoader__.load({
         view.phase === 'older'
           ? React.createElement('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary)', margin: '6px 0' } }, t('sayHostOld'))
           : null,
+        // Where the transcript in front of the person actually came from. The host keeps a live
+        // session, a persisted session and a log on disk, and they are not the same thing: a window
+        // that silently fell back to the log was read as "den lost the conversation" (measured
+        // 2026-10-15), so the path is stated rather than inferred by the reader.
+        data.readFrom
+          ? React.createElement(
+              'div',
+              { 'data-dsh-role': 'read-from', style: { fontSize: 10, color: 'var(--dsw-alias-label-tertiary)', margin: '2px 0' } },
+              t(
+                data.readFrom === 'store'
+                  ? 'petReadFromStore'
+                  : data.readFrom === 'log'
+                    ? 'petReadFromLog'
+                    : 'petReadFromNone',
+              ),
+            )
+          : null,
+        data.total
+          ? React.createElement(
+              'div',
+              { style: { fontSize: 10, color: 'var(--dsw-alias-label-tertiary)', margin: '2px 0' } },
+              String(messages.length) + '/' + String(data.total),
+            )
+          : null,
         data.truncated
-          ? React.createElement('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)', margin: '2px 0' } }, t('sayTail'))
+          ? React.createElement(
+              'div',
+              { style: { fontSize: 10, color: 'var(--dsw-alias-label-tertiary)', margin: '2px 0' } },
+              t('petMoreOnDisk'),
+            )
           : null,
         React.createElement(
           'div',
@@ -1714,67 +1780,102 @@ window.__ModuleLoader__.load({
         view.phase === 'error' && view.error
           ? React.createElement('div', { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)', margin: '2px 0' } }, view.error)
           : null,
+        // No box of its own: the window's one box is directly below this view, and a second input
+        // inside a 286px card is two places to type and one place to be confused by.
         React.createElement(
           'div',
-          { style: { display: 'flex', flex: '0 0 auto', gap: 6, alignItems: 'center', marginTop: 6 } },
-          React.createElement('input', {
-            value: typed,
-            placeholder: view.phase === 'older' ? t('sayHostOld') : t('sayPlaceholder'),
-            disabled: view.phase === 'older',
-            onChange: function (event) { setTyped(event.target.value) },
-            onKeyDown: function (event) { if (event.key === 'Enter') submit() },
-            style: {
-              flex: 1,
-              minWidth: 0,
-              fontSize: 12,
-              padding: '8px 10px',
-              borderRadius: 8,
-              border: '1px solid var(--dsw-alias-border-l2)',
-              background: 'var(--dsw-alias-bg-layer-2)',
-              color: 'var(--dsw-alias-label-primary)',
-              outline: 'none',
-            },
-          }),
-          React.createElement(Button, {
-            primary: true,
-            disabled: busy || view.phase === 'older' || !String(typed || '').trim(),
-            onClick: submit,
-          }, t('saySend')),
+          { style: { flex: '0 0 auto', marginTop: 4, fontSize: 10, color: 'var(--dsw-alias-label-tertiary)' } },
+          t('petTypeBelow'),
         ),
       )
+    }
+
+    /**
+     * The floating den has three states, and none of them is a decision.
+     *
+     * `running` (green) is a live heartbeat with nothing owed; `waiting` (amber) is a live heartbeat
+     * that has something for the person — an unread notice, a step parked on them, a self-check that
+     * came due, or a heartbeat that cannot find a way to speak; `quiet` (grey) is paused or spent,
+     * either because the heartbeat is not running or because the day's own-turn budget is zero.
+     *
+     * There is deliberately no fourth state for a pending approval. This window cannot approve
+     * anything: it reads den's state and carries the person's words back, and a red light for a
+     * question that cannot be answered here would be a false alarm rather than a signal. The gate
+     * lives in the shell, one seat over, which is where the buttons are.
+     */
+    function petModeOf(status) {
+      var d = status || {}
+      var kernel = d.kernel || {}
+      var notices = d.notices || {}
+      var tasks = d.tasks || {}
+      var triggers = d.triggers || {}
+      var pending = Number(notices.pending && notices.pending.length) || 0
+      if (kernel.running !== true || Number(d.dailyTurnBudget) === 0) return 'quiet'
+      if (pending > 0 || Number(tasks.waiting) > 0 || Number(triggers.due) > 0 || Boolean(d.kernelDeferred)) return 'waiting'
+      return 'running'
+    }
+
+    /** The state label, in the person's words rather than den's. */
+    function petModeLabel(mode, t) {
+      if (mode === 'quiet') return t('petStateQuiet')
+      if (mode === 'waiting') return t('petStateWaiting')
+      return t('petStateRunning')
+    }
+
+    /**
+     * The one status dot, drawn in the window's title bar and again on the shut pill.
+     *
+     * It resolves through `TONE_TOKEN` rather than a colour of its own, so the light the person sees
+     * in the corner is the same light the full panel uses for the same verdict.
+     */
+    function StatusDot(props) {
+      var mode = props.mode || 'running'
+      var tone = mode === 'waiting' ? 'warn' : mode === 'quiet' ? 'error' : 'success'
+      var dot = {
+        flex: '0 0 auto',
+        width: 9,
+        height: 9,
+        borderRadius: 999,
+        background: TONE_TOKEN[tone],
+        boxShadow: '0 0 0 3px var(--dsw-alias-bg-layer-2)',
+      }
+      return React.createElement('span', {
+        'data-dsh-role': 'status-dot',
+        'data-state': mode,
+        'aria-hidden': true,
+        // A caller may move the dot — the shut pill pins it into the corner — so the placement wins
+        // over the default and the colour cannot be overridden by accident.
+        style: Object.assign({}, dot, props.style || {}),
+      })
     }
 
     /**
      * The small information layer that makes the floating den feel like a resident companion.
      *
      * It deliberately stays separate from the transcript: activity is a glanceable status rail,
-     * while the conversation below remains the place where a person talks to den. The permission
-     * card is derived from the real gate snapshot, so it explains the safety boundary without
-     * inventing a pending tool call.
+     * while the conversation tab is the place where a person reads what was said and says more.
+     * Neither tab carries a control that would act on the person's behalf — the window reads den's
+     * state and carries words, and every verb that changes anything stays on den's own page.
      */
     function DenMiniInsights(props) {
       var t = props.t
       var d = props.status || {}
       var kernel = d.kernel || {}
-      var gate = d.gate || {}
       var notices = d.notices || {}
       var tasks = d.tasks || {}
-      var running = Boolean(kernel.running)
-      var tone = d.kernelDeferred ? 'warn' : running ? 'success' : 'error'
-      var kernelLabel = d.kernelDeferred
-        ? t('kernelWaiting')
-        : running
-          ? t('kernelOn')
-          : t('kernelOff')
-      var signalCount = (Number(notices.pending && notices.pending.length) || 0) + (Number(tasks.active) || 0)
+      var mode = petModeOf(d)
+      var tone = mode === 'waiting' ? 'warn' : mode === 'quiet' ? 'error' : 'success'
+      var pending = Number(notices.pending && notices.pending.length) || 0
+      var signalCount = pending + (Number(tasks.active) || 0)
+      var busy = Boolean(d.kernelDeferred) || (Number(tasks.active) || 0) > 0
       var activity = [
         {
-          label: kernelLabel,
+          label: d.kernelDeferred ? t('kernelWaiting') : kernel.running ? t('residentOn') : t('residentOff'),
           detail: kernel.lastTickAt ? t('lastTick') + ' ' + fmtTime(kernel.lastTickAt, t) : t('residentDeferred'),
         },
       ]
       if (signalCount > 0) {
-        activity.push({ label: t('owedShort') + ' ' + String(Number(notices.pending && notices.pending.length) || 0), detail: t('petSignals') + ' · ' + String(signalCount) })
+        activity.push({ label: t('owedShort') + ' ' + String(pending), detail: t('petSignals') + ' · ' + String(signalCount) })
       } else {
         activity.push({ label: t('petNoSignals'), detail: t('petActivity') })
       }
@@ -1786,77 +1887,217 @@ window.__ModuleLoader__.load({
         })
       }
 
-      function tabButton(key, label) {
+      /**
+       * The activity rail's own scroll area.
+       *
+       * The tab strip is drawn by the window above this view, not here: the tabs are chrome of the
+       * window, and a view that drew its own would draw a second one every time it was reused.
+       */
+      var content = React.createElement(
+        'div',
+        {
+          'data-dsh-role': 'pet-content',
+          style: {
+            flex: '1 1 auto',
+            minHeight: 0,
+            overflowY: 'auto',
+            padding: '6px 12px 8px',
+            background: 'var(--dsw-alias-bg-layer-1)',
+          },
+        },
+        activity.map(function (item, index) {
+          return React.createElement(
+            'div',
+            {
+              key: 'pet-activity-' + index,
+              style: {
+                display: 'grid',
+                gridTemplateColumns: '10px minmax(0, 1fr) auto',
+                gap: 8,
+                alignItems: 'start',
+                padding: '5px 0',
+              },
+            },
+            React.createElement('span', {
+              'aria-hidden': true,
+              style: {
+                width: 7,
+                height: 7,
+                marginTop: 4,
+                borderRadius: 999,
+                border: '2px solid ' + (index === 0 ? TONE_TOKEN[tone] : 'var(--dsw-alias-border-l2)'),
+                background: 'var(--dsw-alias-bg-layer-2)',
+              },
+            }),
+            React.createElement(
+              'span',
+              { style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 10, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' } },
+              item.label,
+            ),
+            React.createElement(
+              'span',
+              { style: { maxWidth: '45%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 9, color: 'var(--dsw-alias-label-tertiary)' } },
+              item.detail,
+            ),
+          )
+        }),
+      )
+
+      return React.createElement(
+        'div',
+        {
+          'data-dsh-role': 'pet-activity',
+          style: {
+            flex: '1 1 auto',
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            background: 'var(--dsw-alias-bg-layer-1)',
+          },
+        },
+        React.createElement(
+          'div',
+          {
+            'data-dsh-role': 'pet-summary',
+            style: { flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', borderBottom: '1px solid var(--dsw-alias-border-l2)' },
+          },
+          React.createElement('span', { style: { fontSize: 10, color: 'var(--dsw-alias-label-secondary)' } }, t('petWatching')),
+          React.createElement(
+            'span',
+            { style: { fontSize: 10, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' } },
+            signalCount > 0 && busy ? t('petSignals') + ' ' + String(signalCount) : t('petNoSignals'),
+          ),
+          React.createElement('span', { style: { flex: 1 } }),
+          React.createElement(StatusBadge, { tone: tone, label: petModeLabel(mode, t) }),
+        ),
+        content,
+      )
+    }
+
+    /**
+     * The conversation view, behind a component boundary of its own.
+     *
+     * `DenConversation` uses hooks, and the window that owns it is itself a component: called as a
+     * plain function, as it was first written, its state lands in the window's own hook slots. That
+     * is not a theoretical hazard — measured in the harness, the window's `status` slot and the
+     * transcript's `view` slot took each other's values, so a healthy den rendered as quiet. A
+     * component boundary is what makes the two independent, and it is also what the shell does:
+     * `React.createElement(DenConversation, …)`, never `DenConversation(…)`.
+     *
+     * An earlier draft of that boundary was a `WindowChat` wrapper and was never called; it is gone,
+     * because it had drifted to passing a prop name (`sentAt`) that no longer matched the transcript's
+     * own effect — a second, dead copy of a contract is exactly how the live copy went stale.
+     */
+
+    /**
+     * The one line of chrome under the tabs: a box to say something, and three things to say quickly.
+     *
+     * The shortcuts fill the box and put the cursor in it. They deliberately do not send: a shortcut
+     * that fired a turn on click would be the window acting for the person, and the shorter path here
+     * is to hand them the sentence and let them finish it or rewrite it.
+     */
+    function DenComposer(props) {
+      var t = props.t
+      function fill(text) {
+        props.onDraft(text)
+        var node = props.inputRef && props.inputRef.current
+        if (node && typeof node.focus === 'function') node.focus()
+      }
+      function shortcut(key, label) {
         return React.createElement(
           'button',
           {
+            key: key,
             type: 'button',
-            'data-dsh-role': 'pet-tab',
-            'aria-pressed': props.tab === key,
-            onClick: function () { props.onTab(key) },
+            'data-dsh-role': 'pet-shortcut',
+            'data-fill': label,
+            onClick: function () { fill(label) },
             style: {
-              minHeight: 24,
+              flex: '0 0 auto',
               padding: '3px 7px',
-              border: '1px solid ' + (props.tab === key ? 'var(--dsw-alias-border-l1)' : 'transparent'),
+              border: '1px solid var(--dsw-alias-border-l2)',
               borderRadius: 999,
-              background: props.tab === key ? 'var(--dsw-alias-bg-layer-3)' : 'transparent',
-              color: props.tab === key ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-tertiary)',
+              background: 'transparent',
+              color: 'var(--dsw-alias-label-tertiary)',
               cursor: 'pointer',
               font: 'inherit',
-              fontSize: 10,
+              fontSize: 9,
             },
           },
           label,
         )
       }
-
-      var content = props.tab === 'permission'
-        ? React.createElement(
-            'div',
-            {
-              'data-dsh-role': 'permission-card',
-              role: 'status',
-              style: {
-                padding: '7px 8px',
-                borderRadius: 8,
-                border: '1px solid ' + (gate.mounted ? 'var(--dsw-alias-border-l2)' : 'var(--dsw-alias-state-warn-primary)'),
-                background: 'var(--dsw-alias-bg-layer-2)',
-                color: gate.mounted ? 'var(--dsw-alias-label-secondary)' : 'var(--dsw-alias-state-warn-primary)',
-                fontSize: 10,
-                lineHeight: 1.35,
-              },
-            },
-            gate.mounted ? t('petPermissionArmed') : t('petPermissionDirect'),
-          )
-        : React.createElement(
-            'div',
-            { style: { display: 'grid', gap: 3 } },
-            activity.map(function (item, index) {
-              return React.createElement(
-                'div',
-                { key: 'pet-activity-' + index, style: { display: 'flex', alignItems: 'baseline', gap: 7, minWidth: 0, fontSize: 10, lineHeight: 1.35 } },
-                React.createElement('span', { 'aria-hidden': true, style: { flex: '0 0 auto', width: 6, height: 6, borderRadius: 999, background: index === 0 ? TONE_TOKEN[tone] : 'var(--dsw-alias-state-success-primary)' } }),
-                React.createElement('span', { style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--dsw-alias-label-secondary)' } }, item.label),
-                React.createElement('span', { style: { marginLeft: 'auto', color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' } }, item.detail),
-              )
-            }),
-          )
-
       return React.createElement(
         'div',
-        { style: { flex: '0 0 auto', padding: '6px 9px 7px', borderBottom: '1px solid var(--dsw-alias-border-l2)', background: 'var(--dsw-alias-bg-layer-1)' } },
+        { 'data-dsh-role': 'pet-composer', style: { flex: '0 0 auto' } },
         React.createElement(
           'div',
-          { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 7, marginBottom: 4 } },
-          React.createElement(StatusBadge, { tone: tone, label: kernelLabel, detail: gate.mounted ? t('gateArmed') : t('gateDirect') }),
+          {
+            style: {
+              display: 'flex',
+              alignItems: 'center',
+              gap: 7,
+              margin: '0 10px 8px',
+              padding: 5,
+              border: '1px solid var(--dsw-alias-border-l2)',
+              borderRadius: 10,
+              background: 'var(--dsw-alias-bg-layer-2)',
+            },
+          },
+          React.createElement('input', {
+            ref: props.inputRef,
+            'data-dsh-role': 'pet-input',
+            value: props.value,
+            placeholder: t('petComposerPlaceholder'),
+            autoComplete: 'off',
+            onChange: function (event) { props.onDraft(event.target.value) },
+            onKeyDown: function (event) { if (event.key === 'Enter') props.onSend() },
+            style: {
+              flex: 1,
+              minWidth: 0,
+              border: 0,
+              outline: 'none',
+              background: 'transparent',
+              color: 'var(--dsw-alias-label-primary)',
+              font: 'inherit',
+              fontSize: 11,
+            },
+          }),
           React.createElement(
-            'div',
-            { style: { display: 'flex', gap: 2, flex: '0 0 auto' } },
-            tabButton('activity', t('petActivity')),
-            tabButton('permission', t('petPermission')),
+            'button',
+            {
+              type: 'button',
+              'aria-label': t('saySend'),
+              title: t('saySend'),
+              disabled: props.disabled,
+              onClick: props.onSend,
+              style: {
+                display: 'grid',
+                placeItems: 'center',
+                flex: '0 0 auto',
+                width: 24,
+                height: 24,
+                padding: 0,
+                border: '1px solid var(--dsw-alias-border-l2)',
+                borderRadius: 7,
+                background: 'var(--dsw-alias-bg-layer-3)',
+                color: 'var(--dsw-alias-label-primary)',
+                cursor: props.disabled ? 'default' : 'pointer',
+                opacity: props.disabled ? 0.55 : 1,
+                font: 'inherit',
+                fontSize: 12,
+              },
+            },
+            '↗',
           ),
         ),
-        content,
+        React.createElement(
+          'div',
+          { 'data-dsh-role': 'pet-shortcuts', style: { display: 'flex', gap: 5, padding: '0 10px 8px', overflowX: 'auto' } },
+          shortcut('activity', t('petShortcutActivity')),
+          shortcut('status', t('petShortcutStatus')),
+          shortcut('selfcheck', t('petShortcutSelfCheck')),
+        ),
       )
     }
 
@@ -1893,9 +2134,10 @@ window.__ModuleLoader__.load({
               var height = Number(miniPref('height'))
               var savedVersion = Number(miniPref('sizeVersion'))
               var validSavedSize = Number.isFinite(width) && Number.isFinite(height) && width >= MINI_MIN_WIDTH && height >= MINI_MIN_HEIGHT
-              // Version 2's 300×210 was the old built-in default. Reset that one value so the
-              // visual refresh takes effect, while preserving any footprint the human chose by hand.
-              var legacyDefault = savedVersion === 2 && width === 300 && height === 210
+              // The previous version's built-in default was 260×180. Reset exactly that value so the
+              // redrawn window takes effect, while preserving any footprint the human chose by hand.
+              var legacyDefault = savedVersion === MINI_LEGACY_SIZE_VERSION &&
+                width === MINI_LEGACY_DEFAULT_WIDTH && height === MINI_LEGACY_DEFAULT_HEIGHT
               return {
                 width: validSavedSize && !legacyDefault ? width : MINI_DEFAULT_WIDTH,
                 height: validSavedSize && !legacyDefault ? height : MINI_DEFAULT_HEIGHT,
@@ -1910,13 +2152,44 @@ window.__ModuleLoader__.load({
             var isDragging = dragState[0]
             var setDragging = dragState[1]
 
+            /** One tab of the window's own strip: a word, underlined while it is the open view. */
+            function petTabButton(key, label) {
+              var active = miniTab === key
+              return React.createElement(
+                'button',
+                {
+                  key: key,
+                  type: 'button',
+                  'data-dsh-role': 'pet-tab',
+                  'data-tab': key,
+                  'aria-pressed': active,
+                  onClick: function () { setMiniTab(key) },
+                  style: {
+                    position: 'relative',
+                    minHeight: 24,
+                    padding: '6px 0 6px',
+                    border: 0,
+                    borderRadius: 0,
+                    background: 'transparent',
+                    boxShadow: active ? 'inset 0 -2px 0 0 var(--dsw-alias-state-success-primary)' : 'none',
+                    color: active ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-tertiary)',
+                    cursor: 'pointer',
+                    font: 'inherit',
+                    fontSize: 11,
+                    fontWeight: active ? 600 : 400,
+                  },
+                },
+                label,
+              )
+            }
+
             function clampPlace(x, y, width, height) {
               var wide = typeof window !== 'undefined' && window.innerWidth ? window.innerWidth : 1200
               var tall = typeof window !== 'undefined' && window.innerHeight ? window.innerHeight : 800
               var itemWidth = Number.isFinite(Number(width)) ? Number(width) : MINI_DEFAULT_WIDTH
               var itemHeight = Number.isFinite(Number(height)) ? Number(height) : MINI_DEFAULT_HEIGHT
-              var maxX = Math.max(MINI_MARGIN, wide - Math.max(36, itemWidth) - MINI_MARGIN)
-              var maxY = Math.max(MINI_TOP_SAFE, tall - Math.max(36, itemHeight) - MINI_MARGIN)
+              var maxX = Math.max(MINI_MARGIN, wide - Math.max(MINI_PILL_SIZE, itemWidth) - MINI_MARGIN)
+              var maxY = Math.max(MINI_TOP_SAFE, tall - Math.max(MINI_PILL_SIZE, itemHeight) - MINI_MARGIN)
               return {
                 x: Math.round(Math.min(Math.max(MINI_MARGIN, Number(x) || 0), maxX)),
                 y: Math.round(Math.min(Math.max(MINI_TOP_SAFE, Number(y) || 0), maxY)),
@@ -1931,13 +2204,23 @@ window.__ModuleLoader__.load({
             function onDragStart(event, mode) {
               if (!event || !event.currentTarget) return
               mode = mode || 'window'
-              // A control inside the bar must never begin a drag: the capture below retargets the pointer to
-              // the bar, which is how a click on the collapse button came to do nothing at all.
+              // A control inside the bar must never begin a drag: the capture below retargets the pointer
+              // to the bar, which is how a click on the collapse button came to do nothing at all.
+              //
+              // The shut pill is the exception, and it is one on purpose: its own button IS the grab
+              // area, so "the press landed on a button" is exactly the case it has to accept. Its child
+              // spans are decoration, and a press that lands on them is a press on the pill.
               var startedOn = event.target
-              if (mode !== 'pill' && startedOn && typeof startedOn.closest === 'function' && startedOn.closest('button,a,input,textarea,select')) return
+              var control = startedOn && typeof startedOn.closest === 'function' ? startedOn.closest('button,a,input,textarea,select') : null
+              // Comparing the target to `currentTarget` was too narrow, and the comment above says why: the shut
+              // pill's own button IS the grab area, so its child spans are decoration. A press on the dot or the
+              // mark made `closest('button')` return the pill itself, which the old test did not recognise as
+              // "this control", so the guard fired and the pill could not be moved at all — reported by the user
+              // on 2026-10-16 while it was shut. A control only disqualifies a drag when it is a different one.
+              if (control && control !== event.currentTarget) return
               var rect = typeof event.currentTarget.getBoundingClientRect === 'function'
                 ? event.currentTarget.getBoundingClientRect()
-                : { left: 0, top: MINI_TOP_SAFE, width: open ? size.width : 36, height: open ? size.height : 36 }
+                : { left: 0, top: MINI_TOP_SAFE, width: open ? size.width : MINI_PILL_SIZE, height: open ? size.height : MINI_PILL_SIZE }
               var origin = place || clampPlace(rect.left, rect.top, rect.width, rect.height)
               if (!place) setPlace(origin)
               var pointerX = Number(event.clientX)
@@ -2007,9 +2290,80 @@ window.__ModuleLoader__.load({
             var snapshot = React.useState(null)
             var status = snapshot[0]
             var setStatus = snapshot[1]
+            /**
+             * The state the window shows, derived once and used by both the bar and the shut pill.
+             *
+             * Both surfaces read this same value, so the light in the corner cannot say one thing
+             * while the window says another — the failure mode a second derivation would reintroduce.
+             *
+             * It is derived *after* the snapshot is read, and that order is the whole point: `var
+             * status` above is hoisted to the top of this function, so a derivation written earlier in
+             * the body would silently be given `undefined` on every render and report `quiet` forever —
+             * a grey light beside a window whose own activity rail said the heartbeat was running.
+             */
+            var petMode = petModeOf(status)
+            if (typeof window !== 'undefined' && window.__dshDenDebugMode) {
+              window.__probeModes = (window.__probeModes || []).concat([petMode + (status ? '/S' : '/-') + '/' + (status && status.kernel ? String(status.kernel.running) : 'x')])
+            }
+            var petModeText = petModeLabel(petMode, t)
+            if (typeof window !== 'undefined' && window.__dshDenDebugMode) {
+              window.__probe = (window.__probe || [])
+              window.__probe.push('render status=' + (status ? 'S' : 'null'))
+            }
             var miniTabState = React.useState('activity')
             var miniTab = miniTabState[0]
             var setMiniTab = miniTabState[1]
+            /** Once the conversation has been opened, it stays mounted so re-opening it is not a re-read. */
+            var chatEverMounted = React.useRef(false)
+            if (miniTab === 'chat') chatEverMounted.current = true
+            /**
+             * What is typed in the window's one box, and where the cursor goes.
+             *
+             * The draft lives here rather than inside the transcript so a shortcut can fill it without
+             * sending anything: the composer writes the sentence, the person presses send. It is also
+             * why the box's own visibility is decided here rather than by whether the chat tab is open:
+             * looking at the activity view must not take the way to speak off screen.
+             */
+            var draftState = React.useState('')
+            var typed = draftState[0]
+            var setTyped = draftState[1]
+            var typedRef = React.useRef(null)
+            var sendState = React.useState({ busy: false, phase: 'loading' })
+            var send = sendState[0]
+            var setSend = sendState[1]
+            /**
+             * The sentence that has been admitted but is not in the transcript yet.
+             *
+             * The host admits a prompt and logs it afterwards, so the read that follows a send can
+             * honestly come back without it. The transcript draws this copy until the log carries the
+             * same words, which is what keeps the person's own sentence from vanishing for a tick.
+             */
+            var pendingState = React.useState(null)
+            var sent = pendingState[0]
+            var setSent = pendingState[1]
+
+            function say() {
+              var body = String(typed || '').trim()
+              // An older host cannot hold a conversation at all, so the box is inert rather than
+              // failing after it has been pressed. The reason is on screen either way.
+              if (!body || send.busy || send.phase === 'older') return
+              setSend({ busy: true, phase: send.phase })
+              act('conversation/say', { text: body })
+                .then(function () {
+                  // Shown at once, in the transcript, because the read that follows may legitimately
+                  // predate the log entry: the log is the authority and the copy goes when it carries
+                  // the same words.
+                  setSent({ text: body, at: Date.now() })
+                  setTyped('')
+                  setSend({ busy: false, phase: 'ready' })
+                })
+                .catch(function () {
+                  // What was typed is left in the box on purpose: a send that failed must not also
+                  // cost the person the words, and there is no other copy of them on this surface.
+                  setSend({ busy: false, phase: 'error' })
+                })
+            }
+            var composerEnabled = send.phase !== 'older' && !send.busy && String(typed || '').trim().length > 0
 
             React.useEffect(function () {
               if (!open || !cardRef.current || typeof window === 'undefined' || typeof window.ResizeObserver !== 'function') return undefined
@@ -2048,6 +2402,143 @@ window.__ModuleLoader__.load({
             }, [open])
 
             if (open) {
+              /*
+               * The pet, as drawn.
+               *
+               * One window, one status light, two views and one box to speak into. The title bar is
+               * the grab area and carries den's mark, the state and the collapse control; the tabs are
+               * words with a rule under the active one; the box at the bottom fills and sends, and the
+               * three shortcuts beside it only fill — nothing in this window acts on the person's
+               * behalf, which is why there is no allow/deny control anywhere in it.
+               */
+              var header = React.createElement(
+                'header',
+                {
+                  'data-dsh-role': 'pet-header',
+                  'aria-label': t('dragHint'),
+                  onPointerDown: onDragStart,
+                  onPointerMove: onDragMove,
+                  onPointerUp: onDragEnd,
+                  onPointerCancel: onDragEnd,
+                  style: {
+                    flex: '0 0 auto',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 9,
+                    height: 42,
+                    padding: '0 10px',
+                    borderBottom: '1px solid var(--dsw-alias-border-l2)',
+                    background: 'var(--dsw-alias-bg-layer-2)',
+                    cursor: isDragging ? 'grabbing' : 'grab',
+                    userSelect: 'none',
+                    touchAction: 'none',
+                    WebkitAppRegion: 'no-drag',
+                  },
+                },
+                React.createElement(
+                  'span',
+                  {
+                    'aria-hidden': true,
+                    style: {
+                      display: 'grid',
+                      placeItems: 'center',
+                      flex: '0 0 auto',
+                      width: 22,
+                      height: 22,
+                      border: '1px solid var(--dsw-alias-border-l2)',
+                      borderRadius: 8,
+                      background: 'var(--dsw-alias-bg-layer-1)',
+                      color: 'var(--dsw-alias-state-success-primary)',
+                      fontSize: 11,
+                      fontWeight: 700,
+                      letterSpacing: '-0.08em',
+                    },
+                  },
+                  'dn',
+                ),
+                React.createElement(
+                  'span',
+                  { style: { minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' } },
+                  React.createElement('strong', { style: { fontSize: 12, fontWeight: 650, lineHeight: 1.2, color: 'var(--dsw-alias-label-primary)' } }, t('nav')),
+                  React.createElement('span', { style: { marginTop: 1, fontSize: 10, lineHeight: 1.2, color: 'var(--dsw-alias-label-tertiary)' } }, t('floatingLabel')),
+                ),
+                React.createElement(
+                  'span',
+                  { 'data-dsh-role': 'pet-status', style: { flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: 'var(--dsw-alias-label-secondary)' } },
+                  React.createElement(StatusDot, { mode: petMode }),
+                  React.createElement('span', null, petModeText),
+                ),
+                React.createElement(
+                  'button',
+                  {
+                    type: 'button',
+                    // The bar behind this button is a drag handle, and it captures the pointer on
+                    // pointerdown (`setPointerCapture`). A click inside a captured pointer is retargeted to
+                    // the capturing element, so this button's onClick never ran: collapsing did nothing.
+                    // Measured report, 2026-10-15: "我现在点击缩小没反应".
+                    onPointerDown: function (event) {
+                      if (event && event.stopPropagation) event.stopPropagation()
+                    },
+                    onClick: function () { setOpen(false); setMiniPref('collapsed', true) },
+                    'aria-label': t('collapse'),
+                    title: t('collapse'),
+                    style: {
+                      display: 'grid',
+                      placeItems: 'center',
+                      flex: '0 0 auto',
+                      width: 24,
+                      height: 24,
+                      padding: 0,
+                      border: '1px solid transparent',
+                      borderRadius: 7,
+                      background: 'transparent',
+                      color: 'var(--dsw-alias-label-secondary)',
+                      cursor: 'pointer',
+                      font: 'inherit',
+                      fontSize: 15,
+                      lineHeight: 1,
+                    },
+                  },
+                  '−',
+                ),
+              )
+
+              var isActivity = miniTab === 'activity'
+              // `.current`, not the ref object itself: a ref object is always truthy, so reading the
+              // object made this condition permanently true and the transcript fetched on every open,
+              // while the activity view was the one on screen. The flag is what makes the tab the
+              // trigger — the first time it is opened — and keeps the transcript mounted after that.
+              var chatMounted = miniTab === 'chat' || chatEverMounted.current
+              var activityView = React.createElement(
+                'div',
+                { style: { flex: '1 1 auto', minHeight: 0, display: isActivity ? 'flex' : 'none', flexDirection: 'column' } },
+                React.createElement(DenMiniInsights, { t: t, status: status }),
+              )
+              var chatView = chatMounted
+                ? React.createElement(
+                    'div',
+                    {
+                      'data-dsh-role': 'pet-chat',
+                      style: { flex: '1 1 auto', minHeight: 0, display: isActivity ? 'none' : 'flex', flexDirection: 'column' },
+                    },
+                    // Mounted when the tab is opened, which is what asks the host for the transcript,
+                    // and kept mounted after that so switching back and forth is not a re-read.
+                    React.createElement(DenConversation, {
+                      t: t,
+                      act: act,
+                      sent: sent,
+                      // The transcript knows whether this host can hold a conversation at all; the box
+                      // below is disabled on that verdict rather than on a guess made up here.
+                      onPhase: function (phase) {
+                        setSend(function (previous) {
+                          if (previous.phase === phase) return previous
+                          return { busy: previous.busy, phase: phase }
+                        })
+                      },
+                    }),
+                  )
+                : null
+
               return React.createElement(
                 'div',
                 {
@@ -2072,92 +2563,69 @@ window.__ModuleLoader__.load({
                       display: 'flex',
                       flexDirection: 'column',
                       WebkitAppRegion: 'no-drag',
-                      background: 'var(--dsw-alias-bg-overlay)',
+                      background: 'var(--dsw-alias-bg-layer-1)',
                       color: 'var(--dsw-alias-label-primary)',
                       border: '1px solid var(--dsw-alias-border-l1)',
-                      borderRadius: 12,
-                      boxShadow: isDragging ? '0 14px 30px rgba(0,0,0,.28), 0 3px 8px rgba(0,0,0,.12)' : '0 12px 28px rgba(0,0,0,.22), 0 2px 6px rgba(0,0,0,.10)',
+                      borderRadius: 18,
+                      boxShadow: isDragging ? '0 18px 38px rgba(0,0,0,.32), 0 4px 10px rgba(0,0,0,.16)' : '0 14px 30px rgba(0,0,0,.26), 0 3px 8px rgba(0,0,0,.12)',
                       transform: isDragging ? 'scale(.985)' : 'none',
                       transition: 'box-shadow 160ms ease, transform 160ms ease',
                     },
                     placedStyle(place),
                   ),
                 },
-                // The bar is the grab area: the short label makes the floating surface identifiable
-                // without competing with the conversation, and the only control on it is collapse.
+                header,
+                // The tab strip is chrome of its own, one row under the bar: the tabs are words and
+                // the active one is marked by a rule, so they read as views of one window rather than
+                // as three buttons that each open something.
+                React.createElement(
+                  'nav',
+                  {
+                    'data-dsh-role': 'pet-tabs',
+                    role: 'tablist',
+                    style: { flex: '0 0 auto', display: 'flex', gap: 14, padding: '0 12px', borderBottom: '1px solid var(--dsw-alias-border-l2)', background: 'var(--dsw-alias-bg-layer-1)' },
+                  },
+                  petTabButton('activity', t('petActivity')),
+                  petTabButton('chat', t('petConversation')),
+                ),
                 React.createElement(
                   'div',
-                  {
-                    'data-dsh-role': 'drag-handle',
-                    'aria-label': t('dragHint'),
-                    onPointerDown: onDragStart,
-                    onPointerMove: onDragMove,
-                    onPointerUp: onDragEnd,
-                    onPointerCancel: onDragEnd,
-                    style: {
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: 8,
-                      padding: '8px 10px 7px',
-                      borderBottom: '1px solid var(--dsw-alias-border-l2)',
-                      cursor: isDragging ? 'grabbing' : 'grab',
-                      userSelect: 'none',
-                      touchAction: 'none',
-                      WebkitAppRegion: 'no-drag',
-                    },
-                  },
-                  React.createElement(
-                    'div',
-                    { style: { display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 } },
-                    React.createElement('span', { 'aria-hidden': true, style: { color: 'var(--dsw-alias-state-success-primary)', fontSize: 14 } }, '◈'),
-                    React.createElement('span', { style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--dsw-alias-label-secondary)' } }, t('floatingLabel')),
-                  ),
-                  React.createElement('span', { 'aria-hidden': true, title: t('dragHint'), style: { color: 'var(--dsw-alias-label-tertiary)', fontSize: 13, lineHeight: 1, letterSpacing: '-0.18em', opacity: 0.8, userSelect: 'none' } }, '⠿'),
-                  React.createElement(
-                    'button',
-                    {
-                      type: 'button',
-                      // The bar behind this button is a drag handle, and it captures the pointer on
-                      // pointerdown (`setPointerCapture`). A click inside a captured pointer is retargeted to
-                      // the capturing element, so this button's onClick never ran: collapsing did nothing.
-                      // Measured report, 2026-10-15: "我现在点击缩小没反应".
-                      onPointerDown: function (event) {
-                        if (event && event.stopPropagation) event.stopPropagation()
-                      },
-                      onClick: function () { setOpen(false); setMiniPref('collapsed', true) },
-                      'aria-label': t('collapse'),
-                      title: t('collapse'),
-                      style: {
-                        border: '1px solid var(--dsw-alias-border-l2)',
-                        borderRadius: 6,
-                        background: 'var(--dsw-alias-bg-layer-2)',
-                        color: 'var(--dsw-alias-label-secondary)',
-                        cursor: 'pointer',
-                        fontSize: 14,
-                        lineHeight: 1,
-                        padding: '5px 7px',
-                      },
-                    },
-                    '–',
-                  ),
+                  { 'data-dsh-role': 'pet-content', style: { flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' } },
+                  activityView,
+                  chatView,
                 ),
-                React.createElement(DenMiniInsights, { t: t, status: status, tab: miniTab, onTab: setMiniTab }),
-                React.createElement(DenConversation, { t: t, act: act }),
-                                // The strip, not the panel: the grant has to stay reachable from the surface that is
-                                // always on screen, but its numbers and schedules belong on den's page.
-                                React.createElement(DenPanel, { t: t, act: act, sessionId: null, compact: true, stripOnly: true }),
+                React.createElement(DenComposer, {
+                  t: t,
+                  value: typed,
+                  inputRef: typedRef,
+                  disabled: !composerEnabled,
+                  onDraft: setTyped,
+                  onSend: say,
+                }),
                 React.createElement('span', { 'aria-hidden': true, title: t('resizeHint'), style: { position: 'absolute', right: 6, bottom: 5, pointerEvents: 'none', color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, lineHeight: 1, opacity: 0.8 } }, '◢'),
               )
             }
 
             var bits = []
             if (status) {
-              var kernel = status.kernel || {}
-              // Waiting for a way to speak is its own state, not a shade of running: the page
-              // said so while the pill claimed the heartbeat was fine, and the pill is the
-              // surface the human actually sees when the panel is shut.
-              bits.push(status.kernelDeferred ? t('residentDeferred') : kernel.running ? t('residentOn') : t('residentOff'))
+              // The three-state verdict leads, because that is what the dot beside it shows. There is
+              // no fourth state here and nothing about an approval gate: this control opens a window
+              // that reads den's state and carries words, and a light for a decision it cannot take
+              // would be a false alarm.
+              bits.push(t('openPanel'))
+              // What the heartbeat itself is doing, kept beside the three-state verdict rather than
+              // replaced by it. The two answer different questions — "can den act at all" and "is
+              // anything waiting on me" — and a shut pill that dropped the first answered a question
+              // nobody asked: with a step parked on the person it read only "等待你", so the person
+              // could not tell a healthy heartbeat from a stopped one without opening the window.
+              bits.push(
+                status.kernelDeferred
+                  ? t('residentDeferred')
+                  : status.kernel && status.kernel.running
+                    ? t('residentOn')
+                    : t('residentOff'),
+              )
+              bits.push(petModeText)
               var cap = Number(status.dailyTurnBudget)
               var spent = Number(status.ledger && status.ledger.turns) || 0
               // What den is allowed to start by itself today, and how much of it is gone. This is
@@ -2168,21 +2636,25 @@ window.__ModuleLoader__.load({
                 // is the most useful thing the shut pill can say, because it explains why the window
                 // still cannot hold a conversation.
                 bits.push(t('hostOlder'))
-                            } else if (cap > 0) {
+              } else if (cap > 0) {
                 bits.push(t('budgetShort') + ' ' + String(spent) + '/' + String(cap))
               } else {
                 bits.push(t('budgetOff'))
               }
               bits.push(t('owedShort') + ' ' + String(status.notices && status.notices.pending ? status.notices.pending.length : 0))
-              if (status.tasks && Number(status.tasks.total) > 0) {
-                bits.push(t('tasksShort') + ' ' + String(status.tasks.active))
-                if (Number(status.tasks.blocked) > 0) bits.push(t('tasksStuck') + ' ' + String(status.tasks.blocked))
-                if (Number(status.tasks.waiting) > 0) bits.push(t('tasksWaiting') + ' ' + String(status.tasks.waiting))
-              }
+              bits.push(
+                status.tasks && Number(status.tasks.total) > 0
+                  ? t('tasksShort') + ' ' + String(status.tasks.active) +
+                    (Number(status.tasks.blocked) > 0 ? ' · ' + t('tasksStuck') + ' ' + String(status.tasks.blocked) : '') +
+                    (Number(status.tasks.waiting) > 0 ? ' · ' + t('tasksWaiting') + ' ' + String(status.tasks.waiting) : '')
+                  : t('tasksWaiting') + ' 0',
+              )
             } else {
-              bits.push(t('residentOn'))
+              // Nothing has been answered yet, so nothing is claimed: the pill says it is waiting for
+              // the first snapshot rather than borrowing the healthy copy.
+              bits.push(t('petModeUnknown'))
             }
-            var statusLabel = t('openPanel') + (bits.length ? ' · ' + bits.join(' · ') : '')
+            var statusLabel = bits.join(' · ')
             return React.createElement(
               'button',
               {
@@ -2205,13 +2677,14 @@ window.__ModuleLoader__.load({
                 style: {
                   ...placedStyle(place),
                   pointerEvents: 'auto',
+                  position: 'absolute',
                   border: '1px solid var(--dsw-alias-border-l1)',
-                  borderRadius: 999,
+                  borderRadius: MINI_PILL_RADIUS,
                   background: 'var(--dsw-alias-bg-layer-2)',
                   color: 'var(--dsw-alias-label-primary)',
                   cursor: isDragging ? 'grabbing' : 'grab',
-                  width: 36,
-                  height: 36,
+                  width: MINI_PILL_SIZE,
+                  height: MINI_PILL_SIZE,
                   display: 'grid',
                   placeItems: 'center',
                   padding: 0,
@@ -2222,9 +2695,16 @@ window.__ModuleLoader__.load({
                   WebkitAppRegion: 'no-drag',
                 },
               },
-              React.createElement('span', { 'aria-hidden': true, style: { display: 'inline-flex', alignItems: 'center', gap: 5 } },
-                React.createElement('span', { style: { color: 'var(--dsw-alias-state-success-primary)', fontSize: 15, lineHeight: 1 } }, '◈'),
-                React.createElement('span', { style: { display: 'inline-block', width: 7, height: 7, borderRadius: 999, background: status && status.kernelDeferred ? 'var(--dsw-alias-state-warn-primary)' : status && status.kernel && status.kernel.running ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)' } }),
+              // One child, as before: den's mark, with the state dot pinned into the corner on top of
+              // it. A second child would be a second thing to read in a control this small.
+              React.createElement(
+                'span',
+                { 'aria-hidden': true, style: { position: 'relative', display: 'grid', placeItems: 'center', width: MINI_PILL_SIZE, height: MINI_PILL_SIZE, borderRadius: MINI_PILL_RADIUS } },
+                React.createElement('span', { style: { color: 'var(--dsw-alias-state-success-primary)', fontSize: 18, lineHeight: 1 } }, '◈'),
+                React.createElement(StatusDot, {
+                  mode: petMode,
+                  style: { position: 'absolute', top: 6, right: 6 },
+                }),
               ),
             )
           },
