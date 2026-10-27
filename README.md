@@ -1,7 +1,15 @@
 # dsh-den
 
+[![CI](https://github.com/dingchenhui0618-arch/dsh-den/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/dingchenhui0618-arch/dsh-den/actions/workflows/ci.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 > A **7×24 resident personal assistant** for [DeepSeek Harness](https://github.com/deepseek-ai/dsh).
 > Not another chat window — an assistant that stays on, keeps its own memory, works while you are away, and stops to ask before it acts outside your trust boundary.
+
+> 用着还行的话，点个 ⭐ 就够了——插件市场的「搜插件」按 GitHub star 排序，star 是这个插件能被人翻到的唯一杠杆。
+
+安全模型——它读哪些会话、那道审批闸门拦得住什么、自主唤醒怎么被人类消息绑住、记忆存在哪：
+[SECURITY.md](SECURITY.md)。
 
 Status: **the core is implemented, tested, and active in a real profile.** This line deliberately carries no test count: a hard-coded one rotted repeatedly (307, 309, 316, 319, 320, 322, 323, 326, 327 — each time while the suite was in fact green), and the last rot happened one round after a "fix". So the line states what is stable and `npm test` prints what moves. The plugin is loaded inside a real DSH 0.2.0-rc.2 desktop profile — it is in that profile's `dsh.profile.bundles`, and the running host reports it as `fiberPhase: active` — registering 16 model-facing tools, the approval guard, the heartbeat, and an interactive status panel. Verified against the *running* system rather than only in tests: the heartbeat ticks on its 60-second cadence, and the panel is an **active occupant** of both `sidebar.panellist` (`id: dsh-den.status`, order 245) and the `main` panel (`key: dsh-den.status`) — read from the live browser page through the host's read-only Slot inspector, not from the plugin's own registration call.
 
